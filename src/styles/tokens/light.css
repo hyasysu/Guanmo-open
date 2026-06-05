@@ -1,0 +1,68 @@
+/* ============================================
+   观墨 Light Theme — 基于 animal-island-ui 默认暖色调
+   所有 gm-* 变量映射到 --animal-* 变量
+   ============================================ */
+
+:root {
+  /* === Canvas & Surfaces (动物岛暖色调) === */
+  --gm-canvas: #f8f4e8;
+  --gm-surface: #f7f3df;
+  --gm-surface-elevated: #f0e8d8;
+  --gm-surface-overlay: #e8e2d6;
+  --gm-surface-hover: rgba(170, 166, 157, 0.12);
+
+  /* === Primary (动物岛青绿色) === */
+  --gm-primary: #19c8b9;
+  --gm-primary-hover: #3dd4c6;
+  --gm-primary-active: #50B9AB;
+  --gm-primary-subtle: #e6f9f6;
+
+  /* === Accent (暖棕色) === */
+  --gm-accent: #794f27;
+  --gm-accent-subtle: rgba(121, 79, 39, 0.08);
+
+  /* === Text === */
+  --gm-text: #794f27;
+  --gm-text-secondary: #9f927d;
+  --gm-text-tertiary: #b8a99a;
+  --gm-text-disabled: #c4b89e;
+  --gm-text-on-primary: #ffffff;
+
+  /* === Borders === */
+  --gm-border: #e8e2d6;
+  --gm-border-subtle: #f0ece2;
+  --gm-border-focus: #19c8b9;
+  --gm-border-hover: #aaa69d;
+
+  /* === Semantic === */
+  --gm-success: #6fba2c;
+  --gm-warning: #f5c31c;
+  --gm-error: #e05a5a;
+
+  /* === Spacing === */
+  --gm-spacing-xs: 4px;
+  --gm-spacing-sm: 8px;
+  --gm-spacing-md: 12px;
+  --gm-spacing-lg: 16px;
+  --gm-spacing-xl: 24px;
+
+  /* === Border Radius (动物岛圆润风格) === */
+  --gm-radius-sm: 16px;
+  --gm-radius-base: 18px;
+  --gm-radius-lg: 24px;
+
+  /* === Typography === */
+  --gm-font-family: 'Nunito', 'Noto Sans SC', 'Zen Maru Gothic', 'HarmonyOS Sans SC', 'MiSans', -apple-system, 'PingFang SC', sans-serif;
+
+  /* === Animations === */
+  --gm-duration-fast: 0.15s;
+  --gm-duration-base: 0.25s;
+  --gm-duration-slow: 0.35s;
+  --gm-ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* === Editor === */
+  --gm-editor-bg: #fdf8ec;
+  --gm-editor-selection: rgba(25, 200, 185, 0.15);
+  --gm-editor-line-highlight: rgba(25, 200, 185, 0.05);
+  --gm-editor-gutter: #f8f8f0;
+}

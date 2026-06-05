@@ -1,0 +1,4 @@
+.animal-cursor,
+.animal-cursor * {
+    cursor: var(--animal-cursor, default) !important;
+}

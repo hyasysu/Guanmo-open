@@ -1,0 +1,52 @@
+/* ============================================
+   animal-island-ui Dark Theme Override
+   覆盖 --animal-* CSS 变量为深色主题
+   ============================================ */
+
+[data-theme='dark'] {
+  /* === Primary (保留青绿色系，微调适配深色) === */
+  --animal-primary-color: #2dd4bf;
+  --animal-primary-color-hover: #5eead4;
+  --animal-primary-color-active: #14b8a6;
+  --animal-primary-color-bg: rgba(45, 212, 191, 0.12);
+
+  /* === Semantic Colors === */
+  --animal-success-color: #4ade80;
+  --animal-success-color-hover: #6ee7a0;
+  --animal-success-color-active: #22c55e;
+
+  --animal-warning-color: #fbbf24;
+  --animal-warning-color-hover: #fcd34d;
+  --animal-warning-color-active: #f59e0b;
+
+  --animal-error-color: #f87171;
+  --animal-error-color-hover: #fca5a5;
+  --animal-error-color-active: #ef4444;
+
+  /* === Neutral (Text) === */
+  --animal-text-color: #e4e6ef;
+  --animal-text-color-secondary: #9498ab;
+  --animal-text-color-muted: #6b6f82;
+  --animal-text-color-disabled: #4a4e60;
+
+  /* === Borders === */
+  --animal-border-color: #2a2d3e;
+  --animal-border-color-hover: #3a3d52;
+  --animal-border-color-light: #222536;
+
+  /* === Backgrounds === */
+  --animal-bg-color: #161822;
+  --animal-bg-color-secondary: #1c1f2e;
+  --animal-bg-color-disabled: #0f1117;
+
+  /* === Shadows (深色主题用更柔和的阴影) === */
+  --animal-shadow-sm: 0 2px 4px 0 rgba(0, 0, 0, 0.3);
+  --animal-shadow-base: 0 3px 10px 0 rgba(0, 0, 0, 0.4);
+  --animal-shadow-lg: 0 8px 24px 0 rgba(0, 0, 0, 0.5);
+
+  /* === Border Radius (减小圆角，更专业) === */
+  --animal-border-radius-sm: 6px;
+  --animal-border-radius-base: 8px;
+  --animal-border-radius-lg: 10px;
+  --animal-border-width: 1px;
+}

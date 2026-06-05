@@ -1,0 +1,280 @@
+/* Our light theme tokens */
+@import './tokens/light.css';
+
+/* Toast animations */
+@import './toast.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* === Global Reset & Base Styles === */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--gm-font-family);
+  font-size: 14px;
+  line-height: 1.5715;
+  color: var(--gm-text);
+  background-color: var(--gm-canvas);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+}
+
+.animal-cursor input,
+.animal-cursor textarea,
+.animal-cursor [contenteditable='true'],
+.animal-cursor .cm-editor,
+.animal-cursor .cm-editor * {
+  cursor: text !important;
+}
+
+/* === Custom Scrollbar (温暖色调) === */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d4cfc7;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #b8a99a;
+}
+
+/* === Selection === */
+::selection {
+  background: rgba(25, 200, 185, 0.2);
+  color: var(--gm-text);
+}
+
+/* === Focus Ring === */
+:focus-visible {
+  outline: 2px solid var(--gm-border-focus);
+  outline-offset: -1px;
+}
+
+/* === Animations === */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideInRight {
+  from { transform: translateX(16px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes slideInUp {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes bounceIn {
+  0% { transform: scale(0.3); opacity: 0; }
+  50% { transform: scale(1.05); }
+  70% { transform: scale(0.9); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+/* === Splash Screen === */
+.gm-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: var(--gm-canvas);
+}
+
+/* === Utility classes === */
+.select-text {
+  user-select: text;
+}
+
+.animate-fadeIn {
+  animation: fadeIn var(--gm-duration-base) var(--gm-ease);
+}
+
+.animate-slideInUp {
+  animation: slideInUp var(--gm-duration-base) var(--gm-ease);
+}
+
+.animate-slideInRight {
+  animation: slideInRight var(--gm-duration-base) var(--gm-ease);
+}
+
+.animate-bounceIn {
+  animation: bounceIn 0.5s var(--gm-ease);
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* animal-island-ui Tabs adapter for the settings modal. */
+.gm-settings-tabs {
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  overflow: hidden !important;
+}
+
+.gm-settings-tabs > div:first-child {
+  width: 100%;
+  flex-shrink: 0;
+  gap: 6px;
+  padding: 0 0 12px !important;
+  background: transparent !important;
+  border-bottom: 1px solid var(--gm-border-subtle) !important;
+}
+
+.gm-settings-tabs > div:first-child button {
+  min-height: 32px;
+  padding: 6px 12px !important;
+  border-radius: 10px !important;
+  font-size: 12px !important;
+}
+
+.gm-settings-tabs > div:first-child button img {
+  display: none;
+}
+
+.gm-settings-tabs > div:nth-child(2) {
+  width: 100%;
+  flex: 1;
+  min-width: 0;
+  min-height: 0 !important;
+  padding: 16px 8px 0 0 !important;
+  overflow: visible !important;
+}
+
+.gm-settings-tabs > div:nth-child(2) > div {
+  height: 100%;
+  width: 100%;
+  min-height: 0 !important;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 12px;
+}
+
+.gm-setting-field,
+.gm-setting-control,
+.gm-setting-control > span,
+.gm-setting-control > div {
+  width: 100%;
+}
+
+.gm-setting-control > div {
+  min-width: 0;
+}
+
+.gm-setting-control > div > div:first-child {
+  width: 100%;
+}
+
+.gm-setting-control input,
+.gm-setting-control select,
+.gm-setting-control textarea {
+  width: 100%;
+}
+
+/* range thumb 垂直居中于 track */
+.gm-setting-control input[type="range"]::-webkit-slider-thumb {
+  margin-top: -14px;
+}
+
+
+.gm-settings-tabs [class*="animal-wrapper-"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.gm-settings-tabs [class*="animal-dropdown-"] {
+  left: 0 !important;
+  right: auto !important;
+  top: 100% !important;
+  bottom: auto !important;
+  transform: none !important;
+  margin-top: 6px !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  min-width: 100%;
+  max-width: min(360px, 100%);
+  z-index: 20;
+}
+
+.gm-animal-table {
+  overflow: hidden;
+  border: 1px solid var(--gm-border) !important;
+  border-radius: 24px !important;
+  background: var(--gm-surface-elevated) !important;
+}
+
+.gm-animal-table [class*="animal-wrapper-"] {
+  border-radius: 24px !important;
+}
+
+.gm-animal-table table {
+  width: 100%;
+}
+
+.gm-animal-table th,
+.gm-animal-table td {
+  border-color: var(--gm-border-subtle) !important;
+  color: var(--gm-text-secondary);
+}
+
+.prose .footnotes {
+  margin-top: 32px;
+  border-top: 1px solid var(--gm-border-subtle);
+  padding-top: 12px;
+  color: var(--gm-text-secondary);
+  font-size: 12px;
+}
+
+.prose .data-footnote-backref {
+  color: var(--gm-primary);
+  text-decoration: none;
+}
+
+.mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}

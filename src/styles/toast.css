@@ -1,0 +1,29 @@
+@keyframes toastSlideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes toastSlideOut {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+.animate-toast-in {
+  animation: toastSlideIn var(--gm-duration-base) var(--gm-ease);
+}
+
+.animate-toast-out {
+  animation: toastSlideOut var(--gm-duration-fast) var(--gm-ease) forwards;
+}

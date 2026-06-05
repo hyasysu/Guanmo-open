@@ -1,0 +1,100 @@
+.tabs {
+  background: #f8f8f0;
+  border-radius: 24px;
+  border: 2px solid #e8e2d6;
+  overflow: hidden;
+}
+.tabList {
+  display: flex;
+  gap: 4px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.6);
+  border-bottom: 2px solid #e8e2d6;
+}
+.tabItem {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: transparent;
+  border: none;
+  border-radius: 24px;
+  cursor: pointer;
+  font-family: Nunito, 'Noto Sans SC', 'Zen Maru Gothic', 'HarmonyOS Sans SC', 'MiSans', -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif !important;
+  font-size: 14px;
+  font-weight: 500;
+  color: #794f27;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.tabItem:hover {
+  background: rgba(25, 200, 185, 0.1);
+  color: #794f27;
+}
+.tabItem.active {
+  background: #0CC0B5;
+  color: #FFF9E3;
+  font-weight: 600;
+  border-radius: 24px;
+}
+.tabItem.active-shadow {
+  box-shadow: 0 3px 0 0 rgba(61, 52, 40, 0.08);
+}
+.tabIcon {
+  font-size: 10px;
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.active .tabIcon {
+  transform: scale(1.2);
+}
+.tabLabel {
+  position: relative;
+  color: inherit;
+}
+.active .tabLabel {
+  color: #FFF9E3;
+}
+.tabLeaf {
+  position: absolute;
+  right: -5px;
+  top: -4px;
+  width: 18px;
+  height: 18px;
+  animation: leafWiggle 2s ease-in-out infinite;
+}
+.tabLeafStatic {
+  animation: none;
+}
+@keyframes leafWiggle {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  25% {
+    transform: rotate(-10deg);
+  }
+  75% {
+    transform: rotate(10deg);
+  }
+}
+.tabContent {
+  min-height: 60px;
+  padding: 24px;
+  animation: fadeIn 0.25s ease;
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.tabContentInner {
+  min-height: 40px;
+  color: var(--animal-text-color-secondary);
+  font-size: var(--animal-font-size-base);
+  line-height: var(--animal-line-height-base);
+}

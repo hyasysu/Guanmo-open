@@ -1,0 +1,49 @@
+/* === 观墨 Deep Dark Theme === */
+[data-theme='dark'] {
+  /* Canvas & Surfaces (4-step ladder) */
+  --gm-canvas: #0f1117;
+  --gm-surface: #161822;
+  --gm-surface-elevated: #1c1f2e;
+  --gm-surface-overlay: #232638;
+  --gm-surface-hover: #272a3a;
+
+  /* Borders (hairline system) */
+  --gm-border: #2a2d3e;
+  --gm-border-subtle: #222536;
+  --gm-border-strong: #3a3d52;
+  --gm-border-focus: #5b8def;
+
+  /* Brand Primary */
+  --gm-primary: #5b8def;
+  --gm-primary-hover: #7aa5ff;
+  --gm-primary-active: #4a7de0;
+  --gm-primary-subtle: rgba(91, 141, 239, 0.12);
+
+  /* Accent (AI) */
+  --gm-accent: #a78bfa;
+  --gm-accent-subtle: rgba(167, 139, 250, 0.12);
+
+  /* Text Hierarchy */
+  --gm-text: #e4e6ef;
+  --gm-text-secondary: #9498ab;
+  --gm-text-tertiary: #6b6f82;
+  --gm-text-disabled: #4a4e60;
+  --gm-text-on-primary: #ffffff;
+
+  /* Semantic */
+  --gm-success: #4ade80;
+  --gm-warning: #fbbf24;
+  --gm-error: #f87171;
+  --gm-info: #5b8def;
+
+  /* Editor Specific */
+  --gm-editor-bg: #0d0f14;
+  --gm-editor-gutter: #161822;
+  --gm-editor-line-highlight: rgba(91, 141, 239, 0.06);
+  --gm-editor-selection: rgba(91, 141, 239, 0.2);
+
+  /* Scrollbar */
+  --gm-scrollbar-track: transparent;
+  --gm-scrollbar-thumb: #2a2d3e;
+  --gm-scrollbar-thumb-hover: #3a3d52;
+}

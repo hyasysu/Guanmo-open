@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-portable/
+build/
+coverage/
+.cache/
+src-tauri/target/
+src-tauri/gen/
+
+# Release artifacts
+*.exe
+*.msi
+*.dmg
+*.AppImage
+*.deb
+*.rpm
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local app data and generated files
+*.db
+*.sqlite
+*.sqlite3
+*.log
+*.tmp
+*.tsbuildinfo
+history/
+tmp/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+secrets.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Internal assistant/workflow state
+.claude/
+agentmd.json
+AGENTS.md
+CLAUDE.md

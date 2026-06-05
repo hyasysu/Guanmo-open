@@ -1,0 +1,62 @@
+import { readFile } from '@/hooks/useTauri'
+import { describeFileOperationError } from '@/services/fileOperationErrors'
+import { isSameFilePath } from '@/services/pathIdentity'
+import { indexMarkdownDocument } from '@/services/rag/indexer'
+import { useEditorStore } from '@/stores/editorStore'
+
+export type ExternalFileOpenSource = 'startup' | 'file-association' | 'drag-drop'
+
+export interface ExternalFileOpenResult {
+  opened: string[]
+  ignored: string[]
+  failed: Array<{ path: string; reason: string }>
+}
+
+function isMarkdownPath(path: string): boolean {
+  return /\.md$/i.test(path)
+}
+
+function getFileName(path: string): string {
+  return path.split(/[/\\]/).pop() || 'untitled.md'
+}
+
+export async function openExternalFilePaths(
+  paths: string[],
+  _source: ExternalFileOpenSource
+): Promise<ExternalFileOpenResult> {
+  const result: ExternalFileOpenResult = {
+    opened: [],
+    ignored: [],
+    failed: [],
+  }
+
+  for (const path of paths) {
+    if (!isMarkdownPath(path)) {
+      result.ignored.push(path)
+      continue
+    }
+
+    try {
+      const editorState = useEditorStore.getState()
+      const existing = editorState.tabs.find((tab) => isSameFilePath(tab.filePath, path))
+      if (existing) {
+        editorState.setActiveTab(existing.id)
+        result.opened.push(path)
+        continue
+      }
+
+      const content = await readFile(path)
+      const name = getFileName(path)
+      useEditorStore.getState().addTab(path, name, content)
+      indexMarkdownDocument(path, name, content)
+      result.opened.push(path)
+    } catch (err) {
+      result.failed.push({
+        path,
+        reason: describeFileOperationError(err, '打开文件失败'),
+      })
+    }
+  }
+
+  return result
+}
