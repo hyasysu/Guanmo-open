@@ -17,7 +17,7 @@ import { MarkdownDiffView } from './MarkdownDiffView'
 import { MarkdownPreview, MarkdownToc } from './MarkdownPreview'
 import { SearchOverlay } from './SearchOverlay'
 import { TabBar } from './TabBar'
-import { ContextMenu, ContextMenuItem } from '@/components/common/ContextMenu'
+import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem } from '@/components/common/ContextMenu'
 
 interface PreviewMenuState {
   x: number
@@ -395,7 +395,8 @@ export function EditorArea() {
           <ContextMenu position={previewMenu} onClose={() => {
             clearPreviewContextHighlight()
             setPreviewMenu(null)
-          }} minWidth={120} maxWidth={120}>
+          }} minWidth={144} maxWidth={144}>
+            <ContextMenuGroupTitle>预览操作</ContextMenuGroupTitle>
             <ContextMenuItem onClick={handleCopyPreviewSelection} disabled={!previewMenu.selectedText}>
               复制
             </ContextMenuItem>

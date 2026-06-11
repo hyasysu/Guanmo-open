@@ -13,7 +13,7 @@ import { buildContextFromTags } from '@/services/contextBuilder'
 import { readFile as readTauriFile } from '@/hooks/useTauri'
 import { setAgentScopeContext } from '@/services/aiScope'
 import { searchScopedKnowledge, shouldTriggerScopedRag, streamFinalAnswer } from '@/services/aiChatFlow'
-import { appendRagContext, buildChatMessageTags, buildSupplementalAiContext, countRagSourcesInContext, createContextMeta, createUserChatMessage, prepareChatHistoryForModel } from '@/services/aiChatMessages'
+import { buildChatMessageTags, buildMessagesForModel, buildSupplementalAiContext, countRagSourcesInContext, createContextMeta, createUserChatMessage, prepareChatHistoryForModel } from '@/services/aiChatMessages'
 import { stripToolCallJson } from '@/services/agent/toolCallParser'
 import { buildMemoryContext, classifyMemoryRetrievalIntent, processMemoryCandidateExtraction, searchMemories } from '@/services/memory/memoryService'
 import type { Memory } from '@/services/database/persistence'
@@ -180,7 +180,6 @@ export function useAiChat() {
 
       const tagMetadata = buildChatMessageTags(contextTags || [])
       const userMsg = createUserChatMessage(content, tagContext, tagMetadata)
-      const msgContent = userMsg.content
       if (!isCurrentRequest()) return
       addMessage(userMsg)
       addMessage({
@@ -404,15 +403,16 @@ export function useAiChat() {
         }
 
         // Agent 查询复用本轮预检索到的只读记忆上下文，避免普通转 Agent 后重复检索。
-        const agentQuery = [msgContent, memoryContext].filter(Boolean).join('\n\n')
+        const agentContext = [tagContext, memoryContext].filter(Boolean).join('\n\n')
         const normalizedUserIntent = explicitMemoryWriteIntent
           ? `记住：${content.trim()}`
           : content.trim()
+        const agentUserQuery = content.trim() || '请根据我提供的上下文继续。'
 
         try {
           setAgentScopeContext({ contextTags: contextTags || [] })
           const result = await runAgent(
-            agentQuery,
+            agentUserQuery,
             prepareChatHistoryForModel(messages),
             {},
             normalizedUserIntent,
@@ -424,7 +424,9 @@ export function useAiChat() {
             requestController.signal,
             SYSTEM_TEMPERATURE.agentPlanning,
             handleLiveAgentStep,
-            mergedRequired
+            mergedRequired,
+            agentContext,
+            ai.customPreferencePrompt
           )
           if (!isCurrentRequest()) return
           for (const step of result.steps.slice(liveAgentStepCount)) {
@@ -551,7 +553,6 @@ export function useAiChat() {
       }
 
       const client = getAiClient()
-      const allMessages = [...prepareChatHistoryForModel(messages), userMsg]
       let ragContext = ''
 
       // --- 轻量 RAG：仅在规则放行时检索已添加的 ContextTag 文件 ---
@@ -606,7 +607,12 @@ export function useAiChat() {
         knowledgeContext: ragContext,
         memoryContext,
       })
-      const finalMessages = appendRagContext(allMessages, userMsg, injectedContext)
+      const finalMessages = buildMessagesForModel({
+        history: prepareChatHistoryForModel(messages),
+        userMessage: userMsg,
+        supplementalContext: injectedContext,
+        customPreferencePrompt: ai.customPreferencePrompt,
+      })
 
       const contextMeta = createContextMeta({
         tagCount: tagMetadata.length,

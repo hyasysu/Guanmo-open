@@ -10,6 +10,7 @@ export interface AiConfig {
   chatModel: string
   streamEnabled: boolean
   webSearchEnabled: boolean
+  customPreferencePrompt: string
   timeout: number
   maxContextLength: number
   temperature: number
@@ -134,6 +135,7 @@ export const DEFAULT_AI_CONFIG: AiConfig = {
   chatModel: '',
   streamEnabled: true,
   webSearchEnabled: false,
+  customPreferencePrompt: '',
   timeout: 60000,
   maxContextLength: 8192,
   temperature: 0.7,

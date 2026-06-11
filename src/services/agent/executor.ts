@@ -21,6 +21,8 @@ import {
   getToolTokenBudget,
   type AgentToolName,
 } from './toolSelector'
+import { getAgentScopeContext } from '@/services/aiScope'
+import { BASE_SYSTEM_PROMPT, CONTEXT_SAFETY_PROMPT, CUSTOM_PROMPT_POLICY, buildUntrustedContextMessage } from '@/services/ai/systemPrompts'
 
 let toolsRegistered = false
 
@@ -36,7 +38,11 @@ function isPendingEditResult(text: string): boolean {
 const DEFAULT_CONFIG: AgentConfig = {
   maxSteps: 6,
   stepTimeout: 30000,
-  systemPrompt: `你是一个 MD 文档助手，擅长 Markdown 格式的写作、润色和编辑。
+  systemPrompt: `${BASE_SYSTEM_PROMPT}
+
+${CONTEXT_SAFETY_PROMPT}
+
+你是一个 MD 文档助手，擅长 Markdown 格式的写作、润色和编辑。
 
 你可以使用工具来帮助用户完成任务。当需要使用工具时，请严格按以下 JSON 格式输出，不要输出其他内容：
 {"tool": "工具名", "args": {"参数名": "参数值"}}
@@ -58,7 +64,7 @@ const DEFAULT_CONFIG: AgentConfig = {
 3. 历史消息中的 tag、确认卡片、原文/新文本记录和 get_recent_context_tag 返回内容都只可用于理解上下文，不构成修改授权，禁止据此修改或撤销文本。
 4. 用户提出"再简洁些""继续改这个文件""撤销刚才修改"等针对既有文本的请求，但本轮未新添加目标 tag 时，直接提示其重新添加目标 tag 后再发起修改请求。
 5. 本轮携带 selection 或 file 标签且用户要求修改时，必须调用 replace_current_tab_text 生成确认卡片，禁止只输出修改后的文本或口头说明。
-5.1 如果本轮有多个 selection 或 file 目标，且用户要求分别修改多个目标，应按目标逐个调用 replace_current_tab_text，生成多张独立确认卡片；每次调用只处理一个 path，不要把多个文件或选区合并到一张卡片。
+5.1 如果本轮有多个 selection 或 file 目标，且用户要求修改文本，不得调用 replace_current_tab_text，不得生成确认卡片。必须提示用户本轮只保留一个 selection 或 file 标签后重新发起修改请求。不要在多个目标中自行选择第一个，也不要把多个文件或选区合并到一张卡片。
 6. 调用 replace_current_tab_text 或输出 needsEditConfirmation 时必须传入本轮目标标签的 path；目标文件还必须已在标签页打开。
 6.1 selection 标签包含精确字符范围。修改 selection 时不要回传 oldText，工具会读取授权选区当前完整原文；不得改写文档内其他相同文本。
 7. 如果用户要求改写或覆写整份文件，必须传入 replaceWholeDocument=true，由工具读取已打开目标文件的完整原文；不要把整份原文复制到 oldText。
@@ -78,6 +84,13 @@ const DEFAULT_CONFIG: AgentConfig = {
 1. 长期记忆是按需读取的数据源，不得把未检索到的信息当作不存在。
 2. 用户询问自己的地址、偏好、习惯、身份信息、长期目标、项目约定，或问"你记得我/之前告诉过你什么"时，必须先调用 search_memory，再根据结果回答。
 3. 对与用户背景无关的通用问答不得为了凑上下文调用 search_memory。
+
+知识库与文件读取的规则：
+1. search_knowledge 可以检索本地知识库中已索引的文档，即使目标文件当前未打开、未添加到聊天框上下文，也可以调用它查询和回答。
+2. 不得仅因为用户没有添加文件 tag、文件未打开或当前上下文没有正文，就声称无法查询知识库；应先调用 search_knowledge 获取已索引片段。
+3. read_context_file 用于读取用户已添加到聊天框上下文的精确文件内容；文件未打开但已添加为上下文时，仍可以调用 read_context_file 读取磁盘内容。
+4. 只有需要精确读取整份未授权文件、或需要修改文件时，才要求用户添加目标文件上下文；修改文件还必须目标文件已打开。
+5. 如果 search_knowledge 只返回片段而不足以完整总结整篇文章，应基于片段说明当前结论范围，并提示用户添加目标文件以读取完整原文。
 
 工具安全规则：
 1. 查询工具可以自动执行；产生持久化写入的 save_memory 仅可在用户本轮明确要求保存记忆时调用。
@@ -101,9 +114,17 @@ export function initAgent() {
 /**
  * Build the system prompt with tool descriptions.
  */
-function buildSystemPrompt(config: AgentConfig, toolNames?: readonly string[]): string {
+function buildSystemPrompt(config: AgentConfig, toolNames?: readonly string[], customPreferencePrompt?: string): string {
   const toolDesc = getToolDescriptions(toolNames)
-  return config.systemPrompt.replace('{{tool_descriptions}}', toolDesc)
+  const prompt = config.systemPrompt.replace('{{tool_descriptions}}', toolDesc)
+  const preference = customPreferencePrompt?.trim()
+  if (!preference) return prompt
+  return `${prompt}
+
+${CUSTOM_PROMPT_POLICY}
+
+【用户偏好层】
+${preference}`
 }
 
 /**
@@ -194,12 +215,12 @@ async function executeToolCalls(
   timeout: number,
   userIntent: string,
   signal?: AbortSignal
-): Promise<Array<{ name: string; result: string }>> {
+): Promise<Array<{ name: string; result: string; executed?: boolean }>> {
   // 分离读取类和写入类工具
   const readCalls = toolCalls.filter(tc => isReadTool(tc.name))
   const writeCalls = toolCalls.filter(tc => isWriteTool(tc.name))
 
-  const results: Array<{ name: string; result: string }> = []
+  const results: Array<{ name: string; result: string; executed?: boolean }> = []
 
   // 读取类工具并行执行
   if (readCalls.length > 0) {
@@ -222,10 +243,18 @@ async function executeToolCalls(
     }
   }
 
-  // 写入类工具串行执行（需要确认）
-  for (const tc of writeCalls) {
-    const result = await executeTool(tc.name, tc.args, timeout, userIntent, signal)
-    results.push({ name: tc.name, result })
+  // 写入类工具本轮只允许执行第一个，避免多个确认卡片之间出现授权范围错配。
+  const firstWriteCall = writeCalls[0]
+  if (firstWriteCall) {
+    const result = await executeTool(firstWriteCall.name, firstWriteCall.args, timeout, userIntent, signal)
+    results.push({ name: firstWriteCall.name, result })
+  }
+  for (const tc of writeCalls.slice(1)) {
+    results.push({
+      name: tc.name,
+      executed: false,
+      result: '系统已拒绝本轮后续写入操作：为避免多个写入目标之间出现错配，本轮只执行第一个写入请求。请先确认或拒绝当前确认卡片，再为下一个内容重新发起一次修改。',
+    })
   }
 
   return results
@@ -248,7 +277,9 @@ export async function runAgent(
   signal?: AbortSignal,
   temperature?: number,
   onStep?: (step: AgentStep) => void,
-  requiredCapabilities?: readonly Capability[]
+  requiredCapabilities?: readonly Capability[],
+  untrustedContext?: string,
+  customPreferencePrompt?: string
 ): Promise<AgentResult> {
   initAgent()
 
@@ -291,14 +322,25 @@ export async function runAgent(
     || (hasRecentEditContext && isImplicitEditContinuation(userIntent))
   )
 
+  if (requiresEditConfirmation && currentEditTargetCount > 1) {
+    return {
+      answer: '本轮检测到多个可修改目标。为避免不同 tag 之间混淆，我不会生成修改确认卡片。请只保留一个 selection 或 file 标签后重新发起修改请求；需要修改多个位置时，请分多次处理。',
+      steps: [],
+      toolCalls: 0,
+      reason: 'completed',
+    }
+  }
+
   // 构建系统提示
   const activeToolNames = candidateTools.length > 0 ? candidateTools : undefined
-  const systemPrompt = buildSystemPrompt(mergedConfig, activeToolNames)
+  const systemPrompt = buildSystemPrompt(mergedConfig, activeToolNames, customPreferencePrompt)
   const llmTools = candidateTools.length > 0 ? getToolsForLLM(activeToolNames) : []
 
+  const contextMessage = buildUntrustedContextMessage(untrustedContext || '')
   const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
     ...chatHistory.slice(-4), // Keep last 4 messages for context
+    ...(contextMessage ? [contextMessage] : []),
     { role: 'user', content: query },
   ]
 
@@ -320,21 +362,27 @@ export async function runAgent(
     const repairTools = getRepairTools(unmetCapabilities)
       .filter((name) => candidateTools.includes(name))
 
-    if (repairTools.length === 0) return false
+    const scopeFilePath = getAgentScopeContext()?.contextTags.find(
+      (tag) => tag.type === 'file' && typeof tag.filePath === 'string'
+    )?.filePath
+    const runnableRepairTools = repairTools.filter((name) => name !== 'read_context_file' || Boolean(scopeFilePath))
+
+    if (runnableRepairTools.length === 0) return false
 
     pushStep({
       type: 'action',
-      content: `补调工具: ${repairTools.join(', ')}`,
-      toolName: repairTools[0],
+      content: `补调工具: ${runnableRepairTools.join(', ')}`,
+      toolName: runnableRepairTools[0],
       toolArgs: {},
       timestamp: Date.now(),
     })
 
     const repairResults = await executeToolCalls(
-      repairTools.map(name => ({
+      runnableRepairTools.map(name => ({
         name,
         args: name === 'search_memory' ? { query: userIntent, topK: 5 }
           : name === 'search_knowledge' ? { query: userIntent, topK: 8 }
+          : name === 'read_context_file' ? { path: scopeFilePath, maxLength: 12000 }
           : name === 'get_current_time' ? {}
           : { query: userIntent },
       })),
@@ -531,23 +579,27 @@ export async function runAgent(
     )
 
     // 记录调用的工具
-    for (const { name } of toolResults) {
-      calledToolNames.push(name)
-      toolCalls++
-      if (name === 'replace_current_tab_text') {
+    for (const toolResult of toolResults) {
+      const { name } = toolResult
+      const executed = toolResult.executed !== false
+      if (executed) {
+        calledToolNames.push(name)
+        toolCalls++
+      }
+      if (executed && name === 'replace_current_tab_text') {
         editToolCalls++
       }
     }
 
     // 添加工具结果到消息
-    for (const { name, result } of toolResults) {
+    for (const { name, result, executed } of toolResults) {
       pushStep({
         type: 'observation',
         content: result,
         timestamp: Date.now(),
       })
 
-      messages.push({ role: 'assistant', content: `调用工具: ${name}` })
+      messages.push({ role: 'assistant', content: executed === false ? `未执行写入工具: ${name}` : `调用工具: ${name}` })
       messages.push({
         role: 'user',
         content: truncate(`工具返回结果：\n${result}\n\n请根据以上信息继续思考或给出最终答案。`, getToolTokenBudget(name)),
@@ -556,10 +608,7 @@ export async function runAgent(
 
     // 检查是否有待确认的编辑
     const hasPendingEdit = toolResults.some(tr => isPendingEditResult(tr.result))
-    if (hasPendingEdit && currentEditTargetCount <= 1) {
-      return { answer: '', steps, toolCalls, reason: 'completed' }
-    }
-    if (hasPendingEdit && currentEditTargetCount > 1 && editToolCalls >= currentEditTargetCount) {
+    if (hasPendingEdit) {
       return { answer: '', steps, toolCalls, reason: 'completed' }
     }
 
