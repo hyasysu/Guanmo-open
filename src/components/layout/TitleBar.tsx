@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { undo, redo } from '@codemirror/commands'
 import { useEditorStore } from '@/stores/editorStore'
 import { useEditorHistoryStore } from '@/stores/editorHistoryStore'
 import { getActiveEditorView } from '@/services/editorViewRef'
 import { appIconUrl } from '@/assets/appIcon'
+
+// Detect if running inside Tauri
+const isTauri = typeof window !== 'undefined' && '__TAURI__' in window
 
 export function TitleBar() {
   const [maximized, setMaximized] = useState(false)
@@ -13,24 +15,42 @@ export function TitleBar() {
   const canRedo = useEditorHistoryStore((s) => s.canRedo)
 
   useEffect(() => {
-    const win = getCurrentWindow()
-    win.isMaximized().then(setMaximized)
-    const unlisten = win.onResized(() => {
+    if (!isTauri) return
+
+    import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+      const win = getCurrentWindow()
+
       win.isMaximized().then(setMaximized)
+
+      win.onResized(() => {
+        win.isMaximized().then(setMaximized)
+      }).then((unlisten) => {
+        return () => unlisten()
+      })
+    }).catch((err) => {
+      console.error('TitleBar: failed to initialize Tauri window:', err)
     })
-    return () => { unlisten.then((fn) => fn()) }
   }, [])
 
   const handleMinimize = useCallback(() => {
-    getCurrentWindow().minimize()
+    if (!isTauri) return
+    import('@tauri-apps/api/window')
+      .then(({ getCurrentWindow }) => getCurrentWindow().minimize())
+      .catch((err) => console.error('TitleBar: minimize failed:', err))
   }, [])
 
   const handleToggleMaximize = useCallback(() => {
-    getCurrentWindow().toggleMaximize()
+    if (!isTauri) return
+    import('@tauri-apps/api/window')
+      .then(({ getCurrentWindow }) => getCurrentWindow().toggleMaximize())
+      .catch((err) => console.error('TitleBar: toggleMaximize failed:', err))
   }, [])
 
   const handleClose = useCallback(() => {
-    getCurrentWindow().close()
+    if (!isTauri) return
+    import('@tauri-apps/api/window')
+      .then(({ getCurrentWindow }) => getCurrentWindow().close())
+      .catch((err) => console.error('TitleBar: close failed:', err))
   }, [])
 
   const handleUndo = useCallback(() => {
@@ -53,7 +73,7 @@ export function TitleBar() {
 
       {/* Drag region + current file */}
       <div
-        data-tauri-drag-region
+        data-tauri-drag-region=""
         className="flex-1 h-full flex items-center justify-center"
       >
         {activeTab && (
@@ -112,7 +132,7 @@ export function TitleBar() {
           title={maximized ? '还原' : '最大化'}
         >
           {maximized ? (
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg width="12" height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" />
             </svg>
           ) : (
