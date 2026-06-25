@@ -32,10 +32,13 @@ export interface ModalProps {
     /** 自定义内容 */
     children?: React.ReactNode;
     className?: string;
+    maskClassName?: string;
     /** 打字机每字间隔 (ms), 默认 80 */
     typeSpeed?: number;
     /** 是否启用打字机效果, 默认 true */
     typewriter?: boolean;
+    /** 是否启用内置定制光标, 默认 true */
+    cursor?: boolean;
 }
 
 export const Modal: React.FC<ModalProps> = ({
@@ -48,8 +51,10 @@ export const Modal: React.FC<ModalProps> = ({
     onOk,
     children,
     className,
+    maskClassName,
     typeSpeed = 80,
     typewriter = true,
+    cursor = true,
 }) => {
     // 每次 open 变为 true 时重启打字机
     const [playKey, setPlayKey] = useState(0);
@@ -98,44 +103,44 @@ export const Modal: React.FC<ModalProps> = ({
         </>
     );
 
-    const modalContent = (
-        <Cursor>
-            <div className={styles.mask} onClick={handleMaskClick}>
-                <div
-                    className={[styles.modal, className].filter(Boolean).join(' ')}
-                    style={{ width }}
-                    onClick={handleContentClick}
-                    role="dialog"
-                    aria-modal="true"
-                >
-                    <ClipDef />
-                    <div className={styles.modalClipped}>
-                        {title && (
-                            <div className={styles.header}>
-                                {title && (
-                                    <div className={styles.title}>{title}</div>
-                                )}
-                            </div>
-                        )}
-                        <div className={styles.body}>
-                            {typewriter ? (
-                                <Typewriter speed={typeSpeed} trigger={playKey}>
-                                    {children}
-                                </Typewriter>
-                            ) : (
-                                children
+    const modalContentBody = (
+        <div className={[styles.mask, maskClassName].filter(Boolean).join(' ')} onClick={handleMaskClick}>
+            <div
+                className={[styles.modal, className].filter(Boolean).join(' ')}
+                style={{ width }}
+                onClick={handleContentClick}
+                role="dialog"
+                aria-modal="true"
+            >
+                <ClipDef />
+                <div className={styles.modalClipped}>
+                    {title && (
+                        <div className={styles.header}>
+                            {title && (
+                                <div className={styles.title}>{title}</div>
                             )}
                         </div>
-                        {footer !== null && (
-                            <div className={styles.footer}>
-                                {footer === undefined ? defaultFooter : footer}
-                            </div>
+                    )}
+                    <div className={styles.body}>
+                        {typewriter ? (
+                            <Typewriter speed={typeSpeed} trigger={playKey}>
+                                {children}
+                            </Typewriter>
+                        ) : (
+                            children
                         )}
                     </div>
+                    {footer !== null && (
+                        <div className={styles.footer}>
+                            {footer === undefined ? defaultFooter : footer}
+                        </div>
+                    )}
                 </div>
             </div>
-        </Cursor>
+        </div>
     );
+
+    const modalContent = cursor ? <Cursor>{modalContentBody}</Cursor> : modalContentBody;
 
     return createPortal(modalContent, document.body);
 };

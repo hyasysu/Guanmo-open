@@ -5,7 +5,7 @@ import { joinPath } from '@/hooks/useTauri'
 import { openFile } from '@/services/fileSystem'
 import { pickDirectory, listDirectory } from '@/services/fileSystem'
 import { isWorkspaceDisplayFile, shouldSkipWorkspaceDirectory, getFileIcon, type FileNode } from '@/services/fileTree'
-import { indexMarkdownDocument, indexWorkspaceMarkdown } from '@/services/rag/indexer'
+import { indexMarkdownDocument, indexWorkspaceMarkdown, scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
 import { Button, Collapse, Divider } from 'animal-island-ui'
@@ -125,7 +125,7 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
         } else {
           state.addTab(file.path, file.name, file.content)
         }
-        indexMarkdownDocument(file.path, file.name, file.content)
+        scheduleMarkdownDocumentIndex(file.path, file.name, file.content)
       }
     } catch (err) {
       console.error('Open file failed:', err)
@@ -159,7 +159,7 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
       } else {
         state.addTab(path, name, content)
       }
-      indexMarkdownDocument(path, name, content)
+      scheduleMarkdownDocumentIndex(path, name, content)
     } catch (err) {
       console.error('Open file from tree failed:', err)
       toast.error(describeFileOperationError(err, '打开文件失败'))
@@ -177,12 +177,14 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
         state.setActiveTab(existing.id)
         return
       }
-      const { readFile } = await import('@/hooks/useTauri')
+      const { authorizeSelectedPath, readFile } = await import('@/hooks/useTauri')
+      await authorizeSelectedPath(file.path)
       const content = await readFile(file.path)
       state.addTab(file.path, file.name, content)
-      indexMarkdownDocument(file.path, file.name, content)
+      scheduleMarkdownDocumentIndex(file.path, file.name, content)
     } catch (err) {
       console.error('Open recent file failed:', err)
+      toast.error(describeFileOperationError(err, '打开最近文件失败'))
     }
   }, [])
 
@@ -525,10 +527,11 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
       if (existing) {
         state.setActiveTab(existing.id)
       } else {
-        const { readFile } = await import('@/hooks/useTauri')
+        const { authorizeSelectedPath, readFile } = await import('@/hooks/useTauri')
+        await authorizeSelectedPath(file.path)
         const content = await readFile(file.path)
         state.addTab(file.path, file.name, content)
-        indexMarkdownDocument(file.path, file.name, content)
+        scheduleMarkdownDocumentIndex(file.path, file.name, content)
       }
       setMissingPaths((current) => {
         if (!current.has(file.path)) return current

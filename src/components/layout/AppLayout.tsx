@@ -177,11 +177,14 @@ export function AppLayout() {
       <Modal
         open={settingsOpen}
         width={860}
+        className="gm-settings-modal gm-system-cursor"
+        maskClassName="gm-settings-mask gm-system-cursor"
         onClose={() => setSettingsOpen(false)}
         footer={null}
         typewriter={false}
+        cursor={false}
       >
-        <div style={{ width: '100%', height: '560px', overflow: 'hidden', padding: '32px 36px', minHeight: 0 }}>
+        <div className="gm-system-cursor" style={{ width: '100%', height: '560px', overflow: 'hidden', padding: '32px 36px', minHeight: 0 }}>
           <SettingsPage />
         </div>
       </Modal>

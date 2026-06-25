@@ -520,6 +520,12 @@ fn take_pending_open_files(state: State<'_, PendingOpenFiles>) -> Vec<String> {
     std::mem::take(&mut *pending)
 }
 
+#[tauri::command]
+fn has_pending_open_files(state: State<'_, PendingOpenFiles>) -> bool {
+    let pending = state.0.lock().expect("pending open files lock poisoned");
+    !pending.is_empty()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let initial_cwd = std::env::current_dir().unwrap_or_default();
@@ -544,6 +550,7 @@ pub fn run() {
             }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
+                let _ = window.unminimize();
                 let _ = window.set_focus();
             }
         }));
@@ -569,6 +576,7 @@ pub fn run() {
             rename_text_file_by_path,
             read_dir_by_path,
             take_pending_open_files,
+            has_pending_open_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
