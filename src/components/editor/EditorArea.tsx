@@ -6,6 +6,7 @@ import { useEditorStore } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useFileOperations } from '@/hooks/useFileOperations'
+import { useActiveHeading } from '@/hooks/useActiveHeading'
 import { saveFile } from '@/services/fileSystem'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { extractToc, type TocItem } from '@/services/markdownToc'
@@ -30,6 +31,16 @@ interface PreviewMenuState {
   startLine?: number
   endLine?: number
   pane: 'left' | 'right'
+}
+
+interface PreviewSelectionSource {
+  title: string
+  filePath?: string | null
+  text: string
+  startLine?: number
+  endLine?: number
+  selectionFrom?: number
+  selectionTo?: number
 }
 
 const PREVIEW_CONTEXT_HIGHLIGHT = 'preview-context-selection'
@@ -141,6 +152,11 @@ export function EditorArea() {
   const rightPreview = useScheduledPreviewContent(rightTab?.content || '', rightTab?.id)
   const toc = useMemo(() => extractToc(activeTab?.content || ''), [activeTab?.content])
   const rightToc = useMemo(() => extractToc(rightTab?.content || ''), [rightTab?.content])
+
+  // 使用 IntersectionObserver 监听当前活跃的标题
+  // 传递 viewMode 作为 trigger，当模式切换时重新检查容器
+  const activeHeading = useActiveHeading(leftPreviewRef, '[data-heading-id]', viewMode)
+  const activeRightHeading = useActiveHeading(rightPreviewRef, '[data-heading-id]', viewMode)
 
   const getStoredReadingTop = useCallback((tabId: string | null | undefined) => {
     if (!tabId) return 0
@@ -618,6 +634,7 @@ export function EditorArea() {
           title: activeTab.title ? `左栏 · ${activeTab.title}` : '左栏目录',
           toc,
           onHeadingClick: jumpToPreviewHeading,
+          activeHeading,
         }]
       : []
 
@@ -627,11 +644,12 @@ export function EditorArea() {
         title: rightTab.title ? `右栏 · ${rightTab.title}` : '右栏目录',
         toc: rightToc,
         onHeadingClick: jumpToRightPreviewHeading,
+        activeHeading: activeRightHeading,
       })
     }
 
     return sections.slice(0, 2)
-  }, [activeTab, jumpToPreviewHeading, jumpToRightPreviewHeading, rightTab, rightToc, toc])
+  }, [activeTab, activeHeading, activeRightHeading, jumpToPreviewHeading, jumpToRightPreviewHeading, rightTab, rightToc, toc])
 
   const getPreviewSelectionLineRange = useCallback((selection: Selection, container: HTMLElement): { startLine?: number, endLine?: number } => {
     if (!selection || selection.rangeCount === 0) return {}
@@ -712,53 +730,106 @@ export function EditorArea() {
     setPreviewMenu(null)
   }, [clearPreviewContextHighlight, previewMenu])
 
-  const getMarkdownTextFromLineRange = useCallback((startLine?: number, endLine?: number): string => {
-    if (!startLine || !endLine) return ''
-    const view = editorViewRef.current
-    if (!view) return ''
+  const getPreviewSourceSelection = useCallback((): PreviewSelectionSource | null => {
+    if (!previewMenu?.selectedText) return null
 
-    try {
-      const doc = view.state.doc
-      const from = doc.line(startLine).from
-      const to = doc.line(endLine).to
-      return doc.sliceString(from, to)
-    } catch {
-      return ''
+    const tab = previewMenu.pane === 'right' ? rightTab : activeTab
+    if (!tab) return null
+
+    const selectedText = previewMenu.selectedText.trim()
+    if (!selectedText) return null
+
+    const content = tab.content
+    const normalizedSelectedText = selectedText.replace(/\r\n/g, '\n')
+    const lines = content.split('\n')
+    const startLine = previewMenu.startLine
+    const endLine = previewMenu.endLine
+
+    const findUniqueRange = (source: string, needle: string, baseOffset = 0) => {
+      const first = source.indexOf(needle)
+      if (first < 0) return null
+      const second = source.indexOf(needle, first + needle.length)
+      if (second >= 0) return null
+      return { from: baseOffset + first, to: baseOffset + first + needle.length }
     }
-  }, [])
+
+    const offsetForLine = (line: number) => {
+      let offset = 0
+      for (let i = 0; i < Math.max(0, line - 1); i++) {
+        offset += lines[i].length + 1
+      }
+      return offset
+    }
+
+    let range: { from: number; to: number } | null = null
+    let markdownText = ''
+
+    if (startLine && endLine) {
+      const safeStart = Math.max(1, Math.min(startLine, lines.length))
+      const safeEnd = Math.max(safeStart, Math.min(endLine, lines.length))
+      const from = offsetForLine(safeStart)
+      const to = offsetForLine(safeEnd) + lines[safeEnd - 1].length
+      markdownText = content.slice(from, to)
+      range = findUniqueRange(markdownText, normalizedSelectedText, from)
+      if (!range) {
+        range = { from, to }
+      }
+    }
+
+    range = range || findUniqueRange(content, normalizedSelectedText)
+
+    return {
+      title: tab.title,
+      filePath: tab.filePath,
+      text: markdownText || normalizedSelectedText,
+      startLine,
+      endLine,
+      selectionFrom: range?.from,
+      selectionTo: range?.to,
+    }
+  }, [activeTab, previewMenu, rightTab])
 
   const handleAddPreviewSelectionToAi = useCallback(() => {
-    if (!previewMenu?.selectedText || !activeTab) return
-    // 优先使用原始 Markdown 文本，保留格式符号
-    const markdownText = getMarkdownTextFromLineRange(previewMenu.startLine, previewMenu.endLine)
-    const textToAdd = markdownText || previewMenu.selectedText
+    if (!previewMenu?.selectedText) return
+    const sourceSelection = getPreviewSourceSelection()
+    if (!sourceSelection) return
+    if (typeof sourceSelection.selectionFrom !== 'number' || typeof sourceSelection.selectionTo !== 'number') {
+      toast.warning('预览选区无法精确定位，修改文本请切到编辑模式框选。')
+    }
     addSelectionContextTag({
-      title: activeTab.title,
-      filePath: activeTab.filePath,
-      text: textToAdd,
-      startLine: previewMenu.startLine,
-      endLine: previewMenu.endLine,
+      title: sourceSelection.title,
+      filePath: sourceSelection.filePath,
+      text: sourceSelection.text,
+      startLine: sourceSelection.startLine,
+      endLine: sourceSelection.endLine,
+      selectionFrom: sourceSelection.selectionFrom,
+      selectionTo: sourceSelection.selectionTo,
     })
     clearPreviewContextHighlight()
     setPreviewMenu(null)
-  }, [previewMenu, activeTab, clearPreviewContextHighlight, getMarkdownTextFromLineRange])
+  }, [previewMenu, clearPreviewContextHighlight, getPreviewSourceSelection])
 
   const handlePreviewAiAction = useCallback((prompt: string) => {
-    if (!previewMenu?.selectedText || !activeTab) return
-    // 优先使用原始 Markdown 文本，保留格式符号
-    const markdownText = getMarkdownTextFromLineRange(previewMenu.startLine, previewMenu.endLine)
-    const textToAdd = markdownText || previewMenu.selectedText
+    if (!previewMenu?.selectedText) return
+    const sourceSelection = getPreviewSourceSelection()
+    if (!sourceSelection) return
+    if (typeof sourceSelection.selectionFrom !== 'number' || typeof sourceSelection.selectionTo !== 'number') {
+      toast.warning('预览选区无法精确定位，修改文本请切到编辑模式框选。')
+      return
+    }
     addSelectionContextTag({
-      title: activeTab.title,
-      filePath: activeTab.filePath,
-      text: textToAdd,
-      startLine: previewMenu.startLine,
-      endLine: previewMenu.endLine,
+      title: sourceSelection.title,
+      filePath: sourceSelection.filePath,
+      text: sourceSelection.text,
+      startLine: sourceSelection.startLine,
+      endLine: sourceSelection.endLine,
+      selectionFrom: sourceSelection.selectionFrom,
+      selectionTo: sourceSelection.selectionTo,
     })
     useChatStore.getState().setDraftInput(prompt)
     clearPreviewContextHighlight()
     setPreviewMenu(null)
-  }, [previewMenu, activeTab, clearPreviewContextHighlight, getMarkdownTextFromLineRange])
+  }, [previewMenu, clearPreviewContextHighlight, getPreviewSourceSelection])
 
   // Drag & drop for dual-preview right pane
   const handleRightPaneDragOver = useCallback((e: React.DragEvent) => {
@@ -837,6 +908,7 @@ export function EditorArea() {
               collapsed={tocCollapsed}
               onToggle={() => setTocCollapsed((collapsed) => !collapsed)}
               onHeadingClick={jumpToPreviewHeading}
+              activeHeading={activeHeading}
             />
           </div>
         ) : viewMode === 'dual-preview' ? (
@@ -956,6 +1028,7 @@ export function EditorArea() {
                 collapsed={tocCollapsed}
                 onToggle={() => setTocCollapsed((collapsed) => !collapsed)}
                 onHeadingClick={viewMode === 'edit-preview' ? jumpToPreviewHeading : jumpToEditorHeading}
+                activeHeading={activeHeading}
               />
             )}
           </>
@@ -991,6 +1064,9 @@ export function EditorArea() {
                 </ContextMenuItem>
                 <ContextMenuItem onClick={() => handlePreviewAiAction('请改写这段内容，使其更清晰')}>
                   AI 改写这段
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => handlePreviewAiAction('请只把选中文本整理为标准 Markdown 格式：可以调整标题、列表、引用、代码块、表格等 Markdown 标记；不得改变原文内容、语义和顺序，不得新增信息。')}>
+                  AI 优化格式
                 </ContextMenuItem>
                 <ContextMenuItem onClick={() => handlePreviewAiAction('请翻译这段内容')}>
                   AI 翻译

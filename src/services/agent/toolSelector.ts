@@ -16,6 +16,7 @@ export type AgentToolName =
   | 'save_memory'
   | 'search_knowledge'
   | 'list_database_contents'
+  | 'list_current_edit_targets'
   | 'replace_current_tab_text'
   | 'read_context_file'
   | 'web_search'
@@ -40,6 +41,7 @@ const READ_TOOLS: AgentToolName[] = [
   'list_memories',
   'search_knowledge',
   'list_database_contents',
+  'list_current_edit_targets',
   'read_context_file',
   'web_search',
   'get_current_time',
@@ -143,6 +145,7 @@ export function getToolTokenBudget(toolName: string): number {
     list_memories: 4000,
     search_knowledge: 5000,
     list_database_contents: 5000,
+    list_current_edit_targets: 1000,
     read_context_file: 4000,
     web_search: 3000,
     get_current_time: 1000,

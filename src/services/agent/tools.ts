@@ -49,6 +49,14 @@ function canEditPathInContextTags(path: string, contextTags: ContextTag[]): bool
   )
 }
 
+function hasFileEditTag(path: string, contextTags: ContextTag[]): boolean {
+  return contextTags.some((tag) =>
+    tag.type === 'file'
+    && typeof tag.filePath === 'string'
+    && normalizeFilePath(tag.filePath) === normalizeFilePath(path)
+  )
+}
+
 interface AuthorizedContextTag {
   tag: ContextTag
   sourceMessage?: ChatMessage
@@ -77,6 +85,30 @@ function getAuthorizedContextTags(): AuthorizedContextTag[] {
   }
 
   return getRecentContextTags()
+}
+
+function getCurrentEditTargets() {
+  return getAgentScopeContext()?.editTargets || []
+}
+
+function findEditTargetById(targetId: unknown) {
+  if (typeof targetId !== 'string' || !targetId.trim()) return undefined
+  return getCurrentEditTargets().find((target) => target.id === targetId)
+}
+
+function findContextTagForEditTarget(targetId: unknown): ContextTag | undefined {
+  const target = findEditTargetById(targetId)
+  if (!target) return undefined
+
+  return getAuthorizedContextTags()
+    .map((entry) => entry.tag)
+    .find((tag) =>
+      tag.type === target.type
+      && typeof tag.filePath === 'string'
+      && normalizeFilePath(tag.filePath) === normalizeFilePath(target.filePath)
+      && (target.type !== 'selection'
+        || (tag.selectionFrom === target.selectionFrom && tag.selectionTo === target.selectionTo))
+    )
 }
 
 function getRecentContextTags(): AuthorizedContextTag[] {
@@ -461,12 +493,29 @@ export function registerBuiltinTools() {
   })
 
   registerTool({
+    name: 'list_current_edit_targets',
+    description: '列出本轮用户新添加的可编辑 selection/file 目标。返回的 targetId 是 replace_current_tab_text 的首选授权参数；没有目标时不得生成修改确认卡。',
+    parameters: [],
+    execute: async () => {
+      const targets = getCurrentEditTargets()
+      return JSON.stringify({
+        status: targets.length > 0 ? 'ok' : 'empty',
+        usage: targets.length > 0
+          ? '用户本轮已经添加可编辑目标。修改文本时调用 replace_current_tab_text，并优先传入 targetId。'
+          : '本轮没有新的 selection/file 标签。用户要求修改文本时，请提示重新添加目标标签。',
+        targets,
+      }, null, 2)
+    },
+  })
+
+  registerTool({
     name: 'replace_current_tab_text',
     description: '为用户本轮明确添加的 file/selection 标签生成文本替换确认卡片。必须传入目标文件 path；selection 会由工具读取授权范围内当前完整原文，整文替换应设置 replaceWholeDocument=true。工具不会直接写入文件。',
     parameters: [
+      { name: 'targetId', type: 'string', description: '本轮 list_current_edit_targets 返回的可编辑目标 ID。优先使用；提供后工具会自动解析 path 和 selection 范围', required: false },
       { name: 'oldText', type: 'string', description: 'file 片段替换时要被替换的原文，必须与文档内容完全匹配；selection 修改和整文替换时省略', required: false },
       { name: 'newText', type: 'string', description: '替换后的新文本', required: true },
-      { name: 'path', type: 'string', description: '目标文件绝对路径；必须是用户本轮添加到聊天框且已打开的 file 或 selection 标签', required: true },
+      { name: 'path', type: 'string', description: '兼容旧格式的目标文件绝对路径；优先使用 targetId', required: false },
       { name: 'replaceWholeDocument', type: 'boolean', description: '是否替换目标标签页整份内容；为 true 时由工具自动使用完整原文', required: false },
     ],
     execute: async (args) => {
@@ -474,22 +523,32 @@ export function registerBuiltinTools() {
       if (newTextErr) return newTextErr
 
       const state = useEditorStore.getState()
-      const path = typeof args.path === 'string' && args.path.trim() ? args.path : undefined
+      const targetTag = findContextTagForEditTarget(args.targetId)
+      const target = findEditTargetById(args.targetId)
+      if (args.targetId && !targetTag) {
+        return '修改被拒绝：targetId 不属于本轮可编辑 selection/file 标签。请重新添加要修改的标签后再试。'
+      }
+      const path = target?.filePath || (typeof args.path === 'string' && args.path.trim() ? args.path : undefined)
       if (!path) {
-        return '修改被拒绝：必须提供用户本轮添加的文件或选区标签路径。'
+        return '修改被拒绝：必须提供本轮可编辑目标的 targetId，或兼容旧格式的 path。'
       }
       let tab: Tab | undefined
       let targetedSelection: ContextTag | undefined
 
       const contextTags = getAuthorizedContextTags().map((entry) => entry.tag)
-      if (!canEditPathInContextTags(path, contextTags)) {
-        return '修改被拒绝：目标文件没有作为本轮文件或选中文本标签添加到聊天框。请先添加该文件或选区。'
+      if (!targetTag && !canEditPathInContextTags(path, contextTags)) {
+        if (contextTags.length === 0) {
+          return '修改被拒绝：本轮没有新添加的 file 或 selection 标签。请先把要修改的文件或选区添加到聊天框。'
+        }
+        return `修改被拒绝：目标路径「${path}」不是本轮新添加的 file 或 selection 标签。请确认标签指向同一个已打开文件。`
       }
-      targetedSelection = [...contextTags].reverse().find(
-        (tag) => tag.type === 'selection'
-          && tag.filePath
-          && normalizeFilePath(tag.filePath) === normalizeFilePath(path)
-      )
+      targetedSelection = targetTag
+        ? (targetTag.type === 'selection' ? targetTag : undefined)
+        : [...contextTags].reverse().find(
+          (tag) => tag.type === 'selection'
+            && tag.filePath
+            && normalizeFilePath(tag.filePath) === normalizeFilePath(path)
+        )
       tab = state.tabs.find((item) => item.filePath && normalizeFilePath(item.filePath) === normalizeFilePath(path))
       if (!tab) {
         return '修改被拒绝：目标文件尚未在标签页打开。请先打开文件后重新请求修改。'
@@ -497,8 +556,17 @@ export function registerBuiltinTools() {
 
       if (!tab) return '当前没有打开的编辑标签页。'
 
-      const replaceWholeDocument = args.replaceWholeDocument === true
+      const replaceWholeDocumentRequested = args.replaceWholeDocument === true
       const selectionRange = targetedSelection && getSelectionRange(targetedSelection)
+      const selectionCoversWholeDocument =
+        Boolean(selectionRange && selectionRange.from === 0 && selectionRange.to === tab.content.length)
+      if (replaceWholeDocumentRequested && !hasFileEditTag(path, contextTags) && !selectionCoversWholeDocument) {
+        return '整文替换被拒绝：整份文件修改必须添加 file 标签；selection 标签只授权修改选区范围。'
+      }
+      const replaceWholeDocument = replaceWholeDocumentRequested && hasFileEditTag(path, contextTags) && !targetedSelection
+      if (targetedSelection && !selectionRange) {
+        return '替换失败：本轮 selection 标签缺少精确字符范围。请重新框选目标文本后再次发起修改。'
+      }
       if (!replaceWholeDocument && !selectionRange) {
         const oldTextErr = validateString(args.oldText, 'oldText')
         if (oldTextErr) return oldTextErr
@@ -517,7 +585,11 @@ export function registerBuiltinTools() {
       } else {
         const index = tab.content.indexOf(oldText)
         if (index < 0) {
-          return '替换失败：当前文档中没有找到完全匹配的 oldText。请先缩小到一个准确的段落或句子。'
+          return '替换失败：当前文档中没有找到完全匹配的 oldText。请基于目标文件当前内容重新生成确认卡，或让用户改用 selection 标签框选目标文本。'
+        }
+        const nextIndex = tab.content.indexOf(oldText, index + oldText.length)
+        if (nextIndex >= 0) {
+          return '替换失败：oldText 在当前文档中出现多次，无法安全判断要修改哪一处。请让用户框选唯一目标文本后重试。'
         }
         replaceRange = { from: index, to: index + oldText.length }
       }

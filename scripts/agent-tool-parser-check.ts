@@ -2,17 +2,15 @@ import assert from 'node:assert/strict'
 import { shouldUseAgent } from '../src/services/agent/executor'
 import { shouldIncludeFullDocumentContext } from '../src/services/agent/intentDetector'
 import { prepareChatHistoryForModel } from '../src/services/aiChatMessages'
-import { shouldTriggerScopedRag } from '../src/services/aiChatFlow'
-import { registerTool } from '../src/services/agent/toolRegistry'
+import { setAgentScopeContext } from '../src/services/aiScope'
+import { useEditorStore } from '../src/stores/editorStore'
+import { useChatStore } from '../src/stores/chatStore'
+import { registerBuiltinTools } from '../src/services/agent/tools'
+import { getTool } from '../src/services/agent/toolRegistry'
 import { hideLikelyToolJsonPrefix, parseToolCall, stripToolCallJson } from '../src/services/agent/toolCallParser'
 import { resolveAnchoredReplacementRange } from '../src/services/agent/editTarget'
 
-registerTool({
-  name: 'search_knowledge',
-  description: 'test search tool',
-  parameters: [],
-  execute: async () => 'ok',
-})
+registerBuiltinTools()
 
 const pureJson = parseToolCall('{"tool":"search_knowledge","args":{"query":"RAG"}}')
 assert.equal(pureJson?.name, 'search_knowledge')
@@ -29,6 +27,10 @@ assert.deepEqual(embeddedJson?.args, { query: 'scope' })
 const editConfirmation = parseToolCall('{"needsEditConfirmation":true,"path":"D:/notes/current.md","oldText":"旧","newText":"新"}')
 assert.equal(editConfirmation?.name, 'replace_current_tab_text')
 assert.deepEqual(editConfirmation?.args, { oldText: '旧', newText: '新', path: 'D:/notes/current.md' })
+
+const targetEditConfirmation = parseToolCall('{"needsEditConfirmation":true,"targetId":"edit-target-1","newText":"新"}')
+assert.equal(targetEditConfirmation?.name, 'replace_current_tab_text')
+assert.deepEqual(targetEditConfirmation?.args, { targetId: 'edit-target-1', newText: '新' })
 
 const fileEditConfirmation = parseToolCall('{"needsEditConfirmation":true,"path":"D:/notes/a.md","oldText":"旧","newText":"新"}')
 assert.equal(fileEditConfirmation?.name, 'replace_current_tab_text')
@@ -73,18 +75,6 @@ assert.equal(shouldIncludeFullDocumentContext('把整篇文章重写一下'), tr
 assert.equal(shouldIncludeFullDocumentContext('请对这篇文章整体润色'), true)
 assert.equal(shouldIncludeFullDocumentContext('把这段话润色一下'), false)
 
-const fileContextTag = {
-  id: 'file-1',
-  type: 'file' as const,
-  title: 'notes.md',
-  filePath: 'D:/notes/notes.md',
-  content: null,
-  preview: 'notes.md',
-}
-assert.equal(shouldTriggerScopedRag('总结这个文件', [fileContextTag]), true)
-assert.equal(shouldTriggerScopedRag('你好', [fileContextTag]), false)
-assert.equal(shouldTriggerScopedRag('总结这个文件', []), false)
-
 const preparedHistory = prepareChatHistoryForModel([
   {
     role: 'user',
@@ -118,5 +108,119 @@ assert.deepEqual(resolveAnchoredReplacementRange('这是重点\n中间内容\n�
   from: 10,
   to: 16,
 })
+
+const replaceCurrentTabText = getTool('replace_current_tab_text')
+assert.ok(replaceCurrentTabText)
+const listCurrentEditTargets = getTool('list_current_edit_targets')
+assert.ok(listCurrentEditTargets)
+
+useChatStore.setState({ messages: [], pendingEdit: null, contextTags: [] })
+useEditorStore.setState({
+  tabs: [
+    {
+      id: 'tab-a',
+      title: 'a.md',
+      filePath: 'D:/notes/a.md',
+      content: 'alpha beta alpha',
+      savedContent: 'alpha beta alpha',
+      modified: false,
+    },
+    {
+      id: 'tab-b',
+      title: 'b.md',
+      filePath: 'D:/notes/b.md',
+      content: 'other file',
+      savedContent: 'other file',
+      modified: false,
+    },
+  ],
+  activeTabId: 'tab-b',
+})
+
+setAgentScopeContext({
+  contextTags: [{
+    id: 'selection-a',
+    type: 'selection',
+    title: 'a.md 选区',
+    filePath: 'D:/notes/a.md',
+    content: 'beta',
+    preview: 'beta',
+    selectionFrom: 6,
+    selectionTo: 10,
+  }],
+  editTargets: [{
+    id: 'edit-target-1',
+    type: 'selection',
+    title: 'a.md 选区',
+    filePath: 'D:/notes/a.md',
+    selectionFrom: 6,
+    selectionTo: 10,
+  }],
+})
+
+const selectionEditResult = JSON.parse(await replaceCurrentTabText.execute({
+  targetId: 'edit-target-1',
+  newText: 'BETA',
+}))
+assert.equal(selectionEditResult.__pendingEdit, true)
+assert.equal(selectionEditResult.tabId, 'tab-a')
+assert.equal(selectionEditResult.oldText, 'beta')
+assert.equal(selectionEditResult.replaceFrom, 6)
+assert.equal(selectionEditResult.replaceTo, 10)
+
+const selectionWholeDocResult = await replaceCurrentTabText.execute({
+  targetId: 'edit-target-1',
+  replaceWholeDocument: true,
+  newText: 'new doc',
+})
+assert.match(selectionWholeDocResult, /整文替换被拒绝/)
+
+const invalidTargetResult = await replaceCurrentTabText.execute({
+  targetId: 'edit-target-missing',
+  newText: 'BETA',
+})
+assert.match(invalidTargetResult, /targetId 不属于本轮可编辑/)
+
+setAgentScopeContext({
+  contextTags: [{
+    id: 'file-a',
+    type: 'file',
+    title: 'a.md',
+    filePath: 'D:/notes/a.md',
+    content: null,
+    preview: 'a.md',
+  }],
+  editTargets: [{
+    id: 'edit-target-1',
+    type: 'file',
+    title: 'a.md',
+    filePath: 'D:/notes/a.md',
+  }],
+})
+
+const duplicateOldTextResult = await replaceCurrentTabText.execute({
+  path: 'D:/notes/a.md',
+  oldText: 'alpha',
+  newText: 'ALPHA',
+})
+assert.match(duplicateOldTextResult, /出现多次/)
+
+setAgentScopeContext({ contextTags: [] })
+const emptyEditTargets = JSON.parse(await listCurrentEditTargets.execute({}))
+assert.equal(emptyEditTargets.status, 'empty')
+
+const missingTagResult = await replaceCurrentTabText.execute({
+  path: 'D:/notes/a.md',
+  oldText: 'beta',
+  newText: 'BETA',
+})
+assert.match(missingTagResult, /本轮没有新添加/)
+
+const missingPathResult = await replaceCurrentTabText.execute({
+  oldText: 'beta',
+  newText: 'BETA',
+})
+assert.match(missingPathResult, /必须提供/)
+setAgentScopeContext(null)
 
 console.log('agent tool parser checks passed')

@@ -48,13 +48,13 @@ ${CONTEXT_SAFETY_PROMPT}
 {"tool": "工具名", "args": {"参数名": "参数值"}}
 
 当你判断需要弹出文本修改确认卡片时，也可以输出以下 JSON。系统会校验 needsEditConfirmation，并自动转换为 replace_current_tab_text 工具调用：
-{"needsEditConfirmation": true, "path": "本轮已授权且已打开的文件绝对路径", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本"}
-修改用户添加到聊天框的 selection 或 file 标签所指向的文件时，必须附带路径：
-{"needsEditConfirmation": true, "path": "已授权且已打开的文件绝对路径", "oldText": "目标文件中的原文", "newText": "替换后的新文本"}
+{"needsEditConfirmation": true, "targetId": "本轮可编辑目标 ID", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本"}
+修改用户添加到聊天框的 selection 或 file 标签所指向的文件时，优先使用【本轮可编辑目标】里的 targetId：
+{"needsEditConfirmation": true, "targetId": "edit-target-1", "oldText": "目标文件中的原文", "newText": "替换后的新文本"}
 修改 selection 标签时不要回传 oldText，由工具读取授权范围内的当前原文：
-{"needsEditConfirmation": true, "path": "已授权且已打开的文件绝对路径", "newText": "替换后的新文本"}
+{"needsEditConfirmation": true, "targetId": "edit-target-1", "newText": "替换后的新文本"}
 修改整份已授权文件时，不要回传完整 oldText，使用：
-{"needsEditConfirmation": true, "path": "已授权且已打开的文件绝对路径", "replaceWholeDocument": true, "newText": "替换后的完整新稿"}
+{"needsEditConfirmation": true, "targetId": "edit-target-1", "replaceWholeDocument": true, "newText": "替换后的完整新稿"}
 
 当你能直接回答时，直接输出答案文本。
 
@@ -65,7 +65,7 @@ ${CONTEXT_SAFETY_PROMPT}
 4. 用户提出"再简洁些""继续改这个文件""撤销刚才修改"等针对既有文本的请求，但本轮未新添加目标 tag 时，直接提示其重新添加目标 tag 后再发起修改请求。
 5. 本轮携带 selection 或 file 标签且用户要求修改时，必须调用 replace_current_tab_text 生成确认卡片，禁止只输出修改后的文本或口头说明。
 5.1 如果本轮有多个 selection 或 file 目标，且用户要求修改文本，不得调用 replace_current_tab_text，不得生成确认卡片。必须提示用户本轮只保留一个 selection 或 file 标签后重新发起修改请求。不要在多个目标中自行选择第一个，也不要把多个文件或选区合并到一张卡片。
-6. 调用 replace_current_tab_text 或输出 needsEditConfirmation 时必须传入本轮目标标签的 path；目标文件还必须已在标签页打开。
+6. 调用 replace_current_tab_text 或输出 needsEditConfirmation 时必须优先传入本轮目标标签的 targetId；旧格式 path 仅作兼容兜底。目标文件还必须已在标签页打开。
 6.1 selection 标签包含精确字符范围。修改 selection 时不要回传 oldText，工具会读取授权选区当前完整原文；不得改写文档内其他相同文本。
 7. 如果用户要求改写或覆写整份文件，必须传入 replaceWholeDocument=true，由工具读取已打开目标文件的完整原文；不要把整份原文复制到 oldText。
 8. 如果本轮用户消息里带有 file 标签并要求片段替换，oldText 必须来自目标文件当前内容；如果是 selection 标签，省略 oldText。
@@ -595,11 +595,11 @@ export async function runAgent(
             '系统校验失败：本轮用户表达了文本修改或撤销意图，但你的回复没有生成修改确认卡片。',
             '请不要只回复"已修改""已撤销"或修改后的文本。',
             '你必须重新输出以下两种 JSON 之一：',
-            '{"needsEditConfirmation": true, "path": "本轮已授权且已打开的文件绝对路径", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本"}',
-            '修改已添加的 selection 或 file 标签时必须在上述 JSON 中增加 "path": "已授权且已打开的文件绝对路径"。',
+            '{"needsEditConfirmation": true, "targetId": "本轮可编辑目标 ID", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本"}',
+            '修改已添加的 selection 或 file 标签时必须优先使用【本轮可编辑目标】里的 targetId。',
             '修改 selection 标签时省略 oldText，由工具读取授权选区当前完整原文，不得选择文档内其他相同文本。',
             '修改整份已授权文件时增加 "replaceWholeDocument": true，并省略 oldText。',
-            '或 {"tool": "replace_current_tab_text", "args": {"path": "本轮已授权且已打开的文件绝对路径", "newText": "替换后的新文本", "replaceWholeDocument": false}}',
+            '或 {"tool": "replace_current_tab_text", "args": {"targetId": "本轮可编辑目标 ID", "newText": "替换后的新文本", "replaceWholeDocument": false}}',
           ].join('\n'),
         })
         continue

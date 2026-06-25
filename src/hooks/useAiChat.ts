@@ -11,7 +11,7 @@ import type { AgentStep } from '@/services/agent/types'
 import type { ContextTag } from '@/types/contextTag'
 import { buildContextFromTags } from '@/services/contextBuilder'
 import { readFile as readTauriFile } from '@/hooks/useTauri'
-import { setAgentScopeContext } from '@/services/aiScope'
+import { setAgentScopeContext, type AgentEditTarget } from '@/services/aiScope'
 import { searchScopedKnowledge, shouldTriggerScopedRag, streamFinalAnswer } from '@/services/aiChatFlow'
 import { buildChatMessageTags, buildMessagesForModel, buildSupplementalAiContext, countRagSourcesInContext, createContextMeta, createUserChatMessage, prepareChatHistoryForModel } from '@/services/aiChatMessages'
 import { stripToolCallJson } from '@/services/agent/toolCallParser'
@@ -137,6 +137,46 @@ function filterSourcesForAnswer(answer: string, sources: ChatMessageSource[]): C
   }
 
   return sources.filter((source) => source.filePath === sources[0].filePath)
+}
+
+function buildEditTargets(tags: ContextTag[] = []): AgentEditTarget[] {
+  return tags
+    .filter((tag) =>
+      (tag.type === 'selection' || tag.type === 'file')
+      && typeof tag.filePath === 'string'
+      && tag.filePath.trim().length > 0
+    )
+    .map((tag, index) => ({
+      id: `edit-target-${index + 1}`,
+      type: tag.type as 'selection' | 'file',
+      title: tag.title,
+      filePath: tag.filePath as string,
+      selectionFrom: tag.selectionFrom,
+      selectionTo: tag.selectionTo,
+    }))
+}
+
+function buildEditTargetsContext(editTargets: AgentEditTarget[]): string {
+  if (editTargets.length === 0) {
+    return [
+      '【本轮可编辑目标】',
+      '无。本轮没有新的 selection 或 file 标签；如用户要求修改文本，只能提示重新添加目标标签。',
+    ].join('\n')
+  }
+
+  return [
+    '【本轮可编辑目标】',
+    '以下 targetId 由系统根据本轮新增标签生成，是本轮唯一可用于文本修改确认卡的写授权。需要修改时调用 replace_current_tab_text，并优先传 targetId。',
+    ...editTargets.map((target) => [
+      `- targetId: ${target.id}`,
+      `  type: ${target.type}`,
+      `  path: ${target.filePath}`,
+      `  title: ${target.title}`,
+      typeof target.selectionFrom === 'number' && typeof target.selectionTo === 'number'
+        ? `  selectionRange: ${target.selectionFrom}-${target.selectionTo}`
+        : '',
+    ].filter(Boolean).join('\n')),
+  ].join('\n')
 }
 
 export function useAiChat() {
@@ -311,6 +351,10 @@ export function useAiChat() {
 
       // 构建候选工具
       let candidateToolNames = buildCandidateTools(mergedCandidates)
+      const currentEditTargets = buildEditTargets(contextTags || [])
+      if (currentEditTargets.length > 0 && candidateToolNames.includes('replace_current_tab_text')) {
+        candidateToolNames.unshift('list_current_edit_targets')
+      }
 
       // 检查是否需要记忆写入
       const explicitMemoryWriteIntent = shouldAllowMemoryWrite(content.trim())
@@ -483,14 +527,16 @@ export function useAiChat() {
         }
 
         // Agent 查询复用本轮预检索到的只读记忆上下文，避免普通转 Agent 后重复检索。
-        const agentContext = [tagContext, memoryContext].filter(Boolean).join('\n\n')
+        const editTargets = currentEditTargets
+        const editTargetsContext = buildEditTargetsContext(editTargets)
+        const agentContext = [tagContext, editTargetsContext, memoryContext].filter(Boolean).join('\n\n')
         const normalizedUserIntent = explicitMemoryWriteIntent
           ? `记住：${content.trim()}`
           : content.trim()
         const agentUserQuery = content.trim() || '请根据我提供的上下文继续。'
 
         try {
-          setAgentScopeContext({ contextTags: contextTags || [] })
+          setAgentScopeContext({ contextTags: contextTags || [], editTargets })
           const result = await runAgent(
             agentUserQuery,
             prepareChatHistoryForModel(messages),

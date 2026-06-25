@@ -70,6 +70,7 @@ export function parseToolCall(text: string): ParsedToolCall | null {
         return {
           name: 'replace_current_tab_text',
           args: {
+            ...(typeof parsed.targetId === 'string' ? { targetId: parsed.targetId } : {}),
             ...(typeof parsed.oldText === 'string' ? { oldText: parsed.oldText } : {}),
             ...(typeof parsed.newText === 'string' ? { newText: parsed.newText } : {}),
             ...(typeof parsed.path === 'string' ? { path: parsed.path } : {}),
