@@ -62,7 +62,7 @@ export function MarkdownDiffView({ original, current }: MarkdownDiffViewProps) {
         ) : lines.map((line, index) => (
           <div
             key={`${index}-${line.type}`}
-            className={`grid grid-cols-[56px_56px_24px_minmax(0,1fr)] border-b border-gm-border-subtle/50 px-3 ${
+            className={`grid grid-cols-[56px_56px_24px_minmax(0,1fr)] border-b border-gm-border-subtle px-3 ${
               line.type === 'added'
                 ? 'bg-gm-success/10'
                 : line.type === 'removed'

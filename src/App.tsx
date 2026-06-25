@@ -5,7 +5,7 @@ import { initDatabase } from './services/database/db'
 import { vectorStore } from './services/rag/vectorStore'
 import { hydrateSettingsSecrets } from './services/settingsSecrets'
 import { initAiClient, initEmbeddingClient } from './services/ai/aiClient'
-import { useSettingsStore } from './stores/settingsStore'
+import { syncDocumentTheme, useSettingsStore } from './stores/settingsStore'
 import { useExternalFileOpen } from './hooks/useExternalFileOpen'
 import { Cursor } from 'animal-island-ui'
 import { invoke } from '@tauri-apps/api/core'
@@ -114,7 +114,7 @@ function App() {
   useExternalFileOpen(appReady)
 
   useLayoutEffect(() => {
-    document.documentElement.dataset.theme = theme
+    syncDocumentTheme(theme)
   }, [theme])
 
   // 禁用浏览器默认右键菜单

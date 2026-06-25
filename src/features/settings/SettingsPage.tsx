@@ -473,6 +473,9 @@ function EditorSettings() {
       <SettingField label="行号" description="显示行号">
         <Switch checked={editor.lineNumbers} onChange={(v) => updateEditorSettings({ lineNumbers: v })} />
       </SettingField>
+      <SettingField label="同步滚动" description="编辑 + 预览模式下同步两侧滚动位置">
+        <Switch checked={editor.syncScroll} onChange={(v) => updateEditorSettings({ syncScroll: v })} />
+      </SettingField>
       <SettingField label="自动保存" description="编辑后自动保存">
         <Switch checked={editor.autoSave} onChange={(v) => updateEditorSettings({ autoSave: v })} />
       </SettingField>
@@ -556,8 +559,9 @@ function GeneralSettings() {
       minimap: false,
       autoSave: true,
       autoSaveDelay: 1000,
+      syncScroll: true,
     })
-    updateAppearanceSettings({ customCursorEnabled: true })
+    updateAppearanceSettings({ customCursorEnabled: true, theme: 'light' })
     updateWebSearchConfig({ provider: 'duckduckgo', apiKey: '', maxResults: 5, customUrl: '' })
     toast.success('已恢复默认设置')
   }
@@ -670,6 +674,9 @@ function GeneralSettings() {
 
       <Sep />
       <SectionTitle>外观</SectionTitle>
+      <SettingField label="深色模式" description="切换夜间写作配色，无需重启">
+        <Switch checked={appearance.theme === 'dark'} onChange={(v) => updateAppearanceSettings({ theme: v ? 'dark' : 'light' })} />
+      </SettingField>
       <SettingField label="定制光标" description="使用 animal-island-ui 的手作风光标">
         <Switch checked={appearance.customCursorEnabled} onChange={(v) => updateAppearanceSettings({ customCursorEnabled: v })} />
       </SettingField>

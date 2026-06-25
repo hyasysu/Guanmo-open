@@ -248,7 +248,7 @@ function FileTreeNode({
         onClick={handleClick}
         onContextMenu={handleContextMenu}
         onDragStart={handleDragStart}
-        className={`w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-caption text-left transition-all duration-150 truncate ${
+        className={`w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-caption text-left truncate ${
           isActive
             ? 'bg-gm-primary-subtle text-gm-text font-bold'
             : 'text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover'
@@ -457,7 +457,7 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
               e.preventDefault()
               setContextMenu({ x: e.clientX, y: e.clientY, file })
             }}
-            className={`group w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-caption text-left transition-all duration-150 truncate ${
+            className={`group w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-caption text-left truncate ${
               isActive
                 ? 'bg-gm-primary-subtle text-gm-text font-bold'
                 : 'text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover'

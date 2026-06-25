@@ -879,13 +879,7 @@ export function EditorArea() {
         {tabs.length === 0 ? (
           <WelcomeScreen />
         ) : viewMode === 'diff-preview' ? (
-          activeTab?.filePath ? (
-            <MarkdownDiffView original={activeTab.savedContent} current={activeTab.content} />
-          ) : (
-            <div className="flex h-full flex-1 items-center justify-center text-caption text-gm-text-tertiary">
-              新文件尚未保存，无法与磁盘内容对比。
-            </div>
-          )
+          <MarkdownDiffView original={activeTab?.originalContent || ''} current={activeTab?.content || ''} />
         ) : viewMode === 'preview' ? (
           <div className="flex flex-1 overflow-hidden bg-gm-surface">
             <div
@@ -990,7 +984,7 @@ export function EditorArea() {
                 <button
                   type="button"
                   onClick={() => void handleChooseImage()}
-                  className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-lg border border-gm-border bg-gm-surface/90 text-gm-text-secondary shadow-sm transition-colors hover:border-gm-primary/50 hover:text-gm-primary"
+                  className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-lg border border-gm-border bg-gm-surface/90 text-gm-text-secondary shadow-sm hover:border-gm-primary/50 hover:text-gm-primary"
                   title="选择图片插入"
                 >
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -1213,7 +1207,7 @@ function PaneHeader({ title, onClose }: { title: string; onClose?: () => void })
       {onClose && (
         <button
           onClick={onClose}
-          className="p-1 rounded-lg text-gm-text-tertiary hover:text-gm-text hover:bg-gm-surface-hover transition-colors"
+          className="p-1 rounded-lg text-gm-text-tertiary hover:text-gm-text hover:bg-gm-surface-hover"
           title="关闭右栏"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

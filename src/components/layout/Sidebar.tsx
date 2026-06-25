@@ -251,7 +251,7 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
 
   if (collapsed) {
     return (
-      <div className="animal-cursor w-14 flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col items-center py-3 gap-2">
+      <div className="animal-cursor gm-instant-color w-14 flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col items-center py-3 gap-2">
         <SidebarIcon label="展开侧边栏" onClick={toggleSidebar}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
             <path d="M4 6h16M4 12h16M4 18h16" />
@@ -288,7 +288,7 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
 
   return (
     <div
-      className="animal-cursor relative flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col overflow-hidden"
+      className="animal-cursor gm-instant-color relative flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col overflow-hidden"
       style={{ width }}
     >
       {/* Header */}
@@ -344,14 +344,14 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
                       await handleRefreshWorkspace()
                       toast.success('工作区已刷新')
                     }}
-                    className="text-micro text-gm-text-tertiary hover:text-gm-text transition-colors ml-2"
+                    className="text-micro text-gm-text-tertiary hover:text-gm-text ml-2"
                     title="重新读取工作区文件列表"
                   >
                     刷新
                   </button>
                   <button
                     onClick={handleCloseWorkspace}
-                    className="text-micro text-gm-text-tertiary hover:text-gm-text transition-colors ml-2"
+                    className="text-micro text-gm-text-tertiary hover:text-gm-text ml-2"
                   >
                     关闭
                   </button>
@@ -368,7 +368,7 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
                   </Button>
                   <button
                     onClick={() => setIndexMenuOpen((v) => !v)}
-                    className="inline-flex items-center text-gm-text-tertiary hover:text-gm-text transition-colors"
+                    className="inline-flex items-center text-gm-text-tertiary hover:text-gm-text"
                     title="更多索引操作"
                   >
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -378,13 +378,13 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
                   {indexMenuOpen && (
                     <div className="absolute left-0 top-full z-20 mt-1 min-w-[120px] rounded-lg border border-gm-border bg-gm-surface-elevated shadow-lg py-1">
                       <button
-                        className="w-full px-3 py-1.5 text-left text-micro text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text transition-colors"
+                        className="w-full px-3 py-1.5 text-left text-micro text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text"
                         onClick={() => { setIndexMenuOpen(false); handleCleanupWorkspace() }}
                       >
                         清理失效索引
                       </button>
                       <button
-                        className="w-full px-3 py-1.5 text-left text-micro text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text transition-colors"
+                        className="w-full px-3 py-1.5 text-left text-micro text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text"
                         onClick={() => { setIndexMenuOpen(false); handleRebuildWorkspace() }}
                       >
                         重建索引
@@ -572,7 +572,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
               setContextMenu({ x: e.clientX, y: e.clientY, file })
             }}
             title={isMissing ? `文件已丢失：${file.path}` : file.path}
-            className={`w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-caption text-left transition-all duration-150 truncate ${
+            className={`w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-caption text-left truncate ${
               isActive
                 ? 'bg-gm-primary-subtle text-gm-text font-bold'
                 : isMissing
@@ -643,7 +643,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
       {hasMore && !showAll && (
         <button
           onClick={() => setShowAll(true)}
-          className="w-full px-2 py-1 text-micro text-gm-text-tertiary hover:text-gm-text-secondary hover:bg-gm-surface-hover rounded-lg transition-colors text-center"
+          className="w-full px-2 py-1 text-micro text-gm-text-tertiary hover:text-gm-text-secondary hover:bg-gm-surface-hover rounded-lg text-center"
         >
           展开更多 ({files.length - INITIAL_SHOW})
         </button>
@@ -651,7 +651,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
       {hasMore && showAll && (
         <button
           onClick={() => setShowAll(false)}
-          className="w-full px-2 py-1 text-micro text-gm-text-tertiary hover:text-gm-text-secondary hover:bg-gm-surface-hover rounded-lg transition-colors text-center"
+          className="w-full px-2 py-1 text-micro text-gm-text-tertiary hover:text-gm-text-secondary hover:bg-gm-surface-hover rounded-lg text-center"
         >
           收起
         </button>
@@ -672,7 +672,7 @@ function SidebarIcon({
   return (
     <button
       onClick={onClick}
-      className="w-10 h-10 flex items-center justify-center rounded-lg text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover transition-all duration-200"
+      className="w-10 h-10 flex items-center justify-center rounded-lg text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover"
       title={label}
     >
       {children}

@@ -31,6 +31,8 @@ interface AppearanceSettings {
   theme: 'light' | 'dark'
 }
 
+type AppearanceTheme = AppearanceSettings['theme']
+
 interface SettingsState {
   ai: AiConfig
   editor: EditorSettings
@@ -69,6 +71,16 @@ const DEFAULT_WEB_SEARCH: WebSearchConfig = {
   customUrl: '',
 }
 
+const THEME_SWITCH_THROTTLE_MS = 180
+let lastThemeSwitchAt = 0
+
+export function syncDocumentTheme(theme: AppearanceTheme) {
+  if (typeof document === 'undefined') return
+  const root = document.documentElement
+  if (root.dataset.theme === theme) return
+  root.dataset.theme = theme
+}
+
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
@@ -103,7 +115,21 @@ export const useSettingsStore = create<SettingsState>()(
         set((s) => ({ editor: { ...s.editor, ...settings } })),
 
       updateAppearanceSettings: (settings) =>
-        set((s) => ({ appearance: { ...s.appearance, ...settings } })),
+        set((s) => {
+          let nextSettings = settings
+          if (settings.theme && settings.theme !== s.appearance.theme) {
+            const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+            if (now - lastThemeSwitchAt < THEME_SWITCH_THROTTLE_MS) {
+              const { theme: _theme, ...rest } = settings
+              nextSettings = rest
+            } else {
+              lastThemeSwitchAt = now
+              syncDocumentTheme(settings.theme)
+            }
+          }
+          if (Object.keys(nextSettings).length === 0) return s
+          return { appearance: { ...s.appearance, ...nextSettings } }
+        }),
 
       updateWebSearchConfig: (config) => {
         if ('apiKey' in config) {

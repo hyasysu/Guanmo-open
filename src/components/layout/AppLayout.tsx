@@ -13,12 +13,14 @@ import { AiPanel } from '../ai/AiPanel'
 import { CommandPalette } from '../common/CommandPalette'
 import { SettingsPage } from '@/features/settings/SettingsPage'
 import { toast } from '@/services/toast'
+import { useSettingsStore } from '@/stores/settingsStore'
 
 export function AppLayout() {
   const { sidebarCollapsed, aiPanelOpen, sidebarWidth, aiPanelWidth, toggleSidebar, toggleAiPanel, setAiPanelWidth } =
     useAppStore()
   const { togglePreview, toggleDiffPreview, setViewMode } = useEditorStore()
   const { handleNewFile, handleOpenFile, handleSaveFile } = useFileOperations()
+  const customCursorEnabled = useSettingsStore((s) => s.appearance.customCursorEnabled)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [commandPaletteMode, setCommandPaletteMode] = useState<'commands' | 'files'>('commands')
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -177,14 +179,14 @@ export function AppLayout() {
       <Modal
         open={settingsOpen}
         width={860}
-        className="gm-settings-modal gm-system-cursor"
-        maskClassName="gm-settings-mask gm-system-cursor"
+        className={`gm-settings-modal ${customCursorEnabled ? '' : 'gm-system-cursor'}`}
+        maskClassName={`gm-settings-mask ${customCursorEnabled ? '' : 'gm-system-cursor'}`}
         onClose={() => setSettingsOpen(false)}
         footer={null}
         typewriter={false}
-        cursor={false}
+        cursor={customCursorEnabled}
       >
-        <div className="gm-system-cursor" style={{ width: '100%', height: '560px', overflow: 'hidden', padding: '32px 36px', minHeight: 0 }}>
+        <div className={customCursorEnabled ? undefined : 'gm-system-cursor'} style={{ width: '100%', height: '560px', overflow: 'hidden', padding: '32px 36px', minHeight: 0 }}>
           <SettingsPage />
         </div>
       </Modal>

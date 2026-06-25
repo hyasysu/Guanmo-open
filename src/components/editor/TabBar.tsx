@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { useChatStore } from '@/stores/chatStore'
 import { exportMarkdownAsHtml, exportMarkdownAsPdf } from '@/services/markdownExport'
@@ -15,39 +15,19 @@ interface TabBarProps {
 }
 
 type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
-const TOPBAR_COMPACT_WIDTH = 560
 
 export function TabBar({ onOpenSettings }: TabBarProps) {
   const { tabs, activeTabId, setActiveTab, closeTab, reorderTabs, viewMode, setViewMode, rightPaneTabId, setRightPaneTabId, favorites, toggleFavorite, togglePinTab } = useEditorStore()
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null)
-  const [modeMenu, setModeMenu] = useState<{ x: number; y: number } | null>(null)
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
-  const [compactControls, setCompactControls] = useState(false)
   const [dragState, setDragState] = useState<{ tabId: string; startX: number } | null>(null)
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null)
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const renameCancelledRef = useRef(false)
   const renameSubmittingRef = useRef(false)
-  const tabBarRef = useRef<HTMLDivElement>(null)
-  const modeMenuButtonRef = useRef<HTMLButtonElement>(null)
   const exportButtonRef = useRef<HTMLButtonElement>(null)
   const draggedTabIdRef = useRef<string | null>(null)
-
-  useEffect(() => {
-    const node = tabBarRef.current
-    if (!node || typeof ResizeObserver === 'undefined') return
-
-    const updateCompactControls = (width: number) => {
-      setCompactControls(width < TOPBAR_COMPACT_WIDTH)
-      setModeMenu(null)
-      setExportMenu(null)
-    }
-
-    const observer = new ResizeObserver(([entry]) => updateCompactControls(entry.contentRect.width))
-    observer.observe(node)
-    return () => observer.disconnect()
-  }, [])
 
   const handleContextMenu = useCallback((e: React.MouseEvent, tabId: string) => {
     e.preventDefault()
@@ -249,7 +229,6 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
 
   const openExportMenu = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation()
-    setModeMenu(null)
     if (exportMenu) {
       setExportMenu(null)
       return
@@ -259,31 +238,12 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
     setExportMenu({ x: rect.right - 160, y: rect.bottom + 4 })
   }, [exportMenu])
 
-  const openModeMenu = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    e.stopPropagation()
-    setExportMenu(null)
-    if (modeMenu) {
-      setModeMenu(null)
-      return
-    }
-    const rect = modeMenuButtonRef.current?.getBoundingClientRect()
-    if (!rect) return
-    setModeMenu({ x: rect.right - 184, y: rect.bottom + 4 })
-  }, [modeMenu])
-
-  const selectModeFromMenu = useCallback((mode: ViewMode) => {
-    setModeMenu(null)
-    handleModeChange(mode)
-  }, [handleModeChange])
-
   const exportHtmlFromMenu = useCallback(() => {
-    setModeMenu(null)
     setExportMenu(null)
     void handleExportHtml()
   }, [handleExportHtml])
 
   const exportPdfFromMenu = useCallback(() => {
-    setModeMenu(null)
     setExportMenu(null)
     void handleExportPdf()
   }, [handleExportPdf])
@@ -292,10 +252,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
 
   return (
     <>
-      <div
-        ref={tabBarRef}
-        className="h-10 min-w-0 flex items-center bg-gm-surface border-b border-gm-border overflow-hidden"
-      >
+      <div className="gm-instant-color h-10 min-w-0 flex items-center bg-gm-surface border-b border-gm-border overflow-hidden">
         {/* Tabs */}
         <div className="min-w-0 flex-1 flex items-center overflow-x-auto">
           {[...tabs].sort((a, b) => {
@@ -323,7 +280,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
                 onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDrop(e, tab.id)}
                 onDragEnd={handleDragEnd}
-                className={`h-full px-3 flex items-center gap-1.5 text-caption border-r border-gm-border-subtle transition-all duration-200 group select-none cursor-pointer ${
+                className={`h-full px-3 flex items-center gap-1.5 text-caption border-r border-gm-border-subtle group select-none cursor-pointer ${
                   activeTabId === tab.id
                     ? 'bg-gm-canvas text-gm-text font-bold border-b-2 border-b-gm-primary'
                     : 'text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover'
@@ -403,19 +360,17 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
 
         {/* View mode switcher */}
         <div className="flex items-center gap-0.5 px-2 border-l border-gm-border-subtle flex-shrink-0">
-          {!compactControls && (
-            <button
-              type="button"
-              ref={exportButtonRef}
-              onClick={openExportMenu}
-              disabled={!activeTabId}
-              aria-haspopup="menu"
-              aria-expanded={Boolean(exportMenu)}
-              className="mr-2 rounded-lg border border-gm-border bg-gm-surface-elevated px-2.5 py-1 text-caption font-bold text-gm-text-secondary transition-colors hover:text-gm-primary disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              导出
-            </button>
-          )}
+          <button
+            type="button"
+            ref={exportButtonRef}
+            onClick={openExportMenu}
+            disabled={!activeTabId}
+            aria-haspopup="menu"
+            aria-expanded={Boolean(exportMenu)}
+            className="mr-2 rounded-lg border border-gm-border bg-gm-surface-elevated px-2.5 py-1 text-caption font-bold text-gm-text-secondary hover:text-gm-primary disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            导出
+          </button>
           <ModeButton
             active={viewMode === 'edit'}
             onClick={() => handleModeChange('edit')}
@@ -436,62 +391,37 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
               <circle cx="12" cy="12" r="3" />
             </svg>
           </ModeButton>
-          {compactControls ? (
-            <button
-              type="button"
-              ref={modeMenuButtonRef}
-              onClick={openModeMenu}
-              title="更多操作"
-              aria-label="更多视图操作"
-              aria-haspopup="menu"
-              aria-expanded={Boolean(modeMenu)}
-              className={`p-1.5 rounded-lg transition-all duration-200 ${
-                modeMenu || (viewMode !== 'edit' && viewMode !== 'preview')
-                  ? 'bg-gm-primary-subtle text-gm-primary'
-                  : 'text-gm-text-tertiary hover:text-gm-text-secondary hover:bg-gm-surface-hover'
-              }`}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
-                <circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" />
-                <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
-                <circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" />
-              </svg>
-            </button>
-          ) : (
-            <>
-              <ModeButton
-                active={viewMode === 'edit-preview'}
-                onClick={() => handleModeChange('edit-preview')}
-                title="编辑+预览"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <rect x="3" y="3" width="7" height="18" rx="1" />
-                  <rect x="14" y="3" width="7" height="18" rx="1" />
-                </svg>
-              </ModeButton>
-              <ModeButton
-                active={viewMode === 'dual-preview'}
-                onClick={() => handleModeChange('dual-preview')}
-                title="对照阅读"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <rect x="3" y="3" width="7" height="18" rx="1" />
-                  <path d="M7 7h-1M7 11h-1M7 15h-1" />
-                  <rect x="14" y="3" width="7" height="18" rx="1" />
-                  <path d="M18 7h-1M18 11h-1M18 15h-1" />
-                </svg>
-              </ModeButton>
-              <ModeButton
-                active={viewMode === 'diff-preview'}
-                onClick={() => handleModeChange('diff-preview')}
-                title="Diff 对比"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M6 3v18M18 3v18M9 8h6M9 16h6" />
-                </svg>
-              </ModeButton>
-            </>
-          )}
+          <ModeButton
+            active={viewMode === 'edit-preview'}
+            onClick={() => handleModeChange('edit-preview')}
+            title="编辑+预览"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <rect x="3" y="3" width="7" height="18" rx="1" />
+              <rect x="14" y="3" width="7" height="18" rx="1" />
+            </svg>
+          </ModeButton>
+          <ModeButton
+            active={viewMode === 'dual-preview'}
+            onClick={() => handleModeChange('dual-preview')}
+            title="对照阅读"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <rect x="3" y="3" width="7" height="18" rx="1" />
+              <path d="M7 7h-1M7 11h-1M7 15h-1" />
+              <rect x="14" y="3" width="7" height="18" rx="1" />
+              <path d="M18 7h-1M18 11h-1M18 15h-1" />
+            </svg>
+          </ModeButton>
+          <ModeButton
+            active={viewMode === 'diff-preview'}
+            onClick={() => handleModeChange('diff-preview')}
+            title="Diff 对比"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M6 3v18M18 3v18M9 8h6M9 16h6" />
+            </svg>
+          </ModeButton>
         </div>
       </div>
 
@@ -503,35 +433,6 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
           </ContextMenuItem>
           <ContextMenuItem onClick={exportHtmlFromMenu} disabled={!activeTabId}>
             导出 HTML
-          </ContextMenuItem>
-        </ContextMenu>
-      )}
-
-      {modeMenu && (
-        <ContextMenu position={modeMenu} onClose={() => setModeMenu(null)} minWidth={184} maxWidth={184}>
-          <ContextMenuGroupTitle>文件操作</ContextMenuGroupTitle>
-          <ContextMenuItem onClick={exportPdfFromMenu} disabled={!activeTabId}>
-            导出 PDF
-          </ContextMenuItem>
-          <ContextMenuItem onClick={exportHtmlFromMenu} disabled={!activeTabId}>
-            导出 HTML
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuGroupTitle>视图模式</ContextMenuGroupTitle>
-          <ContextMenuItem onClick={() => selectModeFromMenu('edit')}>
-            编辑模式
-          </ContextMenuItem>
-          <ContextMenuItem onClick={() => selectModeFromMenu('preview')}>
-            预览模式
-          </ContextMenuItem>
-          <ContextMenuItem onClick={() => selectModeFromMenu('edit-preview')}>
-            编辑+预览
-          </ContextMenuItem>
-          <ContextMenuItem onClick={() => selectModeFromMenu('dual-preview')}>
-            对照阅读
-          </ContextMenuItem>
-          <ContextMenuItem onClick={() => selectModeFromMenu('diff-preview')}>
-            Diff 对比
           </ContextMenuItem>
         </ContextMenu>
       )}
@@ -605,7 +506,7 @@ function ModeButton({ children, active, onClick, title }: {
     <button
       onClick={onClick}
       title={title}
-      className={`p-1.5 rounded-lg transition-all duration-200 ${
+      className={`p-1.5 rounded-lg ${
         active
           ? 'bg-gm-primary-subtle text-gm-primary'
           : 'text-gm-text-tertiary hover:text-gm-text-secondary hover:bg-gm-surface-hover'

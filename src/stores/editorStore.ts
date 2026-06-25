@@ -8,6 +8,8 @@ export interface Tab {
   filePath: string | null
   content: string
   savedContent: string
+  /** 文件打开时的内容，用于 diff 对比（不受自动保存影响） */
+  originalContent: string
   modified: boolean
   pinned?: boolean
 }
@@ -77,8 +79,14 @@ function dedupeRecentFiles(files: RecentFile[] = []) {
 function dedupeRestoredTabs(tabs: Tab[] = []) {
   const restored: Tab[] = []
   for (const tab of tabs) {
+    // 确保 originalContent 存在（兼容旧数据）
+    const hydratedTab = {
+      ...tab,
+      originalContent: tab.originalContent ?? tab.savedContent ?? tab.content,
+    }
+
     if (!tab.filePath) {
-      restored.push(tab)
+      restored.push(hydratedTab)
       continue
     }
     const duplicate = restored.find((item) => isSameFilePath(item.filePath, tab.filePath))
@@ -89,7 +97,7 @@ function dedupeRestoredTabs(tabs: Tab[] = []) {
       tab.content === duplicate.content &&
       tab.savedContent === duplicate.savedContent
     if (canMerge) continue
-    restored.push(tab)
+    restored.push(hydratedTab)
   }
   return restored
 }
@@ -127,6 +135,7 @@ export const useEditorStore = create<EditorState>()(
           const hydratedTab = {
             ...tab,
             savedContent: tab.savedContent ?? tab.content,
+            originalContent: tab.originalContent ?? tab.savedContent ?? tab.content,
           }
           set((s) => ({
             tabs: [hydratedTab, ...s.tabs],
@@ -159,6 +168,7 @@ export const useEditorStore = create<EditorState>()(
           filePath: filePath || null,
           content: initialContent,
           savedContent: initialContent,
+          originalContent: initialContent,
           modified: false,
         }
         set((s) => ({
@@ -359,7 +369,7 @@ export const useEditorStore = create<EditorState>()(
         set((s) => ({
           tabs: s.tabs.map((tab) =>
             tab.id === id
-              ? { ...tab, filePath, title, content, savedContent: content, modified: false }
+              ? { ...tab, filePath, title, content, savedContent: content, originalContent: content, modified: false }
               : tab
           ),
         }))

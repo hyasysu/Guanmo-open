@@ -65,4 +65,18 @@
   --gm-editor-selection: rgba(25, 200, 185, 0.15);
   --gm-editor-line-highlight: rgba(25, 200, 185, 0.05);
   --gm-editor-gutter: #f8f8f0;
+  --gm-editor-heading: #6f431f;
+  --gm-editor-quote: #0f8f85;
+  --gm-editor-code: #8d6438;
+  --gm-editor-link: #0f8f85;
+  --gm-editor-list: #b07a35;
+  --gm-markdown-heading: #6f431f;
+  --gm-markdown-quote-bg: rgba(25, 200, 185, 0.08);
+  --gm-code-bg: #efe7d4;
+  --gm-code-text: #6f431f;
+  --gm-code-muted: #9f927d;
+  --gm-code-command: #0f8f85;
+  --gm-code-path: #8d6438;
+  --gm-code-error: #c84e4e;
+  --gm-code-info: #547a9e;
 }

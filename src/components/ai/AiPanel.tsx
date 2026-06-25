@@ -126,7 +126,7 @@ export function AiPanel() {
   }, [])
 
   return (
-    <div className="h-full flex flex-col relative">
+    <div className="gm-instant-color h-full flex flex-col relative">
       {/* Header */}
       <div className="h-11 flex items-center px-4 border-b border-gm-border-subtle bg-gm-surface relative z-10">
         <div className="flex items-center gap-2">
@@ -178,7 +178,7 @@ export function AiPanel() {
               <button
                 onClick={handleLoadHistory}
                 disabled={loadingHistory}
-                className="mb-4 px-4 py-1.5 rounded-full border border-gm-border text-caption text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover transition-colors disabled:opacity-50"
+                className="mb-4 px-4 py-1.5 rounded-full border border-gm-border text-caption text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover disabled:opacity-50"
               >
                 {loadingHistory ? '加载中...' : '加载历史记录'}
               </button>
@@ -205,7 +205,7 @@ export function AiPanel() {
                 <button
                   onClick={handleLoadHistory}
                   disabled={loadingHistory}
-                  className="px-4 py-1.5 rounded-full border border-gm-border text-caption text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover transition-colors disabled:opacity-50"
+                  className="px-4 py-1.5 rounded-full border border-gm-border text-caption text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover disabled:opacity-50"
                 >
                   {loadingHistory ? '加载中...' : '加载更早的记录'}
                 </button>
@@ -265,7 +265,7 @@ export function AiPanel() {
                 </div>
                 <button
                   onClick={handleRetry}
-                  className="flex-shrink-0 px-2 py-1 rounded-lg text-micro text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover transition-colors border border-gm-border"
+                  className="flex-shrink-0 px-2 py-1 rounded-lg text-micro text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover border border-gm-border"
                   title="重试"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -320,7 +320,7 @@ function RagTrace({ status, sources, onOpenSource }: { status: RagStatus; source
               key={`${source.filePath}-${source.startLine}-${index}`}
               type="button"
               onClick={() => onOpenSource(source)}
-              className="max-w-full truncate rounded-md border border-gm-border bg-gm-surface px-2 py-0.5 text-micro text-gm-text-tertiary transition-colors hover:border-gm-primary/40 hover:text-gm-primary"
+              className="max-w-full truncate rounded-md border border-gm-border bg-gm-surface px-2 py-0.5 text-micro text-gm-text-tertiary hover:border-gm-primary/40 hover:text-gm-primary"
               title={`打开原文 ${source.filePath}:${source.startLine}-${source.endLine}（已按授权范围检索）`}
             >
               {index + 1}. {source.title}:{source.startLine}-{source.endLine} · scope
@@ -471,7 +471,7 @@ function MessageSources({ sources, onOpenSource }: { sources: ChatMessageSource[
       <button
         type="button"
         onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-center gap-1.5 text-left text-micro font-bold text-gm-text-tertiary transition-colors hover:text-gm-primary"
+        className="flex w-full items-center gap-1.5 text-left text-micro font-bold text-gm-text-tertiary hover:text-gm-primary"
       >
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`flex-shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}>
           <path d="M9 18l6-6-6-6" />
@@ -485,7 +485,7 @@ function MessageSources({ sources, onOpenSource }: { sources: ChatMessageSource[
               key={`${source.filePath}-${source.startLine}-${source.endLine}-${index}`}
               type="button"
               onClick={() => onOpenSource(source)}
-              className="block w-full rounded-lg px-2 py-1 text-left text-micro leading-relaxed text-gm-text-secondary transition-colors hover:bg-gm-surface hover:text-gm-primary"
+              className="block w-full rounded-lg px-2 py-1 text-left text-micro leading-relaxed text-gm-text-secondary hover:bg-gm-surface hover:text-gm-primary"
               title={`打开 ${source.filePath}:${source.startLine}-${source.endLine}`}
             >
               <span className="font-bold">{source.fileName}</span>
@@ -611,7 +611,7 @@ function PendingEditCard({ edit, actionable }: { edit: PendingEdit; actionable: 
             </div>
             <button
               onClick={() => createUndoPendingEdit(edit.id)}
-              className="w-full rounded-lg border border-gm-border px-3 py-1.5 text-caption text-gm-text-secondary transition-colors hover:bg-gm-surface-hover"
+              className="w-full rounded-lg border border-gm-border px-3 py-1.5 text-caption text-gm-text-secondary hover:bg-gm-surface-hover"
             >
               生成撤销确认卡片
             </button>
@@ -627,7 +627,7 @@ function PendingEditCard({ edit, actionable }: { edit: PendingEdit; actionable: 
             确认应用
           </button>
           <button onClick={() => rejectPendingEdit(edit.id)}
-            className="flex-1 px-3 py-1.5 rounded-lg border border-gm-border text-caption text-gm-text-secondary hover:bg-gm-surface-hover transition-colors">
+            className="flex-1 px-3 py-1.5 rounded-lg border border-gm-border text-caption text-gm-text-secondary hover:bg-gm-surface-hover">
             拒绝
           </button>
           </div>
@@ -666,7 +666,7 @@ function SessionDivider({
           <button
             type="button"
             onClick={() => onDelete(sessionId)}
-            className="rounded-full border border-gm-border px-2 py-0.5 text-micro text-gm-text-tertiary transition-colors hover:border-gm-error/40 hover:text-gm-error"
+            className="rounded-full border border-gm-border px-2 py-0.5 text-micro text-gm-text-tertiary hover:border-gm-error/40 hover:text-gm-error"
             title="删除这组历史会话"
           >
             删除
