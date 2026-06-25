@@ -33,6 +33,24 @@ function renderBody(markdown: string): string {
   )
 }
 
+function stripMarkdownExtension(name: string): string {
+  return name.replace(/\.(md|markdown|mdx)$/i, '')
+}
+
+function getExportBaseName(title: string, sourcePath?: string | null): string {
+  const pathName = sourcePath?.split(/[\\/]/).pop()
+  const baseName = stripMarkdownExtension(pathName || title).trim()
+  return baseName.replace(/[\\/:*?"<>|]/g, '_') || 'markdown-export'
+}
+
+function getDefaultExportPath(title: string, extension: string, sourcePath?: string | null): string {
+  const fileName = `${getExportBaseName(title, sourcePath)}.${extension}`
+  if (!sourcePath) return fileName
+  const separatorIndex = Math.max(sourcePath.lastIndexOf('\\'), sourcePath.lastIndexOf('/'))
+  if (separatorIndex < 0) return fileName
+  return `${sourcePath.slice(0, separatorIndex + 1)}${fileName}`
+}
+
 export function buildMarkdownHtml(markdown: string, title: string): string {
   const safeTitle = escapeHtml(title || 'Markdown Export')
   const body = renderBody(markdown)
@@ -57,7 +75,22 @@ export function buildMarkdownHtml(markdown: string, title: string): string {
     th, td { border: 1px solid #e8e2d6; padding: 8px 10px; }
     img { max-width: 100%; border-radius: 12px; }
     .mermaid { background: #fff; }
-    @media print { body { background: #fff; } main { max-width: none; padding: 0; } }
+    @media print {
+      @page {
+        margin: 12mm 18mm 16mm;
+        @top-center {
+          content: "";
+        }
+        @bottom-center {
+          content: counter(page);
+          color: #8a7564;
+          font: 10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+      }
+      body { background: #fff; }
+      main { max-width: none; padding: 0; background: #fff; min-height: auto; }
+      main > :first-child { margin-top: 0; }
+    }
   </style>
 </head>
 <body>
@@ -75,8 +108,9 @@ function isHtmlPath(path: string): boolean {
 }
 
 export async function exportMarkdownAsHtml(markdown: string, title: string, sourcePath?: string | null): Promise<string | null> {
-  const html = buildMarkdownHtml(markdown, title)
-  const fallbackName = `${title.replace(/[\\/:*?"<>|]/g, '_') || 'markdown-export'}.html`
+  const exportBaseName = getExportBaseName(title, sourcePath)
+  const html = buildMarkdownHtml(markdown, exportBaseName)
+  const fallbackName = getDefaultExportPath(title, 'html', sourcePath)
 
   if (isTauri()) {
     const path = await saveFileDialog(fallbackName, [
@@ -102,4 +136,66 @@ export async function exportMarkdownAsHtml(markdown: string, title: string, sour
   a.click()
   URL.revokeObjectURL(url)
   return fallbackName
+}
+
+export async function exportMarkdownAsPdf(markdown: string, title: string, sourcePath?: string | null): Promise<void> {
+  const exportBaseName = getExportBaseName(title, sourcePath)
+  const html = buildMarkdownHtml(markdown, exportBaseName)
+  const iframe = document.createElement('iframe')
+
+  iframe.style.position = 'fixed'
+  iframe.style.right = '0'
+  iframe.style.bottom = '0'
+  iframe.style.width = '1px'
+  iframe.style.height = '1px'
+  iframe.style.border = '0'
+  iframe.style.opacity = '0'
+  iframe.style.pointerEvents = 'none'
+  iframe.setAttribute('aria-hidden', 'true')
+
+  document.body.appendChild(iframe)
+
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      window.setTimeout(() => iframe.remove(), 30_000)
+    }
+
+    const printFrame = () => {
+      const printWindow = iframe.contentWindow
+      if (!printWindow) {
+        cleanup()
+        reject(new Error('无法打开 PDF 导出内容，请稍后重试。'))
+        return
+      }
+
+      const originalTitle = document.title
+      document.title = exportBaseName
+      printWindow.document.title = exportBaseName
+      const restoreTitle = () => {
+        document.title = originalTitle
+      }
+      printWindow.addEventListener('afterprint', restoreTitle, { once: true })
+      window.setTimeout(restoreTitle, 30_000)
+
+      printWindow.focus()
+      printWindow.print()
+      cleanup()
+      resolve()
+    }
+
+    iframe.addEventListener('load', () => {
+      window.setTimeout(printFrame, 800)
+    }, { once: true })
+
+    const frameDocument = iframe.contentDocument
+    if (!frameDocument) {
+      cleanup()
+      reject(new Error('无法准备 PDF 导出内容，请稍后重试。'))
+      return
+    }
+
+    frameDocument.open()
+    frameDocument.write(html)
+    frameDocument.close()
+  })
 }

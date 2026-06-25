@@ -23,10 +23,12 @@ interface EditorSettings {
   minimap: boolean
   autoSave: boolean
   autoSaveDelay: number
+  syncScroll: boolean
 }
 
 interface AppearanceSettings {
   customCursorEnabled: boolean
+  theme: 'light' | 'dark'
 }
 
 interface SettingsState {
@@ -52,10 +54,12 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   minimap: false,
   autoSave: true,
   autoSaveDelay: 1000,
+  syncScroll: true,
 }
 
 const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
-  customCursorEnabled: true,
+  customCursorEnabled: false,
+  theme: 'light',
 }
 
 const DEFAULT_WEB_SEARCH: WebSearchConfig = {
@@ -141,6 +145,10 @@ export const useSettingsStore = create<SettingsState>()(
               ...saved.ai?.embedding,
               apiKey: '',
             },
+          },
+          editor: {
+            ...current.editor,
+            ...saved.editor,
           },
           appearance: {
             ...current.appearance,

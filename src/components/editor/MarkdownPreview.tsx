@@ -1,8 +1,9 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
+import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
-import { isValidElement, useEffect, useMemo, useState } from 'react'
+import { isValidElement, memo, useEffect, useMemo, useState } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '@/hooks/useTauri'
 import { createHeadingId, extractToc, type TocItem } from '@/services/markdownToc'
@@ -16,7 +17,7 @@ interface MarkdownPreviewProps {
   onHeadingClick?: (line: number) => void
 }
 
-export function MarkdownPreview({
+export const MarkdownPreview = memo(function MarkdownPreview({
   content,
   filePath,
   fontSize = 14,
@@ -44,53 +45,52 @@ export function MarkdownPreview({
   }
 
   return (
-    <div className="flex items-start gap-6">
-      <div
-        className="prose max-w-none min-w-0 flex-1 text-gm-text"
-        style={{ fontSize: `${fontSize}px`, lineHeight }}
-      >
+    <div
+      className="prose gm-markdown-preview max-w-none min-w-0 text-gm-text"
+      style={{ fontSize: `${fontSize}px`, lineHeight }}
+    >
         <ReactMarkdown
           remarkPlugins={[remarkGfm, remarkMath]}
-          rehypePlugins={[rehypeKatex]}
+          rehypePlugins={[rehypeKatex, rehypeHighlight]}
           components={{
-          h1: ({ children }) => {
-            const id = createHeadingId(getText(children), headingIds)
-            const line = getHeadingLine(toc, id)
+          h1: ({ children, node }) => {
+            const line = getNodeStartLine(node)
+            const id = line ? `heading-${line}` : createHeadingId(getText(children), headingIds)
             return (
-              <h1 id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-8 mb-4 text-gm-text border-b border-gm-border pb-3 ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '2em' }}>
+              <h1 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-8 mb-4 text-gm-text border-b border-gm-border pb-3 ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '2em' }}>
                 {children}
               </h1>
             )
           },
-          h2: ({ children }) => {
-            const id = createHeadingId(getText(children), headingIds)
-            const line = getHeadingLine(toc, id)
+          h2: ({ children, node }) => {
+            const line = getNodeStartLine(node)
+            const id = line ? `heading-${line}` : createHeadingId(getText(children), headingIds)
             return (
-              <h2 id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-8 mb-4 text-gm-text ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '1.5em' }}>
+              <h2 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-8 mb-4 text-gm-text ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '1.5em' }}>
                 {children}
               </h2>
             )
           },
-          h3: ({ children }) => {
-            const id = createHeadingId(getText(children), headingIds)
-            const line = getHeadingLine(toc, id)
+          h3: ({ children, node }) => {
+            const line = getNodeStartLine(node)
+            const id = line ? `heading-${line}` : createHeadingId(getText(children), headingIds)
             return (
-              <h3 id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-6 mb-3 text-gm-text ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '1.25em' }}>
+              <h3 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-6 mb-3 text-gm-text ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '1.25em' }}>
                 {children}
               </h3>
             )
           },
-          h4: ({ children }) => {
-            const id = createHeadingId(getText(children), headingIds)
-            const line = getHeadingLine(toc, id)
+          h4: ({ children, node }) => {
+            const line = getNodeStartLine(node)
+            const id = line ? `heading-${line}` : createHeadingId(getText(children), headingIds)
             return (
-              <h4 id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-4 mb-2 text-gm-text ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '1.1em' }}>
+              <h4 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-4 mb-2 text-gm-text ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '1.1em' }}>
                 {children}
               </h4>
             )
           },
-          p: ({ children }) => (
-            <p className="my-3">{children}</p>
+          p: ({ children, node }) => (
+            <p className="my-3" data-md-line={getNodeStartLine(node)}>{children}</p>
           ),
           strong: ({ children }) => (
             <strong className="font-bold text-gm-text">{children}</strong>
@@ -98,22 +98,22 @@ export function MarkdownPreview({
           em: ({ children }) => (
             <em className="text-gm-text italic">{children}</em>
           ),
-          code: ({ children, className }) => {
-            const isBlock = className?.includes('language-')
-            const language = className?.replace('language-', '')
+          code: ({ children, className, node }) => {
+            const language = className?.match(/language-([\w-]+)/)?.[1]
+            const isBlock = Boolean(language)
             if (isBlock && language === 'mermaid') {
-              return <MermaidBlock code={String(children).replace(/\n$/, '')} />
+              return <MermaidBlock code={String(children).replace(/\n$/, '')} startLine={getNodeStartLine(node)} endLine={getNodeEndLine(node)} />
             }
             if (isBlock) {
               return (
-                <CodeBlock code={String(children).replace(/\n$/, '')} language={language} fontSize={fontSize}>
+                <CodeBlock code={String(children).replace(/\n$/, '')} language={language} fontSize={fontSize} startLine={getNodeStartLine(node)} endLine={getNodeEndLine(node)}>
                   {className && (
                     <div className="px-4 py-1.5 border-b border-gm-border text-micro text-gm-text-secondary font-mono">
                       {language}
                     </div>
                   )}
                   <pre className="p-4 overflow-x-auto m-0">
-                    <code className="font-mono text-gm-text" style={{ fontSize: '0.9em' }}>
+                    <code className={['font-mono', className].filter(Boolean).join(' ')} style={{ fontSize: '0.9em' }}>
                       {children}
                     </code>
                   </pre>
@@ -126,8 +126,8 @@ export function MarkdownPreview({
               </code>
             )
           },
-          blockquote: ({ children }) => (
-            <blockquote className="pl-4 border-l-4 border-gm-primary bg-gm-primary-subtle rounded-r-lg py-3 text-gm-text-secondary italic my-4">
+          blockquote: ({ children, node }) => (
+            <blockquote className="pl-4 border-l-4 border-gm-primary rounded-r-lg py-3 text-gm-text-secondary italic my-4" data-md-line={getNodeStartLine(node)}>
               {children}
             </blockquote>
           ),
@@ -161,9 +161,9 @@ export function MarkdownPreview({
               </li>
             )
           },
-          hr: () => <hr className="my-6 border-gm-border" />,
-          table: ({ children }) => (
-            <div className="my-4 overflow-x-auto rounded-xl border border-gm-border">
+          hr: ({ node }) => <hr className="my-6 border-gm-border" data-md-line={getNodeStartLine(node)} />,
+          table: ({ children, node }) => (
+            <div className="my-4 overflow-x-auto rounded-xl border border-gm-border" data-md-line={getNodeStartLine(node)}>
               <table className="w-full border-collapse">
                 {children}
               </table>
@@ -182,7 +182,7 @@ export function MarkdownPreview({
               {children}
             </td>
           ),
-          img: ({ src, alt }) => {
+          img: ({ src, alt, node }) => {
             const resolvedSrc = resolveImageSrc(src, filePath)
             const altText = alt || ''
             return (
@@ -191,6 +191,7 @@ export function MarkdownPreview({
                 className="my-4 block max-w-full cursor-zoom-in rounded-xl border border-gm-border bg-transparent p-0 text-left"
                 onClick={() => setZoomImage({ src: resolvedSrc, alt: altText })}
                 title="点击放大图片"
+                data-md-line={getNodeStartLine(node)}
               >
                 <img
                   src={resolvedSrc}
@@ -235,7 +236,6 @@ export function MarkdownPreview({
         >
           {content}
         </ReactMarkdown>
-      </div>
       {zoomImage && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-8"
@@ -261,7 +261,7 @@ export function MarkdownPreview({
       )}
     </div>
   )
-}
+})
 
 function handleHeadingClick(line: number | undefined, onHeadingClick?: (line: number) => void) {
   if (!onHeadingClick || typeof line !== 'number') return
@@ -272,11 +272,15 @@ function CodeBlock({
   code,
   language,
   fontSize,
+  startLine,
+  endLine,
   children,
 }: {
   code: string
   language?: string
   fontSize: number
+  startLine?: number
+  endLine?: number
   children: React.ReactNode
 }) {
   const [copied, setCopied] = useState(false)
@@ -292,7 +296,7 @@ function CodeBlock({
   }
 
   return (
-    <div className="group relative my-4 rounded-xl bg-gm-surface-elevated border border-gm-border overflow-hidden">
+    <div className="group gm-code-block relative my-4 rounded-xl border border-gm-border overflow-hidden" data-md-line={startLine} data-md-end-line={endLine}>
       <button
         type="button"
         onClick={() => void handleCopy()}
@@ -347,7 +351,22 @@ function getHeadingLine(toc: TocItem[], id: string): number | undefined {
   return toc.find((item) => item.id === id)?.line
 }
 
-function MermaidBlock({ code }: { code: string }) {
+function getNodeStartLine(node: unknown): number | undefined {
+  return getNodeLine(node, 'start')
+}
+
+function getNodeEndLine(node: unknown): number | undefined {
+  return getNodeLine(node, 'end')
+}
+
+function getNodeLine(node: unknown, edge: 'start' | 'end'): number | undefined {
+  if (!node || typeof node !== 'object') return undefined
+  const position = (node as { position?: { start?: { line?: unknown }; end?: { line?: unknown } } }).position
+  const line = position?.[edge]?.line
+  return typeof line === 'number' && Number.isFinite(line) ? line : undefined
+}
+
+function MermaidBlock({ code, startLine, endLine }: { code: string; startLine?: number; endLine?: number }) {
   const [svg, setSvg] = useState('')
   const [error, setError] = useState<string | null>(null)
 
@@ -376,7 +395,7 @@ function MermaidBlock({ code }: { code: string }) {
 
   if (error) {
     return (
-      <div className="my-4 rounded-xl border border-gm-error/30 bg-gm-error/5 p-3">
+      <div className="my-4 rounded-xl border border-gm-error/30 bg-gm-error/5 p-3" data-md-line={startLine} data-md-end-line={endLine}>
         <div className="mb-2 text-caption font-bold text-gm-error">Mermaid 渲染失败</div>
         <pre className="overflow-x-auto text-gm-text-secondary" style={{ fontSize: '0.85em' }}>{code}</pre>
       </div>
@@ -384,7 +403,7 @@ function MermaidBlock({ code }: { code: string }) {
   }
 
   return (
-    <div className="my-4 overflow-x-auto rounded-xl border border-gm-border bg-gm-surface-elevated p-4">
+    <div className="my-4 overflow-x-auto rounded-xl border border-gm-border bg-gm-surface-elevated p-4" data-md-line={startLine} data-md-end-line={endLine}>
       {svg ? (
         <div className="mermaid-diagram" dangerouslySetInnerHTML={{ __html: svg }} />
       ) : (
@@ -394,23 +413,46 @@ function MermaidBlock({ code }: { code: string }) {
   )
 }
 
+interface MarkdownTocSection {
+  key: string
+  title: string
+  toc: TocItem[]
+  onHeadingClick: (item: TocItem) => void
+  emptyText?: string
+  activeHeading?: string | null
+}
+
 export function MarkdownToc({
-  toc,
+  toc = [],
   collapsed,
   onToggle,
   onHeadingClick,
+  sections,
+  activeHeading,
 }: {
-  toc: TocItem[]
+  toc?: TocItem[]
   collapsed: boolean
   onToggle: () => void
-  onHeadingClick: (item: TocItem) => void
+  onHeadingClick?: (item: TocItem) => void
+  sections?: MarkdownTocSection[]
+  activeHeading?: string | null
 }) {
-  if (toc.length <= 1) return null
+  const explicitSections = sections && sections.length > 0
+    ? sections.slice(0, 2)
+    : null
+  const visibleSections = explicitSections
+    ? explicitSections
+    : toc.length > 1
+      ? [{ key: 'toc', title: '目录', toc, onHeadingClick: onHeadingClick ?? (() => {}) }]
+      : []
+  const dualColumn = visibleSections.length > 1
+
+  if (visibleSections.length === 0) return null
 
   return (
     <aside
       className={`relative h-full flex-shrink-0 ${
-        collapsed ? 'w-0' : 'w-52 border-l border-gm-border-subtle bg-gm-surface'
+        collapsed ? 'w-0' : `${dualColumn ? 'w-[26rem]' : 'w-52'} border-l border-gm-border-subtle bg-gm-surface`
       }`}
     >
       <button
@@ -418,7 +460,7 @@ export function MarkdownToc({
         onClick={onToggle}
         aria-label={collapsed ? '展开目录' : '收起目录'}
         aria-expanded={!collapsed}
-className="absolute left-0 top-1/2 z-10 flex h-12 w-5 -translate-x-full -translate-y-1/2 items-center justify-center rounded-l-2xl border border-r-0 border-gm-border bg-gm-surface text-gm-text-tertiary shadow-sm transition-colors hover:border-gm-primary/40 hover:bg-gm-surface-hover hover:text-gm-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gm-primary/40"
+        className="absolute left-0 top-1/2 z-10 flex h-12 w-5 -translate-x-full -translate-y-1/2 items-center justify-center rounded-l-2xl border border-r-0 border-gm-border bg-gm-surface text-gm-text-tertiary shadow-sm transition-colors hover:border-gm-primary/40 hover:bg-gm-surface-hover hover:text-gm-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gm-primary/40"
         title={collapsed ? '展开目录' : '收起目录'}
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -427,19 +469,41 @@ className="absolute left-0 top-1/2 z-10 flex h-12 w-5 -translate-x-full -transla
       </button>
       {!collapsed && (
         <nav aria-label="文档目录" className="h-full px-4 py-6 text-micro text-gm-text-tertiary">
-          <div className="mb-3 font-bold text-gm-text-secondary">目录</div>
-          <div className="max-h-full space-y-1 overflow-y-auto pr-1">
-            {toc.map((item) => (
-              <button
-                key={`${item.id}-${item.line}`}
-                type="button"
-                onClick={() => onHeadingClick(item)}
-                className="block w-full truncate rounded-md py-1 text-left transition-colors hover:bg-gm-surface-hover hover:text-gm-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gm-primary/30"
-                style={{ paddingLeft: 6 + Math.max(0, item.level - 1) * 10 }}
-                title={`${item.text}（第 ${item.line} 行）`}
-              >
-                {item.text}
-              </button>
+          <div className={dualColumn ? 'flex h-full gap-3 overflow-hidden' : 'max-h-full space-y-4 overflow-y-auto pr-1'}>
+            {visibleSections.map((section) => (
+              <section key={section.key} className={dualColumn ? 'flex min-h-0 min-w-0 flex-1 flex-col' : undefined}>
+                <div className="mb-2 truncate font-bold text-gm-text-secondary" title={section.title}>
+                  {section.title}
+                </div>
+                <div className={dualColumn ? 'min-h-0 flex-1 space-y-1 overflow-y-auto pr-1' : 'space-y-1'}>
+                  {section.toc.length > 1 ? (
+                    section.toc.map((item) => {
+                      const currentActive = section.activeHeading !== undefined ? section.activeHeading : activeHeading
+                      const isActive = currentActive === item.id
+                      return (
+                        <button
+                          key={`${section.key}-${item.id}-${item.line}`}
+                          type="button"
+                          onClick={() => section.onHeadingClick(item)}
+                          className={`block w-full truncate rounded-md py-1 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gm-primary/30 ${
+                            isActive
+                              ? 'bg-gm-primary/10 text-gm-primary font-bold'
+                              : 'hover:bg-gm-surface-hover hover:text-gm-primary'
+                          }`}
+                          style={{ paddingLeft: 6 + Math.max(0, item.level - 1) * 10 }}
+                          title={`${item.text}（第 ${item.line} 行）`}
+                        >
+                          {item.text}
+                        </button>
+                      )
+                    })
+                  ) : (
+                    <div className="rounded-md border border-dashed border-gm-border-subtle px-3 py-2 text-gm-text-muted">
+                      {section.emptyText ?? '无目录'}
+                    </div>
+                  )}
+                </div>
+              </section>
             ))}
           </div>
         </nav>

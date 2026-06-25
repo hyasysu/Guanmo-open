@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { useChatStore } from '@/stores/chatStore'
-import { exportMarkdownAsHtml } from '@/services/markdownExport'
+import { exportMarkdownAsHtml, exportMarkdownAsPdf } from '@/services/markdownExport'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { addFileContextTag } from '@/services/aiContext'
 import { indexMarkdownDocument } from '@/services/rag/indexer'
@@ -15,12 +15,13 @@ interface TabBarProps {
 }
 
 type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
-const TOPBAR_COMPACT_WIDTH = 720
+const TOPBAR_COMPACT_WIDTH = 560
 
 export function TabBar({ onOpenSettings }: TabBarProps) {
   const { tabs, activeTabId, setActiveTab, closeTab, reorderTabs, viewMode, setViewMode, rightPaneTabId, setRightPaneTabId, favorites, toggleFavorite, togglePinTab } = useEditorStore()
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null)
   const [modeMenu, setModeMenu] = useState<{ x: number; y: number } | null>(null)
+  const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
   const [compactControls, setCompactControls] = useState(false)
   const [dragState, setDragState] = useState<{ tabId: string; startX: number } | null>(null)
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null)
@@ -30,6 +31,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
   const renameSubmittingRef = useRef(false)
   const tabBarRef = useRef<HTMLDivElement>(null)
   const modeMenuButtonRef = useRef<HTMLButtonElement>(null)
+  const exportButtonRef = useRef<HTMLButtonElement>(null)
   const draggedTabIdRef = useRef<string | null>(null)
 
   useEffect(() => {
@@ -39,6 +41,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
     const updateCompactControls = (width: number) => {
       setCompactControls(width < TOPBAR_COMPACT_WIDTH)
       setModeMenu(null)
+      setExportMenu(null)
     }
 
     const observer = new ResizeObserver(([entry]) => updateCompactControls(entry.contentRect.width))
@@ -233,8 +236,32 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
     }
   }, [activeTabId, tabs])
 
+  const handleExportPdf = useCallback(async () => {
+    const tab = tabs.find((item) => item.id === activeTabId)
+    if (!tab) return
+    try {
+      await exportMarkdownAsPdf(tab.content, tab.title.replace(/\.(md|markdown|mdx)$/i, ''), tab.filePath)
+      toast.success('已打开 PDF 打印对话框')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'PDF export failed')
+    }
+  }, [activeTabId, tabs])
+
+  const openExportMenu = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation()
+    setModeMenu(null)
+    if (exportMenu) {
+      setExportMenu(null)
+      return
+    }
+    const rect = exportButtonRef.current?.getBoundingClientRect()
+    if (!rect) return
+    setExportMenu({ x: rect.right - 160, y: rect.bottom + 4 })
+  }, [exportMenu])
+
   const openModeMenu = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation()
+    setExportMenu(null)
     if (modeMenu) {
       setModeMenu(null)
       return
@@ -249,10 +276,17 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
     handleModeChange(mode)
   }, [handleModeChange])
 
-  const exportFromModeMenu = useCallback(() => {
+  const exportHtmlFromMenu = useCallback(() => {
     setModeMenu(null)
+    setExportMenu(null)
     void handleExportHtml()
   }, [handleExportHtml])
+
+  const exportPdfFromMenu = useCallback(() => {
+    setModeMenu(null)
+    setExportMenu(null)
+    void handleExportPdf()
+  }, [handleExportPdf])
 
   if (tabs.length === 0) return null
 
@@ -260,10 +294,10 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
     <>
       <div
         ref={tabBarRef}
-        className="h-10 flex items-center bg-gm-surface border-b border-gm-border overflow-hidden"
+        className="h-10 min-w-0 flex items-center bg-gm-surface border-b border-gm-border overflow-hidden"
       >
         {/* Tabs */}
-        <div className="flex-1 flex items-center overflow-x-auto">
+        <div className="min-w-0 flex-1 flex items-center overflow-x-auto">
           {[...tabs].sort((a, b) => {
             if (a.pinned && !b.pinned) return -1
             if (!a.pinned && b.pinned) return 1
@@ -371,11 +405,15 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
         <div className="flex items-center gap-0.5 px-2 border-l border-gm-border-subtle flex-shrink-0">
           {!compactControls && (
             <button
-              onClick={handleExportHtml}
+              type="button"
+              ref={exportButtonRef}
+              onClick={openExportMenu}
               disabled={!activeTabId}
+              aria-haspopup="menu"
+              aria-expanded={Boolean(exportMenu)}
               className="mr-2 rounded-lg border border-gm-border bg-gm-surface-elevated px-2.5 py-1 text-caption font-bold text-gm-text-secondary transition-colors hover:text-gm-primary disabled:cursor-not-allowed disabled:opacity-50"
             >
-              导出 HTML
+              导出
             </button>
           )}
           <ModeButton
@@ -457,10 +495,25 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
         </div>
       </div>
 
+      {exportMenu && (
+        <ContextMenu position={exportMenu} onClose={() => setExportMenu(null)} minWidth={160} maxWidth={160}>
+          <ContextMenuGroupTitle>导出</ContextMenuGroupTitle>
+          <ContextMenuItem onClick={exportPdfFromMenu} disabled={!activeTabId}>
+            导出 PDF
+          </ContextMenuItem>
+          <ContextMenuItem onClick={exportHtmlFromMenu} disabled={!activeTabId}>
+            导出 HTML
+          </ContextMenuItem>
+        </ContextMenu>
+      )}
+
       {modeMenu && (
         <ContextMenu position={modeMenu} onClose={() => setModeMenu(null)} minWidth={184} maxWidth={184}>
           <ContextMenuGroupTitle>文件操作</ContextMenuGroupTitle>
-          <ContextMenuItem onClick={exportFromModeMenu} disabled={!activeTabId}>
+          <ContextMenuItem onClick={exportPdfFromMenu} disabled={!activeTabId}>
+            导出 PDF
+          </ContextMenuItem>
+          <ContextMenuItem onClick={exportHtmlFromMenu} disabled={!activeTabId}>
             导出 HTML
           </ContextMenuItem>
           <ContextMenuSeparator />

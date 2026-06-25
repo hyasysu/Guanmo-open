@@ -6,6 +6,8 @@ import { vectorStore } from './vectorStore'
 import { isEmbeddingReady } from '@/services/ai/aiClient'
 
 const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown', 'mdx'])
+const DEFAULT_INDEX_DELAY = 1200
+const pendingIndexTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 export interface WorkspaceIndexResult {
   indexed: number
@@ -44,6 +46,28 @@ export function indexMarkdownDocument(
       }
     })
     .catch((err) => console.warn('[RAG] enqueue embedding job failed:', err))
+  return true
+}
+
+export function scheduleMarkdownDocumentIndex(
+  filePath: string | null | undefined,
+  title: string,
+  content: string,
+  delay = DEFAULT_INDEX_DELAY
+): boolean {
+  if (!filePath || !isMarkdownPath(filePath)) return false
+
+  const existingTimer = pendingIndexTimers.get(filePath)
+  if (existingTimer) {
+    clearTimeout(existingTimer)
+  }
+
+  const timer = setTimeout(() => {
+    pendingIndexTimers.delete(filePath)
+    indexMarkdownDocument(filePath, title, content)
+  }, Math.max(0, delay))
+
+  pendingIndexTimers.set(filePath, timer)
   return true
 }
 
