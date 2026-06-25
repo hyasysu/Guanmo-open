@@ -645,7 +645,7 @@ function GeneralSettings() {
           <img src={appIcon} alt="观墨" className="w-full h-full object-cover" />
         </div>
         <div>
-          <div className="text-body font-bold text-gm-text">观墨 v0.1.0</div>
+          <div className="text-body font-bold text-gm-text">观墨 v1.0.0</div>
           <div className="text-caption text-gm-text-tertiary">AI 驱动的 Markdown 知识管理</div>
         </div>
       </div>
