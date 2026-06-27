@@ -67,7 +67,7 @@ VITE_GUANMO_WEB_SEARCH_API_KEY_SECRET=guanmo.web-search.api-key
 
 | 功能 | 说明 |
 |------|------|
-| **多视图模式** | 编辑 / 预览 / 并排 / 双文档 / Diff 对比 |
+| **多视图模式** | 编辑 / 预览 / 并排 / 双文档 / Diff 对比，双预览模式同步滚动 |
 | **语法高亮** | CodeMirror 6 驱动，支持 Markdown、代码块语法高亮 |
 | **数学公式** | KaTeX 渲染行内 & 块级 LaTeX 公式 |
 | **Mermaid 图表** | 流程图、时序图、甘特图等直接渲染 |
@@ -83,9 +83,11 @@ VITE_GUANMO_WEB_SEARCH_API_KEY_SECRET=guanmo.web-search.api-key
 
 | 功能 | 说明 |
 |------|------|
-| **Agent 工具调用** | 基于意图打分的智能工具选择，支持多工具并行执行 |
+| **Agent 工具调用** | 基于意图打分的智能工具选择，支持多工具并行执行；SSE 流式解析 tool_calls 提升响应速度 |
+| **编辑授权** | Agent 编辑操作需明确授权，支持 targetId 优先定位，降低路径歧义误改风险 |
 | **上下文标签** | 为对话添加文件、文件夹、选区、记忆、网络搜索作为上下文 |
-| **本地 RAG 知识库** | 文档分块 → 向量嵌入 → 余弦相似度检索，作用域由上下文标签控制 |
+| **本地 RAG 知识库** | 文档分块 → 向量嵌入 → 余弦相似度检索，作用域由上下文标签控制；启动时批量加载优化 |
+| **知识库状态** | 设置页实时显示数据库加载状态、索引进度与 Embedding 队列统计 |
 | **长期记忆** | 自动提取 + 手动保存，支持分类、锁定、搜索 |
 | **联网搜索** | 支持 DuckDuckGo / Brave Search / 自定义搜索引擎 |
 | **自定义提示词** | 支持在设置中配置 AI 风格提示词 |
@@ -97,12 +99,15 @@ VITE_GUANMO_WEB_SEARCH_API_KEY_SECRET=guanmo.web-search.api-key
 
 - 文件树侧边栏，支持工作区文件夹
 - 最近文件、收藏夹、重命名、另存为
+- 启动时自动恢复上次会话与持久化标签页
+- 双击 / 拖放 Markdown 文件直接打开，自动恢复窗口前台
 - 工作区文档批量索引 / 清理 / 重建
 
 ### ⚙️ 设置 · Settings
 
 - **AI 模型配置**：预设 OpenAI、DeepSeek、MiMo、SiliconFlow、智谱 GLM、Ollama
 - **独立 Embedding 模型配置**
+- **主题切换**：暖色 / 暗色主题，标题栏一键切换
 - **编辑器设置**：字体、字号、Tab 宽度、自动换行、行号
 - **记忆管理**：查看、锁定、删除、确认候选记忆
 - **数据备份**：一键导出 / 导入全部数据
@@ -234,6 +239,7 @@ guanmo/
 │   ├── features/               # 功能模块：设置页面
 │   │                         # Feature modules: settings page
 │   ├── styles/                 # 全局样式 + 主题令牌（亮色 / 暗色 / 动物暗色）
+│   │   └── tokens/             # 主题设计令牌：light.css / dark.css / animal-dark.css
 │   │                         # Global styles + theme tokens (light / dark / animal-dark)
 │   └── vendor/                 # 内置 UI 组件库：Animal Island UI
 │                             # Vendored UI library: Animal Island UI
@@ -290,8 +296,8 @@ Contributions are welcome! Feel free to open issues and submit pull requests.
 推送 `v*` 格式的 tag 会触发 GitHub Actions，在 Windows 上构建 Tauri 应用、创建 GitHub Release，并上传 NSIS `.exe` 与 WiX `.msi` 安装包。安装包不会提交到 Git 仓库。
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.0.1
+git push origin v1.0.1
 ```
 
 发布 tag 应与 `package.json`、`src-tauri/Cargo.toml` 和 `src-tauri/tauri.conf.json` 中的版本号保持一致。
