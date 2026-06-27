@@ -4,7 +4,7 @@ import appIcon from '@/assets/icon.png'
 import type { IconName } from 'animal-island-ui'
 import { useSettingsStore } from '@/stores/settingsStore'
 import type { WebSearchConfig } from '@/services/webSearch'
-import { initEmbeddingClient } from '@/services/ai/aiClient'
+import { initAiClient, initEmbeddingClient, isLocalApi, validateAiStatus } from '@/services/ai/aiClient'
 import { AI_CHAT_PRESETS, AI_EMBEDDING_PRESETS } from '@/services/ai/types'
 import { updateSearchConfig } from '@/services/webSearch'
 import {
@@ -188,6 +188,23 @@ function AiSettings() {
     updateSearchConfig(webSearch)
   }, [webSearch])
 
+  // AI 配置变更时重新校验连通性
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      // 重新初始化客户端
+      if ((ai.apiKey || isLocalApi(ai.baseUrl)) && ai.baseUrl && ai.chatModel) {
+        try { initAiClient(ai) } catch { /* ignore */ }
+      }
+      if ((ai.embedding.apiKey || isLocalApi(ai.embedding.baseUrl)) && ai.embedding.baseUrl && ai.embedding.embeddingModel) {
+        try { initEmbeddingClient(ai.embedding) } catch { /* ignore */ }
+      }
+      validateAiStatus().then((status) => {
+        useAppStore.getState().setAiStatus(status)
+      }).catch(() => {})
+    }, 1000)
+    return () => clearTimeout(timer)
+  }, [ai.baseUrl, ai.apiKey, ai.chatModel, ai.embedding.baseUrl, ai.embedding.apiKey, ai.embedding.embeddingModel])
+
   const currentChatPreset =
     AI_CHAT_PRESETS.find((preset) =>
       preset.key !== 'custom' &&
@@ -222,9 +239,11 @@ function AiSettings() {
       <SettingField label="API Base URL" description="OpenAI-compatible API 地址">
         <Input value={ai.baseUrl} onChange={(e) => updateAiConfig({ baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
       </SettingField>
-      <SettingField label="API Key" description="通过系统安全存储保存，不写入普通设置">
-        <Input type="password" value={ai.apiKey} onChange={(e) => updateAiConfig({ apiKey: e.target.value })} placeholder="sk-..." />
-      </SettingField>
+      {!isLocalApi(ai.baseUrl) && (
+        <SettingField label="API Key" description="通过系统安全存储保存，不写入普通设置">
+          <Input type="password" value={ai.apiKey} onChange={(e) => updateAiConfig({ apiKey: e.target.value })} placeholder="sk-..." />
+        </SettingField>
+      )}
       <SettingField label="对话模型" description="用于日常对话和 Agent 执行的模型">
         <Input value={ai.chatModel} onChange={(e) => updateAiConfig({ chatModel: e.target.value })} placeholder="gpt-4o-mini" />
       </SettingField>
@@ -249,9 +268,11 @@ function AiSettings() {
       <SettingField label="API Base URL" description="Embedding 服务地址">
         <Input value={ai.embedding.baseUrl} onChange={(e) => updateEmbeddingConfig({ baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
       </SettingField>
-      <SettingField label="API Key" description="通过系统安全存储保存">
-        <Input type="password" value={ai.embedding.apiKey} onChange={(e) => updateEmbeddingConfig({ apiKey: e.target.value })} placeholder="sk-..." />
-      </SettingField>
+      {!isLocalApi(ai.embedding.baseUrl) && (
+        <SettingField label="API Key" description="通过系统安全存储保存">
+          <Input type="password" value={ai.embedding.apiKey} onChange={(e) => updateEmbeddingConfig({ apiKey: e.target.value })} placeholder="sk-..." />
+        </SettingField>
+      )}
       <SettingField label="Embedding 模型" description="将文本转为向量，用于知识库语义检索">
         <Input value={ai.embedding.embeddingModel} onChange={(e) => updateEmbeddingConfig({ embeddingModel: e.target.value })} placeholder="text-embedding-3-small" />
       </SettingField>
@@ -349,7 +370,7 @@ function KnowledgeStats() {
 
   const runEmbedding = async (retryFailed = false) => {
     setMessage(null)
-    if (!ai.embedding.apiKey) {
+    if (!ai.embedding.apiKey && !isLocalApi(ai.embedding.baseUrl)) {
       setMessage('请先配置 Embedding API Key')
       return
     }

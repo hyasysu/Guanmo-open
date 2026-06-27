@@ -4,8 +4,9 @@ import { ToastContainer } from './components/common/ToastContainer'
 import { initDatabase } from './services/database/db'
 import { vectorStore } from './services/rag/vectorStore'
 import { hydrateSettingsSecrets } from './services/settingsSecrets'
-import { initAiClient, initEmbeddingClient } from './services/ai/aiClient'
+import { initAiClient, initEmbeddingClient, isLocalApi, validateAiStatus } from './services/ai/aiClient'
 import { syncDocumentTheme, useSettingsStore } from './stores/settingsStore'
+import { useAppStore } from './stores/appStore'
 import { useExternalFileOpen } from './hooks/useExternalFileOpen'
 import { Cursor } from 'animal-island-ui'
 import { invoke } from '@tauri-apps/api/core'
@@ -169,14 +170,19 @@ function App() {
           .then(() => logDuration('vector store hydration', vectorStoreStartedAt))
           .catch((err) => console.warn('[App] Vector store hydration failed:', err))
 
-        // 初始化 AI 客户端（对话 + Embedding）
+        // 初始化 AI 客户端（对话 + Embedding，本地 API 无需 apiKey）
         const { ai } = useSettingsStore.getState()
-        if (ai.apiKey && ai.baseUrl && ai.chatModel) {
+        if ((ai.apiKey || isLocalApi(ai.baseUrl)) && ai.baseUrl && ai.chatModel) {
           try { initAiClient(ai) } catch (err) { console.warn('[App] Chat client init failed:', err) }
         }
-        if (ai.embedding.apiKey && ai.embedding.baseUrl && ai.embedding.embeddingModel) {
+        if ((ai.embedding.apiKey || isLocalApi(ai.embedding.baseUrl)) && ai.embedding.baseUrl && ai.embedding.embeddingModel) {
           try { initEmbeddingClient(ai.embedding) } catch (err) { console.warn('[App] Embedding client init failed:', err) }
         }
+
+        // 校验 AI 服务连通性
+        validateAiStatus().then((status) => {
+          useAppStore.getState().setAiStatus(status)
+        }).catch(() => {})
 
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)

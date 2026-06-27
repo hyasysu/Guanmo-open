@@ -351,7 +351,7 @@ export async function runAgent(
 
   if (!isAiReady()) {
     return {
-      answer: 'AI 未配置，请先在设置中配置 API Key。',
+      answer: 'AI 未配置，请先在设置中配置 API Key 或选择本地模型（如 Ollama）。',
       steps: [],
       toolCalls: 0,
       reason: 'completed',

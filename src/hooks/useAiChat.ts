@@ -1,7 +1,7 @@
 import { useCallback, useRef } from 'react'
 import { useChatStore } from '@/stores/chatStore'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { getAiClient, getEmbeddingClient, getEmbeddingConfig, initAiClient, initEmbeddingClient, isAiReady, isEmbeddingReady } from '@/services/ai/aiClient'
+import { getAiClient, getEmbeddingClient, getEmbeddingConfig, initAiClient, initEmbeddingClient, isAiReady, isEmbeddingReady, isLocalApi } from '@/services/ai/aiClient'
 import type { ChatMessage, ChatMessageSource } from '@/services/ai/types'
 import { SYSTEM_TEMPERATURE } from '@/services/ai/types'
 import { initAgent, runAgent, shouldUseAgent } from '@/services/agent'
@@ -219,8 +219,9 @@ export function useAiChat() {
       }
     }
 
-    // 初始化对话客户端
-    if (currentAi.apiKey && currentAi.baseUrl && currentAi.chatModel) {
+    // 初始化对话客户端（本地 API 无需 apiKey）
+    const chatReady = (currentAi.apiKey || isLocalApi(currentAi.baseUrl)) && currentAi.baseUrl && currentAi.chatModel
+    if (chatReady) {
       const configKey = `${currentAi.baseUrl}|${currentAi.apiKey}|${currentAi.chatModel}`
       if (configKey !== lastConfigRef.current || !isAiReady()) {
         try {
@@ -233,9 +234,10 @@ export function useAiChat() {
       }
     }
 
-    // 初始化 embedding 客户端（独立配置，不依赖对话 Key）
+    // 初始化 embedding 客户端（独立配置，本地 API 无需 apiKey）
     const emb = currentAi.embedding
-    if (emb?.apiKey && emb?.baseUrl && emb?.embeddingModel) {
+    const embReady = (emb?.apiKey || isLocalApi(emb?.baseUrl || '')) && emb?.baseUrl && emb?.embeddingModel
+    if (embReady) {
       const currentEmbeddingConfig = getEmbeddingConfig()
       const embeddingConfigChanged = !currentEmbeddingConfig
         || currentEmbeddingConfig.apiKey !== emb.apiKey
@@ -251,7 +253,7 @@ export function useAiChat() {
     }
 
     if (!isAiReady()) {
-      setError('请先在设置中配置 API Key')
+      setError('请先在设置中配置 API Key 或选择本地模型（如 Ollama）')
       return false
     }
 

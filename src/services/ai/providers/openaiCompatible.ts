@@ -9,6 +9,23 @@ import type {
 import { AiAuthError, AiNetworkError, AiError } from '../errors'
 import { parseSSEStream } from '../stream'
 
+function isLocalApi(baseUrl: string): boolean {
+  try {
+    const { hostname } = new URL(baseUrl)
+    return hostname === 'localhost' || hostname === '127.0.0.1'
+  } catch {
+    return false
+  }
+}
+
+function wrapNetworkError(err: unknown, baseUrl: string): AiNetworkError {
+  const rawMsg = (err as Error).message || String(err)
+  if (isLocalApi(baseUrl)) {
+    return new AiNetworkError(`本地模型服务连接失败，请确认模型已启动（${rawMsg}）`)
+  }
+  return new AiNetworkError(rawMsg)
+}
+
 export class OpenAICompatibleProvider implements AiProvider {
   constructor(private config: AiConfig) {}
 
@@ -28,10 +45,13 @@ export class OpenAICompatibleProvider implements AiProvider {
   }
 
   private get headers(): Record<string, string> {
-    return {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${this.config.apiKey}`,
     }
+    if (this.config.apiKey) {
+      headers['Authorization'] = `Bearer ${this.config.apiKey}`
+    }
+    return headers
   }
 
   private get baseUrl(): string {
@@ -98,7 +118,7 @@ export class OpenAICompatibleProvider implements AiProvider {
       if ((err as Error).name === 'AbortError') {
         throw new AiNetworkError(request.signal?.aborted ? 'Request aborted' : 'Request timeout')
       }
-      throw new AiNetworkError((err as Error).message)
+      throw wrapNetworkError(err, this.baseUrl)
     } finally {
       abort.cleanup()
     }
@@ -138,7 +158,7 @@ export class OpenAICompatibleProvider implements AiProvider {
       if ((err as Error).name === 'AbortError') {
         throw new AiNetworkError(request.signal?.aborted ? 'Request aborted' : 'Request timeout')
       }
-      throw new AiNetworkError((err as Error).message)
+      throw wrapNetworkError(err, this.baseUrl)
     } finally {
       abort.cleanup()
     }
@@ -178,7 +198,7 @@ export class OpenAICompatibleProvider implements AiProvider {
       if ((err as Error).name === 'AbortError') {
         throw new AiNetworkError(signal?.aborted ? 'Request aborted' : 'Request timeout')
       }
-      throw new AiNetworkError((err as Error).message)
+      throw wrapNetworkError(err, this.baseUrl)
     } finally {
       abort.cleanup()
     }
@@ -217,7 +237,7 @@ export class OpenAICompatibleProvider implements AiProvider {
       if ((err as Error).name === 'AbortError') {
         throw new AiNetworkError(signal?.aborted ? 'Request aborted' : 'Request timeout')
       }
-      throw new AiNetworkError((err as Error).message)
+      throw wrapNetworkError(err, this.baseUrl)
     } finally {
       abort.cleanup()
     }

@@ -173,8 +173,12 @@ async function embedChunks(chunks: Chunk[]): Promise<EmbedResult> {
         }
       }
     } catch (err) {
-      // If batch fails, fall back to serial
       const msg = err instanceof Error ? err.message : String(err)
+      // 网络错误（本地服务不可用等）直接抛出，不逐个重试
+      if (msg.includes('连接失败') || msg.includes('Failed to fetch') || msg.includes('ECONNREFUSED') || msg.includes('timeout')) {
+        throw err
+      }
+      // 其他错误（如单条文本过长）fallback 到逐个重试
       console.warn(`Batch embedding failed, falling back to serial: ${msg}`)
       for (const chunk of batch) {
         try {
@@ -183,7 +187,7 @@ async function embedChunks(chunks: Chunk[]): Promise<EmbedResult> {
           result.embedded++
         } catch (serialErr) {
           result.failed++
-          const serialMsg = serialErr instanceof Error ? serialErr.message : String(serialErr)
+          const serialMsg = serialErr instanceof Error ? serialErr.message : String(err)
           result.errors.push(`chunk ${chunk.id}: ${serialMsg}`)
         }
       }
