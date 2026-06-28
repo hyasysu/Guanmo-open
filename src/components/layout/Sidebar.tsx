@@ -25,8 +25,12 @@ interface SidebarProps {
 }
 
 export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: SidebarProps) {
-  const { toggleSidebar, workspacePath, setWorkspacePath } = useAppStore()
-  const { recentFiles, favorites, tabs } = useEditorStore()
+  const toggleSidebar = useAppStore((s) => s.toggleSidebar)
+  const workspacePath = useAppStore((s) => s.workspacePath)
+  const setWorkspacePath = useAppStore((s) => s.setWorkspacePath)
+  const recentFiles = useEditorStore((s) => s.recentFiles)
+  const favorites = useEditorStore((s) => s.favorites)
+  const tabs = useEditorStore((s) => s.tabs)
   const activeTabId = useEditorStore((s) => s.activeTabId)
   const [workspaceFiles, setWorkspaceFiles] = useState<FileNode[]>([])
   const [workspaceHiddenCount, setWorkspaceHiddenCount] = useState(0)

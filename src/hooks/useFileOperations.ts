@@ -8,8 +8,9 @@ import { toast } from '@/services/toast'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 
 export function useFileOperations() {
-  const { addTab, tabs } = useEditorStore()
-  const { editor } = useSettingsStore()
+  const addTab = useEditorStore((s) => s.addTab)
+  const tabs = useEditorStore((s) => s.tabs)
+  const editor = useSettingsStore((s) => s.editor)
   const autoSaveTimersRef = useRef<Map<string, { timer: ReturnType<typeof setTimeout>; content: string }>>(new Map())
   const autoSaveRetriesRef = useRef<Map<string, number>>(new Map())
 

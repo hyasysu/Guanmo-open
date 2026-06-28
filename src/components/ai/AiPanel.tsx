@@ -1,10 +1,10 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { memo, useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { useChatStore } from '@/stores/chatStore'
 import type { RagSource, RagStatus, TimelineItem, PendingEdit } from '@/stores/chatStore'
 import { useAiChat } from '@/hooks/useAiChat'
 import { Button, Divider, Icon } from 'animal-island-ui'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { PromptComposer } from '@/components/ai/PromptComposer'
 import type { ManualCapability } from '@/components/ai/ManualToolToggle'
@@ -17,16 +17,13 @@ import type { ChatMessageSource } from '@/services/ai/types'
 import { AI_SHORTCUT_SUBMIT_EVENT } from '@/services/aiContext'
 
 export function AiPanel() {
-  const { toggleAiPanel } = useAppStore()
+  const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
   const { messages, streaming, error, ragStatus, ragSources, timeline, sendMessage, cancelStream } = useAiChat()
-  const draftInput = useChatStore((s) => s.draftInput)
   const setDraftInput = useChatStore((s) => s.setDraftInput)
   const clearMessages = useChatStore((s) => s.clearMessages)
-  const contextTags = useChatStore((s) => s.contextTags)
   const hasMoreHistory = useChatStore((s) => s.hasMoreHistory)
   const loadMoreHistory = useChatStore((s) => s.loadMoreHistory)
   const [loadingHistory, setLoadingHistory] = useState(false)
-  const chatEndRef = useRef<HTMLDivElement>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const autoFollowRef = useRef(true)
   const visibleMessages = useMemo(() => messages.filter((msg) => !msg.hidden), [messages])
@@ -51,11 +48,12 @@ export function AiPanel() {
     return () => el.removeEventListener('scroll', handleScroll)
   }, [isAtBottom])
 
-  // 流式输出时用 instant 滚动，避免 smooth 动画叠加抖动
+  // 消息已经按批次刷新，每批最多执行一次容器内滚动。
   useEffect(() => {
     if (!autoFollowRef.current) return
-    const behavior = streaming ? 'instant' as const : 'smooth' as const
-    chatEndRef.current?.scrollIntoView({ behavior })
+    const container = chatContainerRef.current
+    if (!container) return
+    container.scrollTop = container.scrollHeight
   }, [visibleMessages, streaming])
 
   const handleSend = useCallback(() => {
@@ -135,7 +133,7 @@ export function AiPanel() {
   }, [])
 
   return (
-    <div className="gm-instant-color h-full flex flex-col relative">
+    <div className="gm-instant-color h-full min-h-0 flex flex-col relative">
       {/* Header */}
       <div className="h-11 flex items-center px-4 border-b border-gm-border-subtle bg-gm-surface relative z-10">
         <div className="flex items-center gap-2">
@@ -180,7 +178,7 @@ export function AiPanel() {
       <RagTrace status={ragStatus} sources={ragSources} onOpenSource={handleOpenRagSource} />
 
       {/* Chat Content - 可以滚动到控制栏下面 */}
-      <div ref={chatContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 pb-24 bg-gm-surface">
+      <div ref={chatContainerRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden min-w-0 pb-24 bg-gm-surface">
         {visibleMessages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full p-6 animate-fadeIn">
             {hasMoreHistory && (
@@ -284,7 +282,6 @@ export function AiPanel() {
                 </button>
               </div>
             )}
-            <div ref={chatEndRef} />
           </div>
         )}
       </div>
@@ -421,7 +418,7 @@ function SuggestionChip({ label, onClick }: { label: string; onClick?: (label: s
   )
 }
 
-function ChatBubble({
+const ChatBubble = memo(function ChatBubble({
   role,
   content,
   isLast,
@@ -459,7 +456,7 @@ function ChatBubble({
             <span className="w-2 h-2 rounded-full bg-gm-primary animate-pulse" style={{ animationDelay: '150ms' }} />
             <span className="w-2 h-2 rounded-full bg-gm-primary animate-pulse" style={{ animationDelay: '300ms' }} />
           </div>
-        ) : isUser ? (
+        ) : isUser || (isLast && streaming) ? (
           <div className="whitespace-pre-wrap break-words">{content}</div>
         ) : (
           <AssistantMarkdown content={content} />
@@ -470,7 +467,7 @@ function ChatBubble({
       </div>
     </div>
   )
-}
+})
 
 function MessageSources({ sources, onOpenSource }: { sources: ChatMessageSource[]; onOpenSource: (source: ChatMessageSource) => void }) {
   const [expanded, setExpanded] = useState(false)
@@ -515,70 +512,74 @@ function formatSourceHeading(source: ChatMessageSource): string {
   return source.heading || ''
 }
 
-function AssistantMarkdown({ content }: { content: string }) {
+const ASSISTANT_MARKDOWN_REMARK_PLUGINS = [remarkGfm]
+
+const ASSISTANT_MARKDOWN_COMPONENTS: Components = {
+  p: ({ children }) => <p className="my-1.5 leading-relaxed">{children}</p>,
+  strong: ({ children }) => <strong className="font-bold">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  code: ({ children, className }) => {
+    const isBlock = className?.includes('language-')
+    if (isBlock) {
+      return (
+        <div className="my-2 rounded-xl bg-gm-canvas border border-gm-border overflow-hidden">
+          {className && (
+            <div className="px-3 py-1 border-b border-gm-border text-micro text-gm-text-secondary font-mono">
+              {className.replace('language-', '')}
+            </div>
+          )}
+          <pre className="p-3 overflow-x-auto m-0">
+            <code className="text-[12px] font-mono leading-5">{children}</code>
+          </pre>
+        </div>
+      )
+    }
+    return (
+      <code className="px-1.5 py-0.5 rounded bg-gm-canvas text-gm-accent text-[12px] font-mono break-words">
+        {children}
+      </code>
+    )
+  },
+  blockquote: ({ children }) => (
+    <blockquote className="pl-3 border-l-3 border-gm-primary my-2 text-gm-text-secondary italic">
+      {children}
+    </blockquote>
+  ),
+  ul: ({ children }) => <ul className="my-1.5 pl-4 space-y-0.5 list-disc">{children}</ul>,
+  ol: ({ children }) => <ol className="my-1.5 pl-4 space-y-0.5 list-decimal">{children}</ol>,
+  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  a: ({ href, children }) => (
+    <a href={href} className="text-gm-primary hover:underline" target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
+  ),
+  hr: () => <hr className="my-3 border-gm-border" />,
+  table: ({ children }) => (
+    <div className="my-2 overflow-x-auto rounded-lg border border-gm-border">
+      <table className="w-full border-collapse text-caption">{children}</table>
+    </div>
+  ),
+  th: ({ children }) => (
+    <th className="px-2 py-1 text-left font-bold border-b border-gm-border">{children}</th>
+  ),
+  td: ({ children }) => (
+    <td className="px-2 py-1 border-b border-gm-border-subtle">{children}</td>
+  ),
+  del: ({ children }) => <del className="text-gm-text-tertiary">{children}</del>,
+}
+
+const AssistantMarkdown = memo(function AssistantMarkdown({ content }: { content: string }) {
   return (
     <div className="prose-sm max-w-none min-w-0 break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          p: ({ children }) => <p className="my-1.5 leading-relaxed">{children}</p>,
-          strong: ({ children }) => <strong className="font-bold">{children}</strong>,
-          em: ({ children }) => <em className="italic">{children}</em>,
-          code: ({ children, className }) => {
-            const isBlock = className?.includes('language-')
-            if (isBlock) {
-              return (
-                <div className="my-2 rounded-xl bg-gm-canvas border border-gm-border overflow-hidden">
-                  {className && (
-                    <div className="px-3 py-1 border-b border-gm-border text-micro text-gm-text-secondary font-mono">
-                      {className.replace('language-', '')}
-                    </div>
-                  )}
-                  <pre className="p-3 overflow-x-auto m-0">
-                    <code className="text-[12px] font-mono leading-5">{children}</code>
-                  </pre>
-                </div>
-              )
-            }
-            return (
-              <code className="px-1.5 py-0.5 rounded bg-gm-canvas text-gm-accent text-[12px] font-mono break-words">
-                {children}
-              </code>
-            )
-          },
-          blockquote: ({ children }) => (
-            <blockquote className="pl-3 border-l-3 border-gm-primary my-2 text-gm-text-secondary italic">
-              {children}
-            </blockquote>
-          ),
-          ul: ({ children }) => <ul className="my-1.5 pl-4 space-y-0.5 list-disc">{children}</ul>,
-          ol: ({ children }) => <ol className="my-1.5 pl-4 space-y-0.5 list-decimal">{children}</ol>,
-          li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-          a: ({ href, children }) => (
-            <a href={href} className="text-gm-primary hover:underline" target="_blank" rel="noopener noreferrer">
-              {children}
-            </a>
-          ),
-          hr: () => <hr className="my-3 border-gm-border" />,
-          table: ({ children }) => (
-            <div className="my-2 overflow-x-auto rounded-lg border border-gm-border">
-              <table className="w-full border-collapse text-caption">{children}</table>
-            </div>
-          ),
-          th: ({ children }) => (
-            <th className="px-2 py-1 text-left font-bold border-b border-gm-border">{children}</th>
-          ),
-          td: ({ children }) => (
-            <td className="px-2 py-1 border-b border-gm-border-subtle">{children}</td>
-          ),
-          del: ({ children }) => <del className="text-gm-text-tertiary">{children}</del>,
-        }}
+        remarkPlugins={ASSISTANT_MARKDOWN_REMARK_PLUGINS}
+        components={ASSISTANT_MARKDOWN_COMPONENTS}
       >
         {content}
       </ReactMarkdown>
     </div>
   )
-}
+})
 
 function PendingEditCard({ edit, actionable }: { edit: PendingEdit; actionable: boolean }) {
   const applyPendingEdit = useChatStore((s) => s.applyPendingEdit)

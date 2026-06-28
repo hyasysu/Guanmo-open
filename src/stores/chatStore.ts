@@ -132,9 +132,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return { messages: nextMessages }
   }),
 
-  updateMessageContent: (id, content) => set((s) => ({
-    messages: s.messages.map((msg) => (msg.id === id ? { ...msg, content } : msg)),
-  })),
+  updateMessageContent: (id, content) => set((s) => {
+    const current = s.messages.find((msg) => msg.id === id)
+    if (!current || current.content === content) return s
+    return {
+      messages: s.messages.map((msg) => (msg.id === id ? { ...msg, content } : msg)),
+    }
+  }),
 
   updateMessageContextMeta: (id, contextMeta) => set((s) => ({
     messages: s.messages.map((msg) => (msg.id === id ? { ...msg, contextMeta } : msg)),

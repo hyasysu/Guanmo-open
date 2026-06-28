@@ -16,9 +16,16 @@ import { toast } from '@/services/toast'
 import { useSettingsStore } from '@/stores/settingsStore'
 
 export function AppLayout() {
-  const { sidebarCollapsed, aiPanelOpen, sidebarWidth, aiPanelWidth, toggleSidebar, toggleAiPanel, setAiPanelWidth } =
-    useAppStore()
-  const { togglePreview, toggleDiffPreview, setViewMode } = useEditorStore()
+  const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
+  const aiPanelOpen = useAppStore((s) => s.aiPanelOpen)
+  const sidebarWidth = useAppStore((s) => s.sidebarWidth)
+  const aiPanelWidth = useAppStore((s) => s.aiPanelWidth)
+  const toggleSidebar = useAppStore((s) => s.toggleSidebar)
+  const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
+  const setAiPanelWidth = useAppStore((s) => s.setAiPanelWidth)
+  const togglePreview = useEditorStore((s) => s.togglePreview)
+  const toggleDiffPreview = useEditorStore((s) => s.toggleDiffPreview)
+  const setViewMode = useEditorStore((s) => s.setViewMode)
   const { handleNewFile, handleOpenFile, handleSaveFile } = useFileOperations()
   const customCursorEnabled = useSettingsStore((s) => s.appearance.customCursorEnabled)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
@@ -153,7 +160,7 @@ export function AppLayout() {
         {aiPanelOpen && (
           <div
             className="border-l border-gm-border flex-shrink-0 animate-slideInRight relative"
-            style={{ width: aiPanelWidth }}
+            style={{ width: aiPanelWidth, contain: 'layout' }}
           >
             {/* Resize handle */}
             <div

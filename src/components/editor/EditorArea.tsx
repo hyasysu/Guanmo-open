@@ -57,6 +57,11 @@ interface ScheduledPreviewContent {
   pending: boolean
 }
 
+interface ReadingPosition {
+  previewTop?: number
+  editorTop?: number
+}
+
 function getPreviewUpdateDelay(content: string) {
   if (content.length >= 80000) return HUGE_PREVIEW_UPDATE_DELAY
   if (content.length >= 30000) return LARGE_PREVIEW_UPDATE_DELAY
@@ -117,13 +122,13 @@ export function EditorArea() {
   const rightPaneTabId = useEditorStore((s) => s.rightPaneTabId)
   const rightPaneUserSelected = useEditorStore((s) => s.rightPaneUserSelected)
   const setRightPaneTabId = useEditorStore((s) => s.setRightPaneTabId)
-  const saveReadingPosition = useEditorStore((s) => s.saveReadingPosition)
   const previewSwitchingTabId = useEditorStore((s) => s.previewSwitchingTabId)
   const clearPreviewSwitching = useEditorStore((s) => s.clearPreviewSwitching)
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize)
   const editorLineHeight = useSettingsStore((s) => s.editor.lineHeight)
   const syncScroll = useSettingsStore((s) => s.editor.syncScroll)
   const editorViewRef = useRef<EditorView | null>(null)
+  const readingPositionsRef = useRef<Record<string, ReadingPosition>>({})
   const leftPreviewRef = useRef<HTMLDivElement>(null)
   const rightPreviewRef = useRef<HTMLDivElement>(null)
   const previewAnchorCacheRef = useRef<WeakMap<HTMLElement, { version: number; anchors: PreviewLineAnchor[] }>>(new WeakMap())
@@ -159,8 +164,15 @@ export function EditorArea() {
 
   const getStoredReadingTop = useCallback((tabId: string | null | undefined) => {
     if (!tabId) return 0
-    const position = useEditorStore.getState().readingPositions[tabId]
+    const position = readingPositionsRef.current[tabId]
     return position?.previewTop ?? position?.editorTop ?? 0
+  }, [])
+
+  const saveReadingPosition = useCallback((tabId: string, position: ReadingPosition) => {
+    readingPositionsRef.current[tabId] = {
+      ...readingPositionsRef.current[tabId],
+      ...position,
+    }
   }, [])
 
   const leftPreviewMasked = Boolean(
@@ -217,7 +229,7 @@ export function EditorArea() {
 
   const restoreEditorReadingPosition = useCallback((tabId: string) => {
     const view = editorViewRef.current
-    const position = useEditorStore.getState().readingPositions[tabId]
+    const position = readingPositionsRef.current[tabId]
     if (!view || !position) return
 
     const nextTop = position.editorTop ?? position.previewTop
@@ -231,7 +243,7 @@ export function EditorArea() {
     container: HTMLElement | null,
     pane: 'left' | 'right'
   ) => {
-    const position = useEditorStore.getState().readingPositions[tabId]
+    const position = readingPositionsRef.current[tabId]
     if (!container) return
     const nextTop = position?.previewTop ?? position?.editorTop ?? 0
     withRestoreLock(() => {

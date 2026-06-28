@@ -180,30 +180,28 @@ function buildEditTargetsContext(editTargets: AgentEditTarget[]): string {
 }
 
 export function useAiChat() {
-  const {
-    messages,
-    streaming,
-    error,
-    agentMode,
-    ragStatus,
-    ragSources,
-    timeline,
-    addMessage,
-    setStreaming,
-    setError,
-    addAgentStep,
-    clearAgentSteps,
-    setAgentMode,
-    updateMessageContent,
-    updateMessageContextMeta,
-    updateMessageSources,
-    removeMessageById,
-    setRagStatus,
-    setRagSources,
-    addTimelineItem,
-    clearTimeline,
-  } = useChatStore()
-  const { ai } = useSettingsStore()
+  const messages = useChatStore((s) => s.messages)
+  const streaming = useChatStore((s) => s.streaming)
+  const error = useChatStore((s) => s.error)
+  const agentMode = useChatStore((s) => s.agentMode)
+  const ragStatus = useChatStore((s) => s.ragStatus)
+  const ragSources = useChatStore((s) => s.ragSources)
+  const timeline = useChatStore((s) => s.timeline)
+  const addMessage = useChatStore((s) => s.addMessage)
+  const setStreaming = useChatStore((s) => s.setStreaming)
+  const setError = useChatStore((s) => s.setError)
+  const addAgentStep = useChatStore((s) => s.addAgentStep)
+  const clearAgentSteps = useChatStore((s) => s.clearAgentSteps)
+  const setAgentMode = useChatStore((s) => s.setAgentMode)
+  const updateMessageContent = useChatStore((s) => s.updateMessageContent)
+  const updateMessageContextMeta = useChatStore((s) => s.updateMessageContextMeta)
+  const updateMessageSources = useChatStore((s) => s.updateMessageSources)
+  const removeMessageById = useChatStore((s) => s.removeMessageById)
+  const setRagStatus = useChatStore((s) => s.setRagStatus)
+  const setRagSources = useChatStore((s) => s.setRagSources)
+  const addTimelineItem = useChatStore((s) => s.addTimelineItem)
+  const clearTimeline = useChatStore((s) => s.clearTimeline)
+  const ai = useSettingsStore((s) => s.ai)
   const lastConfigRef = useRef('')
   const cancelRef = useRef<() => void>(() => {})
   const activeRequestRef = useRef<{ id: string; assistantMessageId: string; cancelled: boolean } | null>(null)

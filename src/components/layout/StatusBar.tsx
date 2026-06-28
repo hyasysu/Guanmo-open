@@ -16,7 +16,8 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
 }
 
 export function StatusBar() {
-  const { tabs, activeTabId } = useEditorStore()
+  const tabs = useEditorStore((s) => s.tabs)
+  const activeTabId = useEditorStore((s) => s.activeTabId)
   const aiStatus = useAppStore((s) => s.aiStatus)
 
   const activeTab = tabs.find((t) => t.id === activeTabId)

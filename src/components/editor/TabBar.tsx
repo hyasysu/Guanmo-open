@@ -17,7 +17,18 @@ interface TabBarProps {
 type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
 
 export function TabBar({ onOpenSettings }: TabBarProps) {
-  const { tabs, activeTabId, setActiveTab, closeTab, reorderTabs, viewMode, setViewMode, rightPaneTabId, setRightPaneTabId, favorites, toggleFavorite, togglePinTab } = useEditorStore()
+  const tabs = useEditorStore((s) => s.tabs)
+  const activeTabId = useEditorStore((s) => s.activeTabId)
+  const setActiveTab = useEditorStore((s) => s.setActiveTab)
+  const closeTab = useEditorStore((s) => s.closeTab)
+  const reorderTabs = useEditorStore((s) => s.reorderTabs)
+  const viewMode = useEditorStore((s) => s.viewMode)
+  const setViewMode = useEditorStore((s) => s.setViewMode)
+  const rightPaneTabId = useEditorStore((s) => s.rightPaneTabId)
+  const setRightPaneTabId = useEditorStore((s) => s.setRightPaneTabId)
+  const favorites = useEditorStore((s) => s.favorites)
+  const toggleFavorite = useEditorStore((s) => s.toggleFavorite)
+  const togglePinTab = useEditorStore((s) => s.togglePinTab)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null)
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
   const [dragState, setDragState] = useState<{ tabId: string; startX: number } | null>(null)

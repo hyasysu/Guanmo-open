@@ -381,7 +381,10 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
   onOpen?: (file: { name: string; path: string }) => void
   onRefreshWorkspace?: () => void
 }) {
-  const editorStore = useEditorStore()
+  const tabs = useEditorStore((s) => s.tabs)
+  const activeTabId = useEditorStore((s) => s.activeTabId)
+  const setActiveTab = useEditorStore((s) => s.setActiveTab)
+  const addTab = useEditorStore((s) => s.addTab)
   const removeRecentFile = useEditorStore((s) => s.removeRecentFile)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; file: { name: string; path: string } } | null>(null)
   const [renamingPath, setRenamingPath] = useState<string | null>(null)
@@ -395,14 +398,14 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
         onOpen(file)
         return
       }
-      const existing = editorStore.tabs.find((t) => isSameFilePath(t.filePath, file.path))
+      const existing = tabs.find((t) => isSameFilePath(t.filePath, file.path))
       if (existing) {
-        editorStore.setActiveTab(existing.id)
+        setActiveTab(existing.id)
       } else {
-        editorStore.addTab(file.path, file.name, '')
+        addTab(file.path, file.name, '')
       }
     },
-    [editorStore, onOpen]
+    [addTab, onOpen, setActiveTab, tabs]
   )
 
   const startRename = useCallback((file: { name: string; path: string }) => {
@@ -448,7 +451,7 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
   return (
     <div className="space-y-0.5 py-1">
       {files.map((file) => {
-        const isActive = isSameFilePath(editorStore.tabs.find((t) => t.id === editorStore.activeTabId)?.filePath, file.path)
+        const isActive = isSameFilePath(tabs.find((t) => t.id === activeTabId)?.filePath, file.path)
         return (
           <button
             key={file.path}

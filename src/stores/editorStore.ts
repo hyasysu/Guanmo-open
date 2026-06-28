@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { persist, type PersistStorage, type StorageValue } from 'zustand/middleware'
 import { isSameFilePath, normalizeFilePath } from '@/services/pathIdentity'
 
 export interface Tab {
@@ -20,12 +20,18 @@ export interface RecentFile {
   lastOpened: number
 }
 
-export interface ReadingPosition {
-  previewTop?: number
-  editorTop?: number
-}
-
 type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
+
+interface PersistedEditorState {
+  recentFiles: RecentFile[]
+  favorites: string[]
+  tabs: Tab[]
+  activeTabId: string | null
+  viewMode: ViewMode
+  rightPaneTabId: string | null
+  rightPaneUserSelected: boolean
+  pendingReveal: null
+}
 
 interface EditorState {
   tabs: Tab[]
@@ -37,7 +43,6 @@ interface EditorState {
   recentFiles: RecentFile[]
   favorites: string[]
   pendingReveal: { tabId: string; startLine: number; endLine?: number } | null
-  readingPositions: Record<string, ReadingPosition>
   previewSwitchingTabId: string | null
 
   openTab: (tab: Tab) => void
@@ -45,7 +50,6 @@ interface EditorState {
   closeTab: (id: string) => void
   setActiveTab: (id: string) => void
   clearPreviewSwitching: (tabId?: string) => void
-  saveReadingPosition: (tabId: string, position: ReadingPosition) => void
   updateTabContent: (id: string, content: string) => void
   togglePreview: () => void
   toggleDiffPreview: () => void
@@ -102,6 +106,59 @@ function dedupeRestoredTabs(tabs: Tab[] = []) {
   return restored
 }
 
+function compactPersistedTab(tab: Tab): Tab {
+  if (!tab.filePath || tab.modified) return tab
+  return {
+    ...tab,
+    content: '',
+    savedContent: '',
+    originalContent: '',
+  }
+}
+
+function createDeferredEditorStorage(delayMs: number): PersistStorage<PersistedEditorState> {
+  const storage = typeof window !== 'undefined' ? window.localStorage : null
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let pending: { name: string; value: StorageValue<PersistedEditorState> } | null = null
+
+  const flush = () => {
+    timer = null
+    if (!pending) return
+    const { name, value } = pending
+    pending = null
+    storage?.setItem(name, JSON.stringify(value))
+  }
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('beforeunload', flush)
+  }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') flush()
+    })
+  }
+
+  return {
+    getItem(name) {
+      const raw = storage?.getItem(name)
+      return raw ? JSON.parse(raw) as StorageValue<PersistedEditorState> : null
+    },
+    setItem(name, value) {
+      pending = { name, value }
+      if (timer !== null) clearTimeout(timer)
+      timer = setTimeout(flush, delayMs)
+    },
+    removeItem(name) {
+      if (pending?.name === name) pending = null
+      if (timer !== null) {
+        clearTimeout(timer)
+        timer = null
+      }
+      storage?.removeItem(name)
+    },
+  }
+}
+
 function shouldMaskPreviewSwitch(viewMode: ViewMode) {
   return viewMode === 'preview' || viewMode === 'edit-preview' || viewMode === 'dual-preview'
 }
@@ -118,7 +175,6 @@ export const useEditorStore = create<EditorState>()(
       recentFiles: [],
       favorites: [],
       pendingReveal: null,
-      readingPositions: {},
       previewSwitchingTabId: null,
 
       openTab: (tab) => {
@@ -230,16 +286,6 @@ export const useEditorStore = create<EditorState>()(
           ? { previewSwitchingTabId: null }
           : s
       )),
-
-      saveReadingPosition: (tabId, position) => set((s) => ({
-        readingPositions: {
-          ...s.readingPositions,
-          [tabId]: {
-            ...s.readingPositions[tabId],
-            ...position,
-          },
-        },
-      })),
 
       updateTabContent: (id, content) => {
         set((s) => ({
@@ -384,10 +430,11 @@ export const useEditorStore = create<EditorState>()(
     }),
     {
       name: 'guanmo-editor',
+      storage: createDeferredEditorStorage(250),
       partialize: (state) => ({
         recentFiles: state.recentFiles,
         favorites: state.favorites,
-        tabs: state.tabs,
+        tabs: state.tabs.map(compactPersistedTab),
         activeTabId: state.activeTabId,
         viewMode: state.viewMode,
         rightPaneTabId: state.rightPaneTabId,
@@ -414,7 +461,6 @@ export const useEditorStore = create<EditorState>()(
           rightPaneUserSelected,
           recentFiles: dedupeRecentFiles(saved.recentFiles ?? current.recentFiles),
           pendingReveal: null,
-          readingPositions: {},
           previewSwitchingTabId: null,
         }
       },

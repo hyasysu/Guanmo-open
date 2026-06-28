@@ -28,6 +28,7 @@ export async function restorePersistedTabs(tabs: Tab[]): Promise<Tab[]> {
           ...tab,
           content: diskContent,
           savedContent: diskContent,
+          originalContent: diskContent,
           modified: false,
         })
       }
