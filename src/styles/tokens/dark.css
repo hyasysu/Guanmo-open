@@ -30,6 +30,13 @@
   --gm-text-disabled: #625746;
   --gm-text-on-primary: #10211f;
 
+  /* User Message Bubble (柔和低饱和) */
+  --gm-user-bubble-bg: #1a3a35;
+  --gm-user-bubble-text: #e0f0ec;
+
+  /* Active Indicator (标签下划线、目录高亮) */
+  --gm-active-indicator: #38d1c1;
+
   /* Semantic */
   --gm-success: #7bcf9a;
   --gm-warning: #e9b95d;

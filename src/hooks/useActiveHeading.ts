@@ -11,7 +11,8 @@ import { useEffect, useRef, useState } from 'react'
 export function useActiveHeading(
   containerRef: React.RefObject<HTMLElement | null>,
   headingSelector: string = '[data-heading-id]',
-  trigger?: unknown
+  trigger?: unknown,
+  enabled: boolean = true
 ): string | null {
   const [activeId, setActiveId] = useState<string | null>(null)
   const observerRef = useRef<IntersectionObserver | null>(null)
@@ -28,6 +29,8 @@ export function useActiveHeading(
 
     const headingPositions = headingPositionsRef.current
     headingPositions.clear()
+
+    if (!enabled) return
 
     // 使用 rAF 循环检测容器是否已挂载
     let disposed = false
@@ -111,7 +114,7 @@ export function useActiveHeading(
       }
       headingPositions.clear()
     }
-  }, [containerRef, headingSelector, trigger])
+  }, [containerRef, headingSelector, trigger, enabled])
 
   return activeId
 }

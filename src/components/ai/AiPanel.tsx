@@ -446,9 +446,10 @@ const ChatBubble = memo(function ChatBubble({
       <div
         className={`max-w-[80%] min-w-0 rounded-2xl px-4 py-2.5 text-body ${
           isUser
-            ? 'bg-gm-primary text-white rounded-br-md'
+            ? 'rounded-br-md'
             : 'bg-gm-surface-elevated text-gm-text border border-gm-border rounded-bl-md'
         }`}
+        style={isUser ? { backgroundColor: 'var(--gm-user-bubble-bg)', color: 'var(--gm-user-bubble-text)' } : undefined}
       >
         {isEmpty ? (
           <div className="flex items-center gap-1">

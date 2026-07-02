@@ -50,6 +50,7 @@ const HUGE_PREVIEW_UPDATE_DELAY = 900
 const SCROLL_SYNC_TOP_OFFSET = 32
 const SCROLL_SYNC_LOCK_MS = 220
 const SCROLL_SYNC_INPUT_PAUSE_MS = 700
+const PREVIEW_SWITCH_MARK_PREFIX = 'guanmo:preview-switch'
 
 interface ScheduledPreviewContent {
   content: string
@@ -58,7 +59,9 @@ interface ScheduledPreviewContent {
 }
 
 interface ReadingPosition {
-  scrollTop?: number
+  editorScrollTop?: number
+  previewScrollTop?: number
+  topLine?: number
 }
 
 function getPreviewUpdateDelay(content: string) {
@@ -133,6 +136,7 @@ export function EditorArea() {
   const previewAnchorCacheRef = useRef<WeakMap<HTMLElement, { version: number; anchors: PreviewLineAnchor[] }>>(new WeakMap())
   const isRestoringScrollRef = useRef(false)
   const restoreScrollFrameRef = useRef<number | null>(null)
+  const editorRestoreFrameRef = useRef<number | null>(null)
 
   const restoredPreviewKeysRef = useRef<{ left: string | null; right: string | null }>({ left: null, right: null })
   const scrollSyncSourceRef = useRef<'editor' | 'preview' | null>(null)
@@ -148,23 +152,65 @@ export function EditorArea() {
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
   const selectedRightTab = rightPaneTabId ? tabs.find((t) => t.id === rightPaneTabId) : null
-  const rightTab = viewMode === 'dual-preview' && !rightPaneUserSelected
+  const dualRightTab = !rightPaneUserSelected
     ? activeTab
     : selectedRightTab
+  const retainedRightTabRef = useRef<(typeof tabs)[number] | null>(null)
+  if (viewMode === 'dual-preview') {
+    retainedRightTabRef.current = dualRightTab ?? null
+  }
+  const rightTab = viewMode === 'dual-preview' ? dualRightTab : retainedRightTabRef.current
+  const leftPreviewVisible = viewMode === 'preview' || viewMode === 'edit-preview' || viewMode === 'dual-preview'
+  const editorVisible = viewMode === 'edit' || viewMode === 'edit-preview'
+  const leftPreviewMountedRef = useRef(false)
+  const rightPreviewMountedRef = useRef(false)
+  const viewModeRef = useRef(viewMode)
+  viewModeRef.current = viewMode
+  if (leftPreviewVisible) {
+    leftPreviewMountedRef.current = true
+  }
+  if (viewMode === 'dual-preview') {
+    rightPreviewMountedRef.current = true
+  }
   const activePreview = useScheduledPreviewContent(activeTab?.content || '', activeTab?.id)
   const rightPreview = useScheduledPreviewContent(rightTab?.content || '', rightTab?.id)
+  const leftPreviewRenderRef = useRef({
+    content: activePreview.content,
+    filePath: activeTab?.filePath,
+  })
+  if (leftPreviewVisible) {
+    leftPreviewRenderRef.current = {
+      content: activePreview.content,
+      filePath: activeTab?.filePath,
+    }
+  }
   const toc = useMemo(() => extractToc(activeTab?.content || ''), [activeTab?.content])
   const rightToc = useMemo(() => extractToc(rightTab?.content || ''), [rightTab?.content])
 
   // 使用 IntersectionObserver 监听当前活跃的标题
   // 传递 viewMode 作为 trigger，当模式切换时重新检查容器
-  const activeHeading = useActiveHeading(leftPreviewRef, '[data-heading-id]', viewMode)
-  const activeRightHeading = useActiveHeading(rightPreviewRef, '[data-heading-id]', viewMode)
+  const activeHeading = useActiveHeading(
+    leftPreviewRef,
+    '[data-heading-id]',
+    `${viewMode}:${activeTab?.id ?? ''}:${activePreview.version}`,
+    leftPreviewVisible
+  )
+  const activeRightHeading = useActiveHeading(
+    rightPreviewRef,
+    '[data-heading-id]',
+    `${viewMode}:${rightTab?.id ?? ''}:${rightPreview.version}`,
+    viewMode === 'dual-preview'
+  )
 
-  const getStoredReadingTop = useCallback((tabId: string | null | undefined) => {
+  const getStoredPreviewTop = useCallback((tabId: string | null | undefined) => {
     if (!tabId) return 0
     const position = readingPositionsRef.current[tabId]
-    return position?.scrollTop ?? 0
+    return position?.previewScrollTop ?? 0
+  }, [])
+
+  const getStoredEditorTop = useCallback((tabId: string | null | undefined) => {
+    if (!tabId) return 0
+    return readingPositionsRef.current[tabId]?.editorScrollTop ?? 0
   }, [])
 
   const saveReadingPosition = useCallback((tabId: string, position: ReadingPosition) => {
@@ -180,32 +226,35 @@ export function EditorArea() {
       previewSwitchingTabId === activeTab.id
       || (
         restoredPreviewKeysRef.current.left !== activeTab.id
-        && getStoredReadingTop(activeTab.id) > 0
+        && getStoredPreviewTop(activeTab.id) > 0
       )
     )
   )
   const rightPreviewMasked = Boolean(
     rightTab?.id
     && restoredPreviewKeysRef.current.right !== rightTab.id
-    && getStoredReadingTop(rightTab.id) > 0
+    && getStoredPreviewTop(rightTab.id) > 0
   )
 
   const saveEditorReadingPosition = useCallback((tabId: string) => {
     const view = editorViewRef.current
     if (!view) return
     saveReadingPosition(tabId, {
-      scrollTop: view.scrollDOM.scrollTop,
+      editorScrollTop: view.scrollDOM.scrollTop,
+      topLine: getEditorTopLine(view),
     })
   }, [saveReadingPosition])
 
   const savePreviewReadingPosition = useCallback((
     tabId: string,
-    container: HTMLElement | null
+    container: HTMLElement | null,
+    previewVersion: number
   ) => {
     if (isRestoringScrollRef.current) return
     if (!container) return
     saveReadingPosition(tabId, {
-      scrollTop: container.scrollTop,
+      previewScrollTop: container.scrollTop,
+      topLine: getPreviewLineAtTop(container, previewVersion, previewAnchorCacheRef.current),
     })
   }, [saveReadingPosition])
 
@@ -231,10 +280,22 @@ export function EditorArea() {
     const position = readingPositionsRef.current[tabId]
     if (!view || !position) return
 
-    const nextTop = position.scrollTop ?? 0
-    if (typeof nextTop === 'number') {
-      view.scrollDOM.scrollTop = nextTop
+    if (editorRestoreFrameRef.current !== null) {
+      window.cancelAnimationFrame(editorRestoreFrameRef.current)
     }
+    editorRestoreFrameRef.current = window.requestAnimationFrame(() => {
+      editorRestoreFrameRef.current = null
+      const currentMode = useEditorStore.getState().viewMode
+      if (editorViewRef.current !== view || (currentMode !== 'edit' && currentMode !== 'edit-preview')) return
+      if (typeof position.topLine === 'number' && position.topLine <= view.state.doc.lines) {
+        const pos = view.state.doc.line(position.topLine).from
+        view.dispatch({
+          effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: SCROLL_SYNC_TOP_OFFSET }),
+        })
+      } else if (typeof position.editorScrollTop === 'number') {
+        view.scrollDOM.scrollTop = position.editorScrollTop
+      }
+    })
   }, [])
 
   const restorePreviewReadingPosition = useCallback((
@@ -244,7 +305,11 @@ export function EditorArea() {
   ) => {
     const position = readingPositionsRef.current[tabId]
     if (!container) return
-    const nextTop = position?.scrollTop ?? 0
+    const lineTop = position?.previewScrollTop === undefined && position?.topLine
+      ? getPreviewTopForLine(container, position.topLine)
+      : undefined
+    const nextTop = position?.previewScrollTop
+      ?? (typeof lineTop === 'number' ? Math.max(0, lineTop - SCROLL_SYNC_TOP_OFFSET) : 0)
     withRestoreLock(() => {
       container.scrollTop = nextTop
     })
@@ -255,7 +320,11 @@ export function EditorArea() {
   useEffect(() => {
     if (!activeTab?.id || (viewMode !== 'edit' && viewMode !== 'edit-preview')) return
     let view: EditorView | null = null
-    const handleScroll = () => saveEditorReadingPosition(activeTab.id)
+    const handleScroll = () => {
+      const currentMode = useEditorStore.getState().viewMode
+      if (currentMode !== 'edit' && currentMode !== 'edit-preview') return
+      saveEditorReadingPosition(activeTab.id)
+    }
     let frame = window.requestAnimationFrame(() => {
       view = editorViewRef.current
       if (!view) return
@@ -265,7 +334,6 @@ export function EditorArea() {
     return () => {
       window.cancelAnimationFrame(frame)
       if (view) {
-        saveEditorReadingPosition(activeTab.id)
         view.scrollDOM.removeEventListener('scroll', handleScroll)
       }
     }
@@ -273,6 +341,7 @@ export function EditorArea() {
 
   useLayoutEffect(() => {
     if (!activeTab?.id) return
+    const restoreStartedAt = import.meta.env.DEV ? performance.now() : 0
     if (viewMode === 'edit' || viewMode === 'edit-preview') {
       restoreEditorReadingPosition(activeTab.id)
     }
@@ -281,6 +350,9 @@ export function EditorArea() {
     }
     if (viewMode === 'dual-preview' && rightTab?.id) {
       restorePreviewReadingPosition(rightTab.id, rightPreviewRef.current, 'right')
+    }
+    if (leftPreviewVisible) {
+      reportPreviewSwitchPerformance(activeTab.id, restoreStartedAt)
     }
   }, [
     activePreview.version,
@@ -335,6 +407,10 @@ export function EditorArea() {
       window.cancelAnimationFrame(restoreScrollFrameRef.current)
       restoreScrollFrameRef.current = null
     }
+    if (editorRestoreFrameRef.current !== null) {
+      window.cancelAnimationFrame(editorRestoreFrameRef.current)
+      editorRestoreFrameRef.current = null
+    }
   }, [])
 
   const handleEditorChange = useCallback(
@@ -360,7 +436,7 @@ export function EditorArea() {
     const container = leftPreviewRef.current
     if (!container) return
 
-    const targetTop = getPreviewTopForLine(container, line, activePreview.version, previewAnchorCacheRef.current)
+    const targetTop = getPreviewTopForLine(container, line)
     if (typeof targetTop !== 'number') return
 
     setScrollSyncSource('editor')
@@ -491,10 +567,11 @@ export function EditorArea() {
   }, [persistTabContent])
 
   const handleActiveTaskToggle = useCallback((line: number, checked: boolean) => {
-    if (!activeTabId) return
-    const tab = useEditorStore.getState().tabs.find((item) => item.id === activeTabId)
+    const state = useEditorStore.getState()
+    if (!state.activeTabId) return
+    const tab = state.tabs.find((item) => item.id === state.activeTabId)
     if (tab) void handleTaskToggle(tab.id, tab.content, line, checked)
-  }, [activeTabId, handleTaskToggle])
+  }, [handleTaskToggle])
 
   const handleRightTaskToggle = useCallback((line: number, checked: boolean) => {
     if (!rightTab?.id) return
@@ -504,13 +581,13 @@ export function EditorArea() {
 
   const handleLeftPreviewScroll = useCallback(() => {
     if (!activeTab?.id) return
-    savePreviewReadingPosition(activeTab.id, leftPreviewRef.current)
-  }, [activeTab?.id, savePreviewReadingPosition])
+    savePreviewReadingPosition(activeTab.id, leftPreviewRef.current, activePreview.version)
+  }, [activePreview.version, activeTab?.id, savePreviewReadingPosition])
 
   const handleRightPreviewScroll = useCallback(() => {
     if (!rightTab?.id) return
-    savePreviewReadingPosition(rightTab.id, rightPreviewRef.current)
-  }, [rightTab?.id, savePreviewReadingPosition])
+    savePreviewReadingPosition(rightTab.id, rightPreviewRef.current, rightPreview.version)
+  }, [rightPreview.version, rightTab?.id, savePreviewReadingPosition])
 
   const jumpToLine = useCallback((line: number) => {
     const view = editorViewRef.current
@@ -522,6 +599,11 @@ export function EditorArea() {
     })
     view.focus()
   }, [])
+
+  const handleLeftPreviewHeadingClick = useCallback((line: number) => {
+    if (viewModeRef.current !== 'edit-preview') return
+    jumpToLine(line)
+  }, [jumpToLine])
 
   const jumpToEditorHeading = useCallback((item: TocItem) => {
     jumpToLine(item.line)
@@ -890,8 +972,8 @@ export function EditorArea() {
   const getSearchProps = () => {
     if (viewMode === 'edit' || viewMode === 'edit-preview') return { editorViewRef }
     const panes: React.RefObject<HTMLDivElement>[] = []
-    if (leftPreviewRef.current) panes.push(leftPreviewRef)
-    if (rightPreviewRef.current) panes.push(rightPreviewRef)
+    if (leftPreviewVisible && leftPreviewRef.current) panes.push(leftPreviewRef)
+    if (viewMode === 'dual-preview' && rightPreviewRef.current) panes.push(rightPreviewRef)
     return { previewPanes: panes }
   }
 
@@ -902,55 +984,69 @@ export function EditorArea() {
       <div className="flex-1 flex overflow-hidden relative">
         {tabs.length === 0 ? (
           <WelcomeScreen />
-        ) : viewMode === 'diff-preview' ? (
-          <MarkdownDiffView original={activeTab?.originalContent || ''} current={activeTab?.content || ''} />
-        ) : viewMode === 'preview' ? (
-          <div className="flex flex-1 overflow-hidden bg-gm-surface">
-            <div
-              ref={leftPreviewRef}
-              className="flex-1 overflow-auto p-6 select-text"
-              style={leftPreviewMasked ? { visibility: 'hidden' } : undefined}
-              onScroll={handleLeftPreviewScroll}
-              onContextMenu={(e) => handlePreviewContextMenu(e, 'left')}
-            >
-              <MarkdownPreview
-                content={activePreview.content}
-                filePath={activeTab?.filePath}
-                fontSize={editorFontSize}
-                lineHeight={editorLineHeight}
-                onTaskToggle={activeTab ? handleActiveTaskToggle : undefined}
-              />
-            </div>
-            <MarkdownToc
-              toc={toc}
-              collapsed={tocCollapsed}
-              onToggle={() => setTocCollapsed((collapsed) => !collapsed)}
-              onHeadingClick={jumpToPreviewHeading}
-              activeHeading={activeHeading}
-            />
-          </div>
-        ) : viewMode === 'dual-preview' ? (
+        ) : (
           <>
-            <div
-              ref={leftPreviewRef}
-              className="min-w-0 flex-1 border-r border-gm-border-subtle overflow-auto p-6 select-text bg-gm-surface"
-              style={leftPreviewMasked ? { visibility: 'hidden' } : undefined}
-              onScroll={handleLeftPreviewScroll}
-              onContextMenu={(e) => handlePreviewContextMenu(e, 'left')}
-            >
-              <PaneHeader title={activeTab?.title || ''} />
-              <MarkdownPreview
-                content={activePreview.content}
-                filePath={activeTab?.filePath}
-                fontSize={editorFontSize}
-                lineHeight={editorLineHeight}
-                onTaskToggle={activeTab ? handleActiveTaskToggle : undefined}
-              />
+            {viewMode === 'diff-preview' && (
+              <MarkdownDiffView original={activeTab?.originalContent || ''} current={activeTab?.content || ''} />
+            )}
+            <div className={`${viewMode === 'diff-preview' ? 'hidden' : 'flex'} flex-1 overflow-hidden bg-gm-surface`}>
+            <div className={`${editorVisible ? (viewMode === 'edit-preview' ? 'min-w-0 flex-1 border-r border-gm-border-subtle' : 'flex-1') : 'hidden'} overflow-hidden relative`}>
+              {activeTab && (
+                <CodeMirrorEditor
+                  content={activeTab.content}
+                  onChange={handleEditorChange}
+                  onSave={handleSave}
+                  onImageFiles={(files, insertAt) => void handleInsertImageFiles(files, insertAt)}
+                  viewRef={editorViewRef}
+                  documentKey={activeTab.id}
+                  tabId={activeTab.id}
+                  initialScrollTop={getStoredEditorTop(activeTab.id)}
+                />
+              )}
+              {activeTab && (
+                <button
+                  type="button"
+                  onClick={() => void handleChooseImage()}
+                  className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-lg border border-gm-border bg-gm-surface/90 text-gm-text-secondary shadow-sm hover:border-gm-primary/50 hover:text-gm-primary"
+                  title="选择图片插入"
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <path d="M21 15l-5-5L5 21" />
+                  </svg>
+                </button>
+              )}
+              <EditorContextMenu viewRef={editorViewRef} />
             </div>
+
+            {leftPreviewMountedRef.current && (
+              <div
+                ref={leftPreviewRef}
+                className={`${leftPreviewVisible ? 'min-w-0 flex-1' : 'hidden'} ${viewMode === 'dual-preview' ? 'border-r border-gm-border-subtle' : ''} ${viewMode === 'edit-preview' ? 'gm-preview-heading-clickable' : ''} overflow-auto p-6 select-text bg-gm-surface relative`}
+                style={leftPreviewMasked ? { visibility: 'hidden' } : undefined}
+                aria-hidden={!leftPreviewVisible}
+                onScroll={handleLeftPreviewScroll}
+                onContextMenu={(e) => handlePreviewContextMenu(e, 'left')}
+              >
+                {viewMode === 'dual-preview' && <PaneHeader title={activeTab?.title || ''} />}
+                <MarkdownPreview
+                  content={leftPreviewRenderRef.current.content}
+                  filePath={leftPreviewRenderRef.current.filePath}
+                  fontSize={editorFontSize}
+                  lineHeight={editorLineHeight}
+                  onHeadingClick={handleLeftPreviewHeadingClick}
+                  onTaskToggle={activeTab ? handleActiveTaskToggle : undefined}
+                />
+              </div>
+            )}
+
+            {rightPreviewMountedRef.current && (
             <div
               ref={rightPreviewRef}
-              className={`min-w-0 flex-1 overflow-auto p-6 select-text bg-gm-surface relative ${rightPaneDragOver ? 'ring-2 ring-inset ring-gm-primary/40' : ''}`}
+              className={`${viewMode === 'dual-preview' ? 'min-w-0 flex-1' : 'hidden'} overflow-auto p-6 select-text bg-gm-surface relative ${rightPaneDragOver ? 'ring-2 ring-inset ring-gm-primary/40' : ''}`}
               style={rightPreviewMasked ? { visibility: 'hidden' } : undefined}
+              aria-hidden={viewMode !== 'dual-preview'}
               onScroll={handleRightPreviewScroll}
               onDragOver={handleRightPaneDragOver}
               onDragLeave={handleRightPaneDragLeave}
@@ -983,72 +1079,25 @@ export function EditorArea() {
                 </div>
               )}
             </div>
+            )}
+            {viewMode === 'dual-preview' && (
             <MarkdownToc
               collapsed={tocCollapsed}
               onToggle={() => setTocCollapsed((collapsed) => !collapsed)}
               sections={dualPreviewTocSections}
             />
-          </>
-        ) : (
-          <>
-            <div className={`${viewMode === 'edit-preview' ? 'min-w-0 flex-1 border-r border-gm-border-subtle' : 'flex-1'} overflow-hidden relative`}>
-              {activeTab && (
-                <CodeMirrorEditor
-                  content={activeTab.content}
-                  onChange={handleEditorChange}
-                  onSave={handleSave}
-                  onImageFiles={(files, insertAt) => void handleInsertImageFiles(files, insertAt)}
-                  viewRef={editorViewRef}
-                  documentKey={activeTab.id}
-                  tabId={activeTab.id}
-                  initialScrollTop={getStoredReadingTop(activeTab.id)}
-                />
-              )}
-              {activeTab && (
-                <button
-                  type="button"
-                  onClick={() => void handleChooseImage()}
-                  className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-lg border border-gm-border bg-gm-surface/90 text-gm-text-secondary shadow-sm hover:border-gm-primary/50 hover:text-gm-primary"
-                  title="选择图片插入"
-                >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                    <circle cx="8.5" cy="8.5" r="1.5" />
-                    <path d="M21 15l-5-5L5 21" />
-                  </svg>
-                </button>
-              )}
-              <EditorContextMenu viewRef={editorViewRef} />
-            </div>
-
-            {viewMode === 'edit-preview' && (
-              <div
-                ref={leftPreviewRef}
-                className="min-w-0 flex-1 overflow-auto p-6 select-text bg-gm-surface relative"
-                style={leftPreviewMasked ? { visibility: 'hidden' } : undefined}
-                onScroll={handleLeftPreviewScroll}
-                onContextMenu={(e) => handlePreviewContextMenu(e, 'left')}
-              >
-                <MarkdownPreview
-                  content={activePreview.content}
-                  filePath={activeTab?.filePath}
-                  fontSize={editorFontSize}
-                  lineHeight={editorLineHeight}
-                  onHeadingClick={jumpToLine}
-                  onTaskToggle={activeTab ? handleActiveTaskToggle : undefined}
-                />
-              </div>
             )}
 
-            {(viewMode === 'edit' || viewMode === 'edit-preview') && (
+            {viewMode !== 'dual-preview' && (
               <MarkdownToc
                 toc={toc}
                 collapsed={tocCollapsed}
                 onToggle={() => setTocCollapsed((collapsed) => !collapsed)}
-                onHeadingClick={viewMode === 'edit-preview' ? jumpToPreviewHeading : jumpToEditorHeading}
+                onHeadingClick={leftPreviewVisible ? jumpToPreviewHeading : jumpToEditorHeading}
                 activeHeading={activeHeading}
               />
             )}
+            </div>
           </>
         )}
 
@@ -1156,35 +1205,63 @@ function getCachedPreviewAnchors(
 
 function getPreviewTopForLine(
   container: HTMLElement,
-  line: number,
-  version: number,
-  cache: WeakMap<HTMLElement, { version: number; anchors: PreviewLineAnchor[] }>
+  line: number
 ): number | undefined {
-  const anchors = getCachedPreviewAnchors(container, version, cache)
-  if (anchors.length === 0) return undefined
+  let previousElement: HTMLElement | undefined
+  let previousLine = -1
+  let nextElement: HTMLElement | undefined
+  let nextLine = Number.POSITIVE_INFINITY
 
-  let previous = anchors[0]
-  let next: PreviewLineAnchor | undefined
-  for (const anchor of anchors) {
-    if (anchor.line <= line) {
-      previous = anchor
-      continue
+  for (const element of container.querySelectorAll<HTMLElement>('[data-md-line]')) {
+    const elementLine = Number(element.dataset.mdLine)
+    if (!Number.isFinite(elementLine) || elementLine < 1) continue
+    if (elementLine <= line && elementLine > previousLine) {
+      previousElement = element
+      previousLine = elementLine
+    } else if (elementLine > line && elementLine < nextLine) {
+      nextElement = element
+      nextLine = elementLine
     }
-    next = anchor
-    break
   }
 
-  if (previous.endLine && previous.endLine > previous.line && line <= previous.endLine) {
-    const progress = (line - previous.line) / Math.max(1, previous.endLine - previous.line)
-    return previous.top + previous.height * progress
+  const anchorElement = previousElement ?? nextElement
+  if (!anchorElement) return undefined
+  const containerTop = container.getBoundingClientRect().top
+  const anchorRect = anchorElement.getBoundingClientRect()
+  const anchorTop = anchorRect.top - containerTop + container.scrollTop
+  const endLine = Number(anchorElement.dataset.mdEndLine)
+  if (previousElement && Number.isFinite(endLine) && endLine > previousLine && line <= endLine) {
+    const progress = (line - previousLine) / (endLine - previousLine)
+    return anchorTop + anchorRect.height * progress
   }
 
-  if (next && next.line !== previous.line) {
-    const progress = (line - previous.line) / Math.max(1, next.line - previous.line)
-    return previous.top + (next.top - previous.top) * Math.max(0, Math.min(1, progress))
+  if (previousElement && nextElement && nextLine !== previousLine) {
+    const nextTop = nextElement.getBoundingClientRect().top - containerTop + container.scrollTop
+    const progress = (line - previousLine) / (nextLine - previousLine)
+    return anchorTop + (nextTop - anchorTop) * Math.max(0, Math.min(1, progress))
   }
 
-  return previous.top
+  return anchorTop
+}
+
+function reportPreviewSwitchPerformance(tabId: string, restoreStartedAt: number) {
+  if (!import.meta.env.DEV) return
+  const startMark = `${PREVIEW_SWITCH_MARK_PREFIX}:${tabId}:start`
+  const entries = performance.getEntriesByName(startMark, 'mark')
+  const start = entries[entries.length - 1]
+  if (!start) return
+
+  const committedAt = performance.now()
+  window.requestAnimationFrame(() => {
+    const firstFrameAt = performance.now()
+    console.debug('[预览切换性能]', {
+      tabId,
+      commitMs: Number((committedAt - start.startTime).toFixed(1)),
+      restoreMs: Number((committedAt - restoreStartedAt).toFixed(1)),
+      firstFrameMs: Number((firstFrameAt - start.startTime).toFixed(1)),
+    })
+    performance.clearMarks(startMark)
+  })
 }
 
 function getPreviewLineAtTop(

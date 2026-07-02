@@ -163,6 +163,13 @@ function shouldMaskPreviewSwitch(viewMode: ViewMode) {
   return viewMode === 'preview' || viewMode === 'edit-preview' || viewMode === 'dual-preview'
 }
 
+function markPreviewSwitchStart(tabId: string, viewMode: ViewMode) {
+  if (!import.meta.env.DEV || !shouldMaskPreviewSwitch(viewMode)) return
+  const markName = `guanmo:preview-switch:${tabId}:start`
+  performance.clearMarks(markName)
+  performance.mark(markName)
+}
+
 export const useEditorStore = create<EditorState>()(
   persist(
     (set, get) => ({
@@ -269,6 +276,9 @@ export const useEditorStore = create<EditorState>()(
       },
 
       setActiveTab: (id) => set((s) => {
+        if (s.activeTabId !== id) {
+          markPreviewSwitchStart(id, s.viewMode)
+        }
         let rightPaneTabId = s.rightPaneTabId
         if (s.viewMode === 'dual-preview' && !s.rightPaneUserSelected) {
           rightPaneTabId = id

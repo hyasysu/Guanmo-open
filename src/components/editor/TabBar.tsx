@@ -293,13 +293,14 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
                 onDragEnd={handleDragEnd}
                 className={`h-full px-3 flex items-center gap-1.5 text-caption border-r border-gm-border-subtle group select-none cursor-pointer ${
                   activeTabId === tab.id
-                    ? 'bg-gm-canvas text-gm-text font-bold border-b-2 border-b-gm-primary'
+                    ? 'bg-gm-canvas text-gm-text font-bold'
                     : 'text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover'
                 } ${dragState?.tabId === tab.id ? 'opacity-50' : ''} ${
                   dragOverTabId === tab.id && dragState?.tabId !== tab.id
                     ? 'border-l-2 border-l-gm-primary'
                     : ''
                 }`}
+                style={activeTabId === tab.id ? { borderBottom: '2px solid var(--gm-active-indicator)' } : undefined}
               >
                 <FileIconSmall extension={tab.title.split('.').pop() || ''} />
                 {renamingTabId === tab.id ? (

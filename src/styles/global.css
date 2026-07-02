@@ -598,6 +598,14 @@ body {
   color: var(--gm-markdown-heading);
 }
 
+.gm-preview-heading-clickable [data-heading-id] {
+  cursor: pointer !important;
+}
+
+.gm-preview-heading-clickable [data-heading-id]:hover {
+  color: var(--gm-primary);
+}
+
 .gm-markdown-preview p,
 .gm-markdown-preview li,
 .gm-markdown-preview td {

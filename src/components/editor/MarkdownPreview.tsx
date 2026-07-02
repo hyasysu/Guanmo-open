@@ -6,8 +6,13 @@ import rehypeKatex from 'rehype-katex'
 import { isValidElement, memo, useEffect, useMemo, useState } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '@/hooks/useTauri'
-import { createHeadingId, extractToc, type TocItem } from '@/services/markdownToc'
+import { createHeadingId, type TocItem } from '@/services/markdownToc'
 import { normalizeLatexBlockDelimiters, remarkStandaloneDisplayMath } from '@/services/markdownMath'
+
+const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath, remarkStandaloneDisplayMath]
+const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex, rehypeHighlight]
+const NORMALIZED_MARKDOWN_CACHE_LIMIT = 4
+const normalizedMarkdownCache = new Map<string, string>()
 
 interface MarkdownPreviewProps {
   content: string
@@ -18,6 +23,19 @@ interface MarkdownPreviewProps {
   onHeadingClick?: (line: number) => void
 }
 
+function getNormalizedMarkdown(content: string): string {
+  const cached = normalizedMarkdownCache.get(content)
+  if (cached !== undefined) return cached
+
+  const normalized = normalizeLatexBlockDelimiters(content)
+  normalizedMarkdownCache.set(content, normalized)
+  if (normalizedMarkdownCache.size > NORMALIZED_MARKDOWN_CACHE_LIMIT) {
+    const oldest = normalizedMarkdownCache.keys().next().value
+    if (oldest !== undefined) normalizedMarkdownCache.delete(oldest)
+  }
+  return normalized
+}
+
 export const MarkdownPreview = memo(function MarkdownPreview({
   content,
   filePath,
@@ -26,8 +44,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   onTaskToggle,
   onHeadingClick,
 }: MarkdownPreviewProps) {
-  const toc = useMemo(() => extractToc(content), [content])
-  const normalizedContent = useMemo(() => normalizeLatexBlockDelimiters(content), [content])
+  const normalizedContent = useMemo(() => getNormalizedMarkdown(content), [content])
   const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
   const headingIds = new Map<string, number>()
   const handleAnchorClick = (href?: string) => (event: React.MouseEvent<HTMLAnchorElement>) => {
@@ -52,14 +69,14 @@ export const MarkdownPreview = memo(function MarkdownPreview({
       style={{ fontSize: `${fontSize}px`, lineHeight }}
     >
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath, remarkStandaloneDisplayMath]}
-          rehypePlugins={[rehypeKatex, rehypeHighlight]}
+          remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+          rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
           components={{
           h1: ({ children, node }) => {
             const line = getNodeStartLine(node)
             const id = line ? `heading-${line}` : createHeadingId(getText(children), headingIds)
             return (
-              <h1 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-8 mb-4 text-gm-text border-b border-gm-border pb-3 ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '2em' }}>
+              <h1 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className="scroll-mt-6 font-bold mt-8 mb-4 text-gm-text border-b border-gm-border pb-3" style={{ fontSize: '2em' }}>
                 {children}
               </h1>
             )
@@ -68,7 +85,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             const line = getNodeStartLine(node)
             const id = line ? `heading-${line}` : createHeadingId(getText(children), headingIds)
             return (
-              <h2 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-8 mb-4 text-gm-text ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '1.5em' }}>
+              <h2 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className="scroll-mt-6 font-bold mt-8 mb-4 text-gm-text" style={{ fontSize: '1.5em' }}>
                 {children}
               </h2>
             )
@@ -77,7 +94,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             const line = getNodeStartLine(node)
             const id = line ? `heading-${line}` : createHeadingId(getText(children), headingIds)
             return (
-              <h3 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-6 mb-3 text-gm-text ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '1.25em' }}>
+              <h3 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className="scroll-mt-6 font-bold mt-6 mb-3 text-gm-text" style={{ fontSize: '1.25em' }}>
                 {children}
               </h3>
             )
@@ -86,7 +103,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             const line = getNodeStartLine(node)
             const id = line ? `heading-${line}` : createHeadingId(getText(children), headingIds)
             return (
-              <h4 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-4 mb-2 text-gm-text ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '1.1em' }}>
+              <h4 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className="scroll-mt-6 font-bold mt-4 mb-2 text-gm-text" style={{ fontSize: '1.1em' }}>
                 {children}
               </h4>
             )
@@ -349,10 +366,6 @@ function getText(node: React.ReactNode): string {
   return ''
 }
 
-function getHeadingLine(toc: TocItem[], id: string): number | undefined {
-  return toc.find((item) => item.id === id)?.line
-}
-
 function getNodeStartLine(node: unknown): number | undefined {
   return getNodeLine(node, 'start')
 }
@@ -470,14 +483,14 @@ export function MarkdownToc({
         </svg>
       </button>
       {!collapsed && (
-        <nav aria-label="文档目录" className="h-full px-4 py-6 text-micro text-gm-text-tertiary">
-          <div className={dualColumn ? 'flex h-full gap-3 overflow-hidden' : 'max-h-full space-y-4 overflow-y-auto pr-1'}>
+        <nav aria-label="文档目录" className="h-full pl-4 pr-0 py-3 text-micro text-gm-text-tertiary">
+          <div className={dualColumn ? 'flex h-full gap-3 overflow-hidden' : 'max-h-full space-y-4 overflow-y-auto'}>
             {visibleSections.map((section) => (
-              <section key={section.key} className={dualColumn ? 'flex min-h-0 min-w-0 flex-1 flex-col' : undefined}>
+              <section key={section.key} className={dualColumn ? 'flex min-h-0 min-w-0 flex-1 flex-col' : 'pr-4'}>
                 <div className="mb-2 truncate font-bold text-gm-text-secondary" title={section.title}>
                   {section.title}
                 </div>
-                <div className={dualColumn ? 'min-h-0 flex-1 space-y-1 overflow-y-auto pr-1' : 'space-y-1'}>
+                <div className={dualColumn ? 'min-h-0 flex-1 space-y-1 overflow-y-auto' : 'space-y-1'}>
                   {section.toc.length > 1 ? (
                     section.toc.map((item) => {
                       const currentActive = section.activeHeading !== undefined ? section.activeHeading : activeHeading
@@ -489,10 +502,16 @@ export function MarkdownToc({
                           onClick={() => section.onHeadingClick(item)}
                           className={`block w-full truncate rounded-md py-1 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gm-primary/30 ${
                             isActive
-                              ? 'bg-gm-primary/10 text-gm-primary font-bold'
+                              ? 'font-bold'
                               : 'hover:bg-gm-surface-hover hover:text-gm-primary'
                           }`}
-                          style={{ paddingLeft: 6 + Math.max(0, item.level - 1) * 10 }}
+                          style={{
+                            paddingLeft: 6 + Math.max(0, item.level - 1) * 10,
+                            ...(isActive ? {
+                              backgroundColor: 'color-mix(in srgb, var(--gm-active-indicator) 10%, transparent)',
+                              color: 'var(--gm-active-indicator)',
+                            } : {}),
+                          }}
                           title={`${item.text}（第 ${item.line} 行）`}
                         >
                           {item.text}
