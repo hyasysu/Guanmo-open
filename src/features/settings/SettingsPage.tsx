@@ -522,8 +522,8 @@ function EditorSettings() {
       <SettingField label="同步滚动" description="编辑 + 预览模式下同步两侧滚动位置">
         <Switch checked={editor.syncScroll} onChange={(v) => updateEditorSettings({ syncScroll: v })} />
       </SettingField>
-      <SettingField label="自动保存" description="编辑后自动保存">
-        <Switch checked={editor.autoSave} onChange={(v) => updateEditorSettings({ autoSave: v })} />
+      <SettingField label="自动保存" description={!isTauri() ? "浏览器模式下自动保存不可用" : "编辑后自动保存"}>
+        <Switch checked={editor.autoSave} onChange={(v) => updateEditorSettings({ autoSave: v })} disabled={!isTauri()} />
       </SettingField>
     </div>
   )
@@ -691,7 +691,7 @@ function GeneralSettings() {
           <img src={appIcon} alt="观墨" className="w-full h-full object-cover" />
         </div>
         <div>
-          <div className="text-body font-bold text-gm-text">观墨 v1.0.2</div>
+          <div className="text-body font-bold text-gm-text">观墨 v1.0.3</div>
           <div className="text-caption text-gm-text-tertiary">AI 驱动的 Markdown 知识管理</div>
         </div>
       </div>
