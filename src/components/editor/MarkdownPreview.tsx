@@ -7,6 +7,7 @@ import { isValidElement, memo, useEffect, useMemo, useState } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '@/hooks/useTauri'
 import { createHeadingId, extractToc, type TocItem } from '@/services/markdownToc'
+import { normalizeLatexBlockDelimiters, remarkStandaloneDisplayMath } from '@/services/markdownMath'
 
 interface MarkdownPreviewProps {
   content: string
@@ -26,6 +27,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   onHeadingClick,
 }: MarkdownPreviewProps) {
   const toc = useMemo(() => extractToc(content), [content])
+  const normalizedContent = useMemo(() => normalizeLatexBlockDelimiters(content), [content])
   const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
   const headingIds = new Map<string, number>()
   const handleAnchorClick = (href?: string) => (event: React.MouseEvent<HTMLAnchorElement>) => {
@@ -50,7 +52,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
       style={{ fontSize: `${fontSize}px`, lineHeight }}
     >
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath]}
+          remarkPlugins={[remarkGfm, remarkMath, remarkStandaloneDisplayMath]}
           rehypePlugins={[rehypeKatex, rehypeHighlight]}
           components={{
           h1: ({ children, node }) => {
@@ -90,7 +92,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             )
           },
           p: ({ children, node }) => (
-            <p className="my-3" data-md-line={getNodeStartLine(node)}>{children}</p>
+            <p className="my-3" data-md-line={getNodeStartLine(node)} data-md-end-line={getNodeEndLine(node)}>{children}</p>
           ),
           strong: ({ children }) => (
             <strong className="font-bold text-gm-text">{children}</strong>
@@ -127,7 +129,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             )
           },
           blockquote: ({ children, node }) => (
-            <blockquote className="pl-4 border-l-4 border-gm-primary rounded-r-lg py-3 text-gm-text-secondary italic my-4" data-md-line={getNodeStartLine(node)}>
+            <blockquote className="pl-4 border-l-4 border-gm-primary rounded-r-lg py-3 text-gm-text-secondary italic my-4" data-md-line={getNodeStartLine(node)} data-md-end-line={getNodeEndLine(node)}>
               {children}
             </blockquote>
           ),
@@ -234,7 +236,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
           },
         }}
         >
-          {content}
+          {normalizedContent}
         </ReactMarkdown>
       {zoomImage && (
         <div

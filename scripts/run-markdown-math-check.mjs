@@ -2,28 +2,22 @@ import { Buffer } from 'node:buffer'
 import { build } from 'esbuild'
 
 const result = await build({
-  entryPoints: ['scripts/agent-tool-parser-check.ts'],
+  entryPoints: ['scripts/markdown-math-check.tsx'],
   bundle: true,
   platform: 'node',
   format: 'esm',
+  banner: {
+    js: "import { createRequire } from 'node:module'; const require = createRequire(process.cwd() + '/scripts/markdown-math-check.cjs');",
+  },
   write: false,
   logLevel: 'silent',
 })
 
 const code = result.outputFiles[0].text
 const encoded = Buffer.from(code, 'utf8').toString('base64')
-globalThis.window = globalThis
-globalThis.addEventListener = () => {}
-globalThis.removeEventListener = () => {}
-globalThis.document = {
-  addEventListener: () => {},
-  visibilityState: 'visible',
-  documentElement: { dataset: {} },
-}
 try {
   await import(`data:text/javascript;base64,${encoded}`)
-  process.exit(0)
 } catch (error) {
-  console.error(error instanceof Error ? error.message : error)
+  console.error(error instanceof Error ? error.message : String(error))
   process.exitCode = 1
 }

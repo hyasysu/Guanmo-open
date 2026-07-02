@@ -58,6 +58,13 @@ ${CONTEXT_SAFETY_PROMPT}
 
 当你能直接回答时，直接输出答案文本。
 
+选区上下文读取规则：
+1. selection 标签正文已直接提供；问题明确提到上下文、前后文、结合上下文、附近内容、周围内容，或依赖原因、推导、对比、正确性时，优先调用 read_selection_context。
+2. 工具顺序固定为：选区正文 → read_selection_context Level 1 → 必要时 Level 2 → 用户明确要求全文时 read_context_file。不得因为存在 selection 标签就默认读取全文。
+3. read_selection_context 必须先调用 Level 1（当前语义原子 + 700 tokens 预算内的高相关邻居）；只有原因、推导、对比、关系、错误分析等问题在 Level 1 后仍明显信息不足，或选区是孤立片段时，才调用 Level 2（累计 1400 tokens，delta only）。
+4. Level 2 累计扩展到上文 4 Chunk + 当前 Chunk + 下文 2 Chunk，但只返回 Level 1 尚未读取的新增 Chunk。同一轮禁止跳级或重复读取同一层。
+5. 不得因为 Level 2 仍不足就直接读取全文；只有用户明确要求阅读全文或全文分析时，才调用 read_context_file。
+
 修改文档的强制规则：
 1. 任何文本修改请求都必须携带用户在本轮消息中新添加的 selection 或 file 标签。没有本轮目标标签时，不得调用修改工具、不得生成确认卡片，必须明确提示用户重新添加要修改的 tag 后重新发起请求。
 2. 修改意图包括但不限于：修改、润色、改写、重写、覆写、重构、调整、更新、扩写、缩写、续写、替换、加粗、斜体、删除、插入、补充、优化、撤销、恢复、还原、改回、取消刚才的修改。
@@ -257,7 +264,10 @@ async function executeTool(
       ),
     ])
     if (isPendingEditResult(result)) return { result, rawResult: result }
-    return { result: truncate(result, getToolTokenBudget(name)), rawResult: result }
+    return {
+      result: name === 'read_selection_context' ? result : truncate(result, getToolTokenBudget(name)),
+      rawResult: result,
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     const result = `工具执行出错: ${msg}`
@@ -275,7 +285,8 @@ async function executeToolCalls(
   toolCalls: Array<{ name: string; args: Record<string, unknown> }>,
   timeout: number,
   userIntent: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  selectionContextReadLevels?: Map<string, 1 | 2>,
 ): Promise<Array<{ name: string; result: string; rawResult?: string; executed?: boolean }>> {
   // 分离读取类和写入类工具
   const readCalls = toolCalls.filter(tc => isReadTool(tc.name))
@@ -283,10 +294,13 @@ async function executeToolCalls(
 
   const results: Array<{ name: string; result: string; rawResult?: string; executed?: boolean }> = []
 
-  // 读取类工具并行执行
-  if (readCalls.length > 0) {
+  const regularReadCalls = readCalls.filter((call) => call.name !== 'read_selection_context')
+  const selectionContextCalls = readCalls.filter((call) => call.name === 'read_selection_context')
+
+  // 普通读类工具并行执行；selectionContext 需要按层级串行执行。
+  if (regularReadCalls.length > 0) {
     const readResults = await Promise.allSettled(
-      readCalls.map(async tc => {
+      regularReadCalls.map(async tc => {
         const executed = await executeTool(tc.name, tc.args, timeout, userIntent, signal)
         return {
           name: tc.name,
@@ -308,6 +322,38 @@ async function executeToolCalls(
     }
   }
 
+  for (const call of selectionContextCalls) {
+    const level: 1 | 2 = call.args.level === 2 ? 2 : 1
+    const selectionTargets = getAgentScopeContext()?.editTargets?.filter((target) => target.type === 'selection') || []
+    const targetId = typeof call.args.targetId === 'string'
+      ? call.args.targetId
+      : selectionTargets.length === 1 ? selectionTargets[0].id : '__unresolved_selection__'
+    const completedLevel = selectionContextReadLevels?.get(targetId) || 0
+    const rejected = validateSelectionContextReadLevel(completedLevel, level)
+    if (rejected) {
+      results.push({ name: call.name, result: rejected, rawResult: rejected, executed: false })
+      continue
+    }
+
+    const executed = await executeTool(call.name, call.args, timeout, userIntent, signal)
+    let succeeded = false
+    try {
+      const parsed = JSON.parse(executed.rawResult || executed.result)
+      const roles = new Set(
+        Array.isArray(parsed?.chunks)
+          ? parsed.chunks.map((chunk: { role?: unknown }) => chunk.role)
+          : [],
+      )
+      succeeded = level === 1
+        ? roles.has('before') && roles.has('current') && roles.has('after')
+        : Array.isArray(parsed?.chunks) && parsed.chunks.length > 0
+    } catch {
+      succeeded = false
+    }
+    if (succeeded) selectionContextReadLevels?.set(targetId, level)
+    results.push({ name: call.name, result: executed.result, rawResult: executed.rawResult })
+  }
+
   // 写入类工具本轮只允许执行第一个，避免多个确认卡片之间出现授权范围错配。
   const firstWriteCall = writeCalls[0]
   if (firstWriteCall) {
@@ -323,6 +369,16 @@ async function executeToolCalls(
   }
 
   return results
+}
+
+export function validateSelectionContextReadLevel(completedLevel: 0 | 1 | 2, requestedLevel: 1 | 2): string | null {
+  if (requestedLevel === 2 && completedLevel === 0) {
+    return '系统拒绝跳级读取：请先调用 read_selection_context level=1，再根据结果判断是否需要 level=2。'
+  }
+  if (requestedLevel <= completedLevel) {
+    return `系统拒绝重复读取：read_selection_context level=${requestedLevel} 已在本轮读取。`
+  }
+  return null
 }
 
 /**
@@ -366,6 +422,7 @@ export async function runAgent(
   const appContext: AppContext = {
     hasRecentEdit: hasRecentEditContext,
     hasOpenFile: hasCurrentEditTarget,
+    hasSelection: Boolean(getAgentScopeContext()?.contextTags.some((tag) => tag.type === 'selection')),
     hasContextTags: currentEditTargetCount > 0,
   }
 
@@ -415,6 +472,7 @@ export async function runAgent(
   let editToolCalls = 0
   const knowledgeSources: ChatMessageSource[] = []
   const calledToolNames: string[] = []
+  const selectionContextReadLevels = new Map<string, 1 | 2>()
   if (hasPrefetchedMemoryLookup) {
     calledToolNames.push('search_memory')
   }
@@ -483,11 +541,20 @@ export async function runAgent(
     const unmetCapabilities = checkRequiredCapabilities(mergedRequired, calledToolNames)
     const repairTools = getRepairTools(unmetCapabilities)
       .filter((name) => candidateTools.includes(name))
+    const prioritizedRepairTools = repairTools.includes('read_selection_context')
+      ? ['read_selection_context' as AgentToolName]
+      : repairTools
 
-    const scopeFilePath = getAgentScopeContext()?.contextTags.find(
-      (tag) => tag.type === 'file' && typeof tag.filePath === 'string'
+    const scopeContext = getAgentScopeContext()
+    const scopeFilePath = scopeContext?.contextTags.find(
+      (tag) => (tag.type === 'file' || tag.type === 'selection') && typeof tag.filePath === 'string'
     )?.filePath
-    const runnableRepairTools = repairTools.filter((name) => name !== 'read_context_file' || Boolean(scopeFilePath))
+    const selectionTargets = scopeContext?.editTargets?.filter((target) => target.type === 'selection') || []
+    const scopeSelectionTargetId = selectionTargets.length === 1 ? selectionTargets[0].id : undefined
+    const runnableRepairTools = prioritizedRepairTools.filter((name) => (
+      (name !== 'read_context_file' || Boolean(scopeFilePath))
+      && (name !== 'read_selection_context' || Boolean(scopeSelectionTargetId))
+    ))
 
     if (runnableRepairTools.length === 0) return false
 
@@ -504,13 +571,15 @@ export async function runAgent(
         name,
         args: name === 'search_memory' ? { query: userIntent, topK: 5 }
           : name === 'search_knowledge' ? { query: userIntent, topK: 8 }
+          : name === 'read_selection_context' ? { targetId: scopeSelectionTargetId }
           : name === 'read_context_file' ? { path: scopeFilePath, maxLength: 12000 }
           : name === 'get_current_time' ? {}
           : { query: userIntent },
       })),
       mergedConfig.stepTimeout,
       userIntent,
-      signal
+      signal,
+      selectionContextReadLevels,
     )
 
     for (const { name, result, rawResult } of repairResults) {
@@ -695,7 +764,8 @@ export async function runAgent(
       parsedToolCalls.map(tc => ({ name: tc.name, args: tc.args })),
       mergedConfig.stepTimeout,
       userIntent,
-      signal
+      signal,
+      selectionContextReadLevels,
     )
 
     // 记录调用的工具
@@ -722,10 +792,12 @@ export async function runAgent(
         timestamp: Date.now(),
       })
 
-      messages.push({ role: 'assistant', content: executed === false ? `未执行写入工具: ${name}` : `调用工具: ${name}` })
+      messages.push({ role: 'assistant', content: executed === false ? `未执行工具: ${name}` : `调用工具: ${name}` })
       messages.push({
         role: 'user',
-        content: truncate(`工具返回结果：\n${result}\n\n请根据以上信息继续思考或给出最终答案。`, getToolTokenBudget(name)),
+        content: name === 'read_selection_context'
+          ? `工具返回结果：\n${result}\n\n请根据以上信息继续思考或给出最终答案。`
+          : truncate(`工具返回结果：\n${result}\n\n请根据以上信息继续思考或给出最终答案。`, getToolTokenBudget(name)),
       })
     }
 

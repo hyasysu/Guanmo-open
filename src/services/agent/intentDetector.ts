@@ -15,6 +15,7 @@ import { classifyMemoryRetrievalIntent } from '@/services/memory/memoryService'
 export type Capability =
   | 'memory'
   | 'knowledge'
+  | 'selection_context'
   | 'file_read'
   | 'file_write'
   | 'web'
@@ -54,6 +55,10 @@ const KEYWORD_CONFIG: Record<Capability, { weak: string[]; strong: string[] }> =
     weak: ['知识', '文档', '笔记', '资料', '索引', 'rag', '文件内容', '文章', '这篇', '提到', '总结', '解释', '分析', '概述', '归纳'],
     strong: ['知识库', '本地知识', '本地文档', '文档库', '资料库', '笔记库', 'search_knowledge', '查找文档', '搜索文档'],
   },
+  selection_context: {
+    weak: [],
+    strong: [],
+  },
   file_read: {
     weak: ['文件', '文档', '内容', '看看', '查看', '读取', '打开'],
     strong: ['读取文件', '查看文件', '打开文件', '文件内容', 'read_context_file'],
@@ -89,6 +94,7 @@ const REGEX_PATTERNS: Record<Capability, RegExp[]> = {
     /(?:[\w\u4e00-\u9fff ._-]+\.(?:md|markdown|mdx|txt)).*(?:总结|解释|分析|概述|归纳|说了什么|讲了什么|提到|内容)/i,
     /(?:总结|解释|分析|概述|归纳|看看|查询|检索).*(?:[\w\u4e00-\u9fff ._-]+\.(?:md|markdown|mdx|txt))/i,
   ],
+  selection_context: [],
   file_read: [
     /(读取|查看|打开|看看).*(文件|文档)/i,
     /(文件|文档).*(内容|里面|说了什么)/i,
@@ -117,6 +123,24 @@ const REGEX_PATTERNS: Record<Capability, RegExp[]> = {
     /(星期|周).*(几|几号)/,
     /(时间|日期|几点).*(现在|当前|今天)/,
   ],
+}
+
+export type SelectionRequestKind = 'none' | 'fast' | 'context' | 'explicit_lookup'
+
+const SELECTION_EXPLICIT_LOOKUP_PATTERN = /(搜索|检索|查询|知识库|本地文档|读取文件|查看文件|打开文件|查看全文|阅读全文|全文内容|上下文|前后文|附近内容|周围内容)/i
+const SELECTION_CONTEXT_RISK_PATTERN = /(为什么|为何|怎么|如何|原因|理由|推导|证明|怎么算|哪里错|错在哪|是否正确|对不对|区别|对比|不同|联系|关系|改进|优化|改成)/i
+const SELECTION_QUESTION_PATTERN = /(为什么|为何|怎么|如何|原因|理由|推导|证明|怎么算|哪里错|错在哪|是否正确|对不对|区别|对比|不同|联系|关系)/i
+const SELECTION_FAST_PATTERN = /(总结|翻译|润色|改写|解释|说明|分析|整理|提炼|格式化|概述|归纳|含义|意思)/i
+
+/**
+ * 选区请求优先按当前动作分类，避免“这个/这里/那个”等指代词单独触发工具。
+ */
+export function classifySelectionRequest(query: string, context: AppContext = {}): SelectionRequestKind {
+  if (!context.hasSelection) return 'none'
+  if (SELECTION_EXPLICIT_LOOKUP_PATTERN.test(query)) return 'explicit_lookup'
+  if (SELECTION_CONTEXT_RISK_PATTERN.test(query)) return 'context'
+  if (SELECTION_FAST_PATTERN.test(query)) return 'fast'
+  return 'none'
 }
 
 /**
@@ -158,19 +182,19 @@ function scoreCapability(
   }
 
   // 上下文加成
-  if (capability === 'file_write' && context.hasRecentEdit) {
+  if (capability === 'file_write' && context.hasRecentEdit && isImplicitEditContinuation(query)) {
     score += 2
-    signals.push('context:recent_edit')
+    signals.push('context:implicit_edit_continuation')
   }
-  if (capability === 'file_read' && context.hasOpenFile) {
+  if (capability === 'file_read' && context.hasOpenFile && score > 0) {
     score += 1
     signals.push('context:open_file')
   }
-  if (capability === 'file_read' && context.hasContextTags && /(总结|解释|分析|概述|归纳|这篇|这个文件|文章|全文|内容)/.test(query)) {
+  if (capability === 'file_read' && context.hasContextTags && !context.hasSelection && /(总结|解释|分析|概述|归纳|这篇|这个文件|文章|全文|内容)/.test(query)) {
     score += 2
     signals.push('context:tagged_file_read')
   }
-  if (capability === 'memory' && context.hasContextTags) {
+  if (capability === 'memory' && context.hasContextTags && score > 0) {
     score += 1
     signals.push('context:context_tags')
   }
@@ -185,6 +209,30 @@ function scoreCapability(
       score += 2
       signals.push('classifier:weak')
     }
+  }
+
+  const selectionRequestKind = classifySelectionRequest(query, context)
+  if (
+    selectionRequestKind === 'fast'
+    && (capability === 'knowledge' || capability === 'file_read' || capability === 'file_write')
+  ) {
+    score = 0
+    signals.push('context:selection_fast_path')
+  }
+  if (
+    selectionRequestKind === 'context'
+    && capability === 'file_write'
+    && SELECTION_QUESTION_PATTERN.test(query)
+  ) {
+    score = 0
+    signals.push('context:selection_question_not_write')
+  }
+  if (
+    capability === 'selection_context'
+    && (selectionRequestKind === 'context' || selectionRequestKind === 'explicit_lookup')
+  ) {
+    score = 4
+    signals.push(`context:selection_${selectionRequestKind}`)
   }
 
   // 判断是否为强依赖
@@ -209,7 +257,7 @@ export function detectIntentScores(
   query: string,
   context: AppContext = {}
 ): IntentDetectionResult {
-  const capabilities: Capability[] = ['memory', 'knowledge', 'file_read', 'file_write', 'web', 'time']
+  const capabilities: Capability[] = ['memory', 'knowledge', 'selection_context', 'file_read', 'file_write', 'web', 'time']
 
   const scores = capabilities.map(cap => scoreCapability(cap, query, context))
 

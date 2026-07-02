@@ -14,6 +14,7 @@ import type { TextRange } from './editTarget'
 import { normalizeFilePath } from '@/services/pathIdentity'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { getEmbeddingClient, isEmbeddingReady } from '@/services/ai/aiClient'
+import { buildSelectionContextWindow, serializeSelectionContextWindow } from './selectionContext'
 
 function validateString(value: unknown, name: string): string | null {
   if (!value || typeof value !== 'string') {
@@ -263,6 +264,92 @@ export function registerBuiltinTools() {
         signal: context?.signal,
       })
       return formatKnowledgeSearchResultsStructured(results)
+    },
+  })
+
+  registerTool({
+    name: 'read_selection_context',
+    description: '按相关性读取本轮 selection 标签附近的 AST 语义原子。Level 1 在 700 tokens 总预算内返回当前语义原子及高相关邻居；仅当信息不足时再调用 Level 2，累计预算扩展到 1400 tokens 且只返回新增语义原子。允许没有相关 before/after，禁止跳过 Level 1、重复读取同一级或直接读取全文。',
+    parameters: [
+      { name: 'targetId', type: 'string', description: '本轮 selection 目标 ID；只有一个选区目标时可省略', required: false },
+      { name: 'level', type: 'number', description: '递进读取层级，只能是 1 或 2，默认 1', required: false },
+    ],
+    execute: async (args) => {
+      if (args.level !== undefined && args.level !== 1 && args.level !== 2) {
+        return '读取选区上下文失败：level 只能是 1 或 2。'
+      }
+      const level: 1 | 2 = args.level === 2 ? 2 : 1
+      const selectionTargets = getCurrentEditTargets().filter((target) => target.type === 'selection')
+      const target = args.targetId
+        ? findEditTargetById(args.targetId)
+        : selectionTargets.length === 1 ? selectionTargets[0] : undefined
+
+      if (!target || target.type !== 'selection') {
+        return selectionTargets.length > 1
+          ? '读取选区上下文失败：存在多个选区目标，请提供 targetId。'
+          : '读取选区上下文失败：本轮没有可用的 selection 标签。'
+      }
+
+      const tag = findContextTagForEditTarget(target.id)
+      const initialRange = tag ? getSelectionRange(tag) : undefined
+      if (!tag?.filePath || !initialRange) {
+        return '读取选区上下文失败：selection 标签缺少文件路径或精确字符范围。'
+      }
+
+      const openTab = getOpenTabByPath(tag.filePath)
+      let content: string
+      let range = initialRange
+
+      if (openTab) {
+        content = openTab.content
+        range = getCurrentSelectionTargetRange(
+          content,
+          initialRange,
+          getLatestAppliedRangeForSelection(openTab.id, tag),
+        ) || initialRange
+      } else {
+        try {
+          content = await readFile(tag.filePath)
+        } catch (readErr) {
+          const message = readErr instanceof Error ? readErr.message : String(readErr)
+          return `读取选区上下文失败：${message}`
+        }
+      }
+
+      const contextWindow = buildSelectionContextWindow(
+        content,
+        range,
+        /\.(?:md|markdown|mdx)$/i.test(tag.filePath),
+        level,
+      )
+      if (!contextWindow) {
+        return '读取选区上下文失败：选区范围已失效，或无法建立稳定的语义 Chunk。'
+      }
+
+      if (level === 2 && contextWindow.chunks.length === 0) {
+        return '读取选区上下文失败：Level 2 没有新的高相关语义块。'
+      }
+
+      const contextSummary = contextWindow.chunks
+        .map((chunk, index) => {
+          const heading = chunk.headingPath.length > 0 ? ` [${chunk.headingPath.join(' > ')}]` : ''
+          return `#${index + 1} ${chunk.role}${heading}\n${chunk.content}`
+        })
+        .join('\n\n')
+      console.groupCollapsed(`[read_selection_context] Level ${level} 上下文原文汇总：${tag.filePath}`)
+      console.log(contextSummary)
+      console.log(`累计上下文约 ${contextWindow.diagnostics.totalTokens} tokens`)
+      console.table(contextWindow.diagnostics.candidates.map((candidate) => ({
+        role: candidate.role,
+        score: candidate.score,
+        distance: candidate.distance,
+        selected: candidate.selected,
+        reason: candidate.reason,
+        preview: candidate.content.slice(0, 120),
+      })))
+      console.groupEnd()
+
+      return serializeSelectionContextWindow(contextWindow)
     },
   })
 

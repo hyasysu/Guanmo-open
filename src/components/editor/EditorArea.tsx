@@ -665,8 +665,7 @@ export function EditorArea() {
   const getPreviewSelectionLineRange = useCallback((selection: Selection, container: HTMLElement): { startLine?: number, endLine?: number } => {
     if (!selection || selection.rangeCount === 0) return {}
 
-    const anchorNode = selection.anchorNode
-    const focusNode = selection.focusNode
+    const range = selection.getRangeAt(0)
 
     // 向上查找带 data-md-line 的元素
     const findLineElement = (node: Node | null): HTMLElement | null => {
@@ -678,19 +677,20 @@ export function EditorArea() {
       return null
     }
 
-    const anchorEl = findLineElement(anchorNode)
-    const focusEl = findLineElement(focusNode)
-
-    const startLine = anchorEl ? parseInt(anchorEl.getAttribute('data-md-line')!) : undefined
-    const endLineFromFocus = focusEl ? parseInt(focusEl.getAttribute('data-md-line')!) : undefined
-    const endLineFromAttr = focusEl ? parseInt(focusEl.getAttribute('data-md-end-line') || '') : undefined
-
-    // 取较大的行号作为结束行
-    const endLine = endLineFromFocus !== undefined
-      ? Math.max(endLineFromFocus, endLineFromAttr || endLineFromFocus)
-      : startLine
-
-    return { startLine, endLine }
+    const startEl = findLineElement(range.startContainer)
+    const endEl = findLineElement(range.endContainer)
+    const readLine = (element: HTMLElement | null, attribute: 'data-md-line' | 'data-md-end-line') => {
+      const value = Number(element?.getAttribute(attribute))
+      return Number.isFinite(value) && value > 0 ? value : undefined
+    }
+    const firstLine = readLine(startEl, 'data-md-line')
+    const lastLine = readLine(endEl, 'data-md-end-line') ?? readLine(endEl, 'data-md-line')
+    if (firstLine === undefined) return { startLine: lastLine, endLine: lastLine }
+    if (lastLine === undefined) return { startLine: firstLine, endLine: firstLine }
+    return {
+      startLine: Math.min(firstLine, lastLine),
+      endLine: Math.max(firstLine, lastLine),
+    }
   }, [])
 
   const handlePreviewContextMenu = useCallback((
@@ -757,11 +757,23 @@ export function EditorArea() {
     const endLine = previewMenu.endLine
 
     const findUniqueRange = (source: string, needle: string, baseOffset = 0) => {
-      const first = source.indexOf(needle)
-      if (first < 0) return null
-      const second = source.indexOf(needle, first + needle.length)
-      if (second >= 0) return null
-      return { from: baseOffset + first, to: baseOffset + first + needle.length }
+      const variants = [...new Set([needle, needle.replace(/\n/g, '\r\n')])]
+      const matches = variants.flatMap((variant) => {
+        if (!variant) return []
+        const indexes: number[] = []
+        let index = source.indexOf(variant)
+        while (index >= 0 && indexes.length < 2) {
+          indexes.push(index)
+          index = source.indexOf(variant, index + variant.length)
+        }
+        return indexes.map((from) => ({ from, to: from + variant.length }))
+      })
+      const uniqueMatches = matches.filter((match, index) => (
+        matches.findIndex((candidate) => candidate.from === match.from && candidate.to === match.to) === index
+      ))
+      return uniqueMatches.length === 1
+        ? { from: baseOffset + uniqueMatches[0].from, to: baseOffset + uniqueMatches[0].to }
+        : null
     }
 
     const offsetForLine = (line: number) => {
@@ -789,10 +801,12 @@ export function EditorArea() {
 
     range = range || findUniqueRange(content, normalizedSelectedText)
 
+    const sourceText = range ? content.slice(range.from, range.to) : normalizedSelectedText
+
     return {
       title: tab.title,
       filePath: tab.filePath,
-      text: markdownText || normalizedSelectedText,
+      text: sourceText || markdownText || normalizedSelectedText,
       startLine,
       endLine,
       selectionFrom: range?.from,
@@ -1063,6 +1077,9 @@ export function EditorArea() {
                 </ContextMenuItem>
                 <ContextMenuItem onClick={() => handlePreviewAiAction('请解释这段内容')}>
                   AI 解释这段
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => handlePreviewAiAction('请结合上下文解释这段内容，优先读取选区附近内容，不要默认阅读全文')}>
+                  AI 结合上下文解释
                 </ContextMenuItem>
                 <ContextMenuItem onClick={() => handlePreviewAiAction('请总结这段内容')}>
                   AI 总结这段

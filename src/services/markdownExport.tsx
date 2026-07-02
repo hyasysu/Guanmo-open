@@ -5,6 +5,7 @@ import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import { isTauri, saveFileDialog, writeFile } from '@/hooks/useTauri'
 import { isSameFilePath } from '@/services/pathIdentity'
+import { normalizeLatexBlockDelimiters, remarkStandaloneDisplayMath } from '@/services/markdownMath'
 
 function escapeHtml(text: string): string {
   return text
@@ -16,7 +17,7 @@ function escapeHtml(text: string): string {
 function renderBody(markdown: string): string {
   return renderToStaticMarkup(
     <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
+      remarkPlugins={[remarkGfm, remarkMath, remarkStandaloneDisplayMath]}
       rehypePlugins={[rehypeKatex]}
       components={{
         code: ({ children, className }) => {
@@ -28,7 +29,7 @@ function renderBody(markdown: string): string {
         },
       }}
     >
-      {markdown}
+      {normalizeLatexBlockDelimiters(markdown)}
     </ReactMarkdown>
   )
 }

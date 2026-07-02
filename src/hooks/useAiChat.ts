@@ -51,6 +51,8 @@ function getAgentProgressText(step: AgentStep): string {
       return '正在写入长期记忆...'
     case 'read_context_file':
       return '正在读取已授权文件内容...'
+    case 'read_selection_context':
+      return '正在阅读上下文...'
     case 'replace_current_tab_text':
       return '正在生成文本修改确认卡片...'
     case 'get_current_time':
@@ -332,6 +334,7 @@ export function useAiChat() {
       const appContext = {
         hasRecentEdit: hasRecentEditContext,
         hasOpenFile: Boolean(contextTags?.some((tag) => tag.type === 'file')),
+        hasSelection: Boolean(contextTags?.some((tag) => tag.type === 'selection')),
         hasContextTags: tagCount > 0,
       }
 
@@ -354,6 +357,12 @@ export function useAiChat() {
       const currentEditTargets = buildEditTargets(contextTags || [])
       if (currentEditTargets.length > 0 && candidateToolNames.includes('replace_current_tab_text')) {
         candidateToolNames.unshift('list_current_edit_targets')
+      }
+      if (candidateToolNames.includes('read_selection_context')) {
+        candidateToolNames = [
+          'read_selection_context',
+          ...candidateToolNames.filter((name) => name !== 'read_selection_context'),
+        ]
       }
 
       // 检查是否需要记忆写入
@@ -479,6 +488,8 @@ export function useAiChat() {
           updateRequestMessage(getAgentProgressText(step))
           if (step.type === 'action' && step.toolName === 'search_knowledge') {
             addTimelineItem({ type: 'local_search_start', label: '检索本地知识库索引' })
+          } else if (step.type === 'action' && step.toolName === 'read_selection_context') {
+            addTimelineItem({ type: 'local_search_start', label: '正在阅读上下文' })
           } else if (step.type === 'action' && step.toolName === 'web_search') {
             addTimelineItem({ type: 'web_search_start', label: '执行联网搜索' })
           } else if (step.type === 'action' && step.toolName === 'search_memory') {
@@ -561,6 +572,8 @@ export function useAiChat() {
             addAgentStep(step)
             if (step.type === 'action' && step.toolName === 'search_knowledge') {
               addTimelineItem({ type: 'local_search_start', label: '检索本地知识库' })
+              } else if (step.type === 'action' && step.toolName === 'read_selection_context') {
+                addTimelineItem({ type: 'local_search_start', label: '正在阅读上下文' })
               } else if (step.type === 'action' && step.toolName === 'web_search') {
                 addTimelineItem({ type: 'web_search_start', label: '联网搜索' })
               } else if (step.type === 'action' && step.toolName === 'search_memory') {
