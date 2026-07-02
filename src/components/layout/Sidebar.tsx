@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
-import { joinPath } from '@/hooks/useTauri'
+import { isTauri, joinPath } from '@/hooks/useTauri'
 import { openFile } from '@/services/fileSystem'
 import { pickDirectory, listDirectory } from '@/services/fileSystem'
 import { isWorkspaceDisplayFile, shouldSkipWorkspaceDirectory, getFileIcon, type FileNode } from '@/services/fileTree'
@@ -138,6 +138,10 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
   }, [])
 
   const handleOpenFolder = useCallback(async () => {
+    if (!isTauri()) {
+      toast.error('浏览器模式下不可用，请下载桌面版')
+      return
+    }
     try {
       const dirPath = await pickDirectory()
       if (!dirPath) return
@@ -165,6 +169,10 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
       }
       scheduleMarkdownDocumentIndex(path, name, content)
     } catch (err) {
+      if (err instanceof Error && err.message === 'Not running in Tauri') {
+        toast.error('浏览器模式下无法打开本地文件，请下载桌面版')
+        return
+      }
       console.error('Open file from tree failed:', err)
       toast.error(describeFileOperationError(err, '打开文件失败'))
       if (workspacePath) {
@@ -187,6 +195,10 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
       state.addTab(file.path, file.name, content)
       scheduleMarkdownDocumentIndex(file.path, file.name, content)
     } catch (err) {
+      if (err instanceof Error && err.message === 'Not running in Tauri') {
+        toast.error('浏览器模式下无法打开本地文件，请下载桌面版')
+        return
+      }
       console.error('Open recent file failed:', err)
       toast.error(describeFileOperationError(err, '打开最近文件失败'))
     }
@@ -298,7 +310,7 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
       {/* Header */}
       <div className="h-11 flex items-center px-4 border-b border-gm-border-subtle">
         <span className="text-body font-bold text-gm-text tracking-wide">
-          观墨
+          文件侧边栏
         </span>
         <div className="flex-1" />
         <Button
@@ -319,12 +331,26 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
         <Collapse
           question="最近文件"
           defaultExpanded
-          answer={<RecentFiles files={recentFiles} onOpen={handleOpenRecentFile} onRefreshWorkspace={workspacePath ? () => loadWorkspace(workspacePath) : undefined} />}
+          answer={
+            !isTauri() ? (
+              <div className="text-caption text-gm-text-tertiary text-center py-4">
+                <p>浏览器模式下最近文件不可用</p>
+                <p className="mt-1 text-gm-text-disabled">请下载桌面版体验完整功能</p>
+              </div>
+            ) : (
+              <RecentFiles files={recentFiles} onOpen={handleOpenRecentFile} onRefreshWorkspace={workspacePath ? () => loadWorkspace(workspacePath) : undefined} />
+            )
+          }
         />
         <Collapse
           question="收藏"
           answer={
-            favoriteFiles.length > 0 ? (
+            !isTauri() ? (
+              <div className="text-caption text-gm-text-tertiary text-center py-4">
+                <p>浏览器模式下收藏不可用</p>
+                <p className="mt-1 text-gm-text-disabled">请下载桌面版体验完整功能</p>
+              </div>
+            ) : favoriteFiles.length > 0 ? (
               <FavoriteFiles files={favoriteFiles} onRefreshWorkspace={workspacePath ? () => loadWorkspace(workspacePath) : undefined} />
             ) : (
               <div className="text-caption text-gm-text-tertiary text-center py-4">
@@ -337,7 +363,12 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
           question="工作区"
           defaultExpanded
           answer={
-            workspacePath ? (
+            !isTauri() ? (
+              <div className="text-caption text-gm-text-tertiary text-center py-4">
+                <p>浏览器模式下工作区不可用</p>
+                <p className="mt-1 text-gm-text-disabled">请下载桌面版体验完整功能</p>
+              </div>
+            ) : workspacePath ? (
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-micro text-gm-text-tertiary truncate flex-1" title={workspacePath}>
@@ -544,6 +575,10 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
         return next
       })
     } catch (err) {
+      if (err instanceof Error && err.message === 'Not running in Tauri') {
+        toast.error('浏览器模式下无法打开本地文件，请下载桌面版')
+        return
+      }
       const message = err instanceof Error ? err.message : String(err)
       const lower = message.toLowerCase()
       const isMissing =

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button, Collapse, Divider, Footer, Icon, Input, Select, Switch, Table, Tabs } from 'animal-island-ui'
 import appIcon from '@/assets/icon.png'
 import type { IconName } from 'animal-island-ui'
+import { isTauri } from '@/hooks/useTauri'
 import { useSettingsStore } from '@/stores/settingsStore'
 import type { WebSearchConfig } from '@/services/webSearch'
 import { initAiClient, initEmbeddingClient, isLocalApi, validateAiStatus } from '@/services/ai/aiClient'
@@ -336,6 +337,13 @@ function AiSettings() {
       <Sep />
 
       <SectionTitle>知识库</SectionTitle>
+      {!isTauri() && (
+        <div className="mb-3 rounded-xl border border-gm-border bg-gm-surface-elevated p-3">
+          <p className="text-caption text-gm-text-tertiary">
+            浏览器模式下知识库不可用，请下载桌面版体验完整功能
+          </p>
+        </div>
+      )}
       <KnowledgeStats />
     </div>
   )
@@ -870,6 +878,13 @@ function MemorySettings() {
   return (
     <div className="w-full pb-6">
       <SectionTitle>长期记忆</SectionTitle>
+      {!isTauri() && (
+        <div className="mb-3 rounded-xl border border-gm-border bg-gm-surface-elevated p-3">
+          <p className="text-caption text-gm-text-tertiary">
+            浏览器模式下长期记忆不可用，请下载桌面版体验完整功能
+          </p>
+        </div>
+      )}
       <div className="flex items-center justify-between mb-3">
         <div className="text-caption text-gm-text-secondary">
           共 {activeMemories.length} 条已保存记忆，{candidateMemories.length} 条候选记忆

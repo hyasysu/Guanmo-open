@@ -4,7 +4,7 @@ import { useEditorStore } from '@/stores/editorStore'
 import { useEditorHistoryStore } from '@/stores/editorHistoryStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { getActiveEditorView } from '@/services/editorViewRef'
-import { appIconUrl } from '@/assets/appIcon'
+
 import { isTauri } from '@/hooks/useTauri'
 
 export function TitleBar() {
@@ -84,8 +84,12 @@ export function TitleBar() {
     <div className="h-[38px] flex items-center bg-gm-surface border-b border-gm-border-subtle select-none flex-shrink-0">
       {/* App branding */}
       <div className="flex items-center gap-2 pl-3 pr-2 flex-shrink-0">
-        <img src={appIconUrl} alt="观墨" width={18} height={18} className="rounded" />
         <span className="text-caption font-bold text-gm-text tracking-wide">观墨</span>
+        {!isTauri() && (
+          <span className="text-micro text-gm-text-disabled bg-gm-surface-elevated px-1.5 py-0.5 rounded">
+            浏览器模式，多项功能和样式会有问题，推荐下载桌面版
+          </span>
+        )}
       </div>
 
       {/* Drag region + current file */}
