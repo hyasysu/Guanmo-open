@@ -58,8 +58,7 @@ interface ScheduledPreviewContent {
 }
 
 interface ReadingPosition {
-  previewTop?: number
-  editorTop?: number
+  scrollTop?: number
 }
 
 function getPreviewUpdateDelay(content: string) {
@@ -165,7 +164,7 @@ export function EditorArea() {
   const getStoredReadingTop = useCallback((tabId: string | null | undefined) => {
     if (!tabId) return 0
     const position = readingPositionsRef.current[tabId]
-    return position?.previewTop ?? position?.editorTop ?? 0
+    return position?.scrollTop ?? 0
   }, [])
 
   const saveReadingPosition = useCallback((tabId: string, position: ReadingPosition) => {
@@ -195,7 +194,7 @@ export function EditorArea() {
     const view = editorViewRef.current
     if (!view) return
     saveReadingPosition(tabId, {
-      editorTop: view.scrollDOM.scrollTop,
+      scrollTop: view.scrollDOM.scrollTop,
     })
   }, [saveReadingPosition])
 
@@ -206,7 +205,7 @@ export function EditorArea() {
     if (isRestoringScrollRef.current) return
     if (!container) return
     saveReadingPosition(tabId, {
-      previewTop: container.scrollTop,
+      scrollTop: container.scrollTop,
     })
   }, [saveReadingPosition])
 
@@ -232,7 +231,7 @@ export function EditorArea() {
     const position = readingPositionsRef.current[tabId]
     if (!view || !position) return
 
-    const nextTop = position.editorTop ?? position.previewTop
+    const nextTop = position.scrollTop ?? 0
     if (typeof nextTop === 'number') {
       view.scrollDOM.scrollTop = nextTop
     }
@@ -245,7 +244,7 @@ export function EditorArea() {
   ) => {
     const position = readingPositionsRef.current[tabId]
     if (!container) return
-    const nextTop = position?.previewTop ?? position?.editorTop ?? 0
+    const nextTop = position?.scrollTop ?? 0
     withRestoreLock(() => {
       container.scrollTop = nextTop
     })

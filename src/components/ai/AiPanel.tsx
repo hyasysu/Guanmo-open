@@ -178,7 +178,7 @@ export function AiPanel() {
       <RagTrace status={ragStatus} sources={ragSources} onOpenSource={handleOpenRagSource} />
 
       {/* Chat Content - 可以滚动到控制栏下面 */}
-      <div ref={chatContainerRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden min-w-0 pb-24 bg-gm-surface">
+      <div ref={chatContainerRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden min-w-0 pb-32 bg-gm-surface">
         {visibleMessages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full p-6 animate-fadeIn">
             {hasMoreHistory && (
@@ -437,7 +437,7 @@ const ChatBubble = memo(function ChatBubble({
   const isEmpty = !content && isLast && streaming
 
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} animate-slideInUp`}>
+    <div className={`flex min-w-0 ${isUser ? 'justify-end' : 'justify-start'} animate-slideInUp`}>
       {!isUser && (
         <div className="w-8 h-8 rounded-xl bg-gm-primary-subtle flex items-center justify-center mr-2 flex-shrink-0 mt-1">
           <Icon name="icon-chat" size={20} bounce={isEmpty} />
@@ -457,7 +457,7 @@ const ChatBubble = memo(function ChatBubble({
             <span className="w-2 h-2 rounded-full bg-gm-primary animate-pulse" style={{ animationDelay: '300ms' }} />
           </div>
         ) : isUser || (isLast && streaming) ? (
-          <div className="whitespace-pre-wrap break-words">{content}</div>
+          <div className="whitespace-pre-wrap overflow-wrap-anywhere" style={{ wordBreak: 'normal' }}>{content}</div>
         ) : (
           <AssistantMarkdown content={content} />
         )}
@@ -522,20 +522,20 @@ const ASSISTANT_MARKDOWN_COMPONENTS: Components = {
     const isBlock = className?.includes('language-')
     if (isBlock) {
       return (
-        <div className="my-2 rounded-xl bg-gm-canvas border border-gm-border overflow-hidden">
+        <div className="my-2 rounded-xl bg-gm-canvas border border-gm-border overflow-hidden max-w-full">
           {className && (
             <div className="px-3 py-1 border-b border-gm-border text-micro text-gm-text-secondary font-mono">
               {className.replace('language-', '')}
             </div>
           )}
-          <pre className="p-3 overflow-x-auto m-0">
-            <code className="text-[12px] font-mono leading-5">{children}</code>
+          <pre className="p-3 m-0 max-w-full overflow-x-auto">
+            <code className="text-[12px] font-mono leading-5 whitespace-pre-wrap">{children}</code>
           </pre>
         </div>
       )
     }
     return (
-      <code className="px-1.5 py-0.5 rounded bg-gm-canvas text-gm-accent text-[12px] font-mono break-words">
+      <code className="px-1.5 py-0.5 rounded bg-gm-canvas text-gm-accent text-[12px] font-mono whitespace-pre-wrap">
         {children}
       </code>
     )
@@ -570,7 +570,7 @@ const ASSISTANT_MARKDOWN_COMPONENTS: Components = {
 
 const AssistantMarkdown = memo(function AssistantMarkdown({ content }: { content: string }) {
   return (
-    <div className="prose-sm max-w-none min-w-0 break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+    <div className="ai-message-content max-w-none min-w-0 overflow-wrap-anywhere [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
       <ReactMarkdown
         remarkPlugins={ASSISTANT_MARKDOWN_REMARK_PLUGINS}
         components={ASSISTANT_MARKDOWN_COMPONENTS}
