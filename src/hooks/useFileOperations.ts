@@ -6,6 +6,7 @@ import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
+import { isTauri } from '@/hooks/useTauri'
 
 export function useFileOperations() {
   const addTab = useEditorStore((s) => s.addTab)
@@ -84,7 +85,7 @@ export function useFileOperations() {
       autoSaveTimersRef.current.clear()
     }
 
-    if (!editor.autoSave) {
+    if (!isTauri() || !editor.autoSave) {
       clearAutoSaveTimers()
       autoSaveRetriesRef.current.clear()
       return

@@ -222,6 +222,13 @@ function AiSettings() {
 
   return (
     <div className="w-full pb-6">
+      {!isTauri() && (
+        <div className="mb-4 rounded-xl border border-gm-border bg-gm-surface-elevated p-3">
+          <p className="text-caption text-gm-text-tertiary">
+            浏览器模式下 AI 功能不可用（防止api key泄露），请下载桌面版使用
+          </p>
+        </div>
+      )}
       <SectionTitle>对话 API 配置</SectionTitle>
       <SettingField label="服务预设" description="选择后自动填入地址和模型">
         <Select
@@ -242,7 +249,7 @@ function AiSettings() {
       </SettingField>
       {!isLocalApi(ai.baseUrl) && (
         <SettingField label="API Key" description="通过系统安全存储保存，不写入普通设置">
-          <Input type="password" value={ai.apiKey} onChange={(e) => updateAiConfig({ apiKey: e.target.value })} placeholder="sk-..." />
+          <Input type="password" value={ai.apiKey} onChange={(e) => updateAiConfig({ apiKey: e.target.value })} placeholder="sk-..." disabled={!isTauri()} />
         </SettingField>
       )}
       <SettingField label="对话模型" description="用于日常对话和 Agent 执行的模型">
@@ -271,7 +278,7 @@ function AiSettings() {
       </SettingField>
       {!isLocalApi(ai.embedding.baseUrl) && (
         <SettingField label="API Key" description="通过系统安全存储保存">
-          <Input type="password" value={ai.embedding.apiKey} onChange={(e) => updateEmbeddingConfig({ apiKey: e.target.value })} placeholder="sk-..." />
+          <Input type="password" value={ai.embedding.apiKey} onChange={(e) => updateEmbeddingConfig({ apiKey: e.target.value })} placeholder="sk-..." disabled={!isTauri()} />
         </SettingField>
       )}
       <SettingField label="Embedding 模型" description="将文本转为向量，用于知识库语义检索">
@@ -330,6 +337,7 @@ function AiSettings() {
             value={webSearch.apiKey}
             onChange={(e) => updateWebSearchConfig({ apiKey: e.target.value })}
             placeholder={webSearch.provider === 'tavily' ? 'tvly-...' : webSearch.provider === 'custom' ? '可选，用于 Authorization 头' : '...'}
+            disabled={!isTauri()}
           />
         </SettingField>
       )}
@@ -523,7 +531,7 @@ function EditorSettings() {
         <Switch checked={editor.syncScroll} onChange={(v) => updateEditorSettings({ syncScroll: v })} />
       </SettingField>
       <SettingField label="自动保存" description={!isTauri() ? "浏览器模式下自动保存不可用" : "编辑后自动保存"}>
-        <Switch checked={editor.autoSave} onChange={(v) => updateEditorSettings({ autoSave: v })} disabled={!isTauri()} />
+        <Switch checked={isTauri() && editor.autoSave} onChange={(v) => updateEditorSettings({ autoSave: v })} disabled={!isTauri()} />
       </SettingField>
     </div>
   )
