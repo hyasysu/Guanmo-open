@@ -135,7 +135,7 @@ export function EditorArea() {
   const readingPositionsRef = useRef<Record<string, ReadingPosition>>({})
   const leftPreviewRef = useRef<HTMLDivElement>(null)
   const rightPreviewRef = useRef<HTMLDivElement>(null)
-  const previewAnchorCacheRef = useRef<WeakMap<HTMLElement, { version: number; anchors: PreviewLineAnchor[] }>>(new WeakMap())
+  const previewAnchorCacheRef = useRef<WeakMap<HTMLElement, PreviewAnchorCache>>(new WeakMap())
   const isRestoringScrollRef = useRef(false)
   const restoreScrollFrameRef = useRef<number | null>(null)
   const editorRestoreFrameRef = useRef<number | null>(null)
@@ -1170,6 +1170,13 @@ interface PreviewLineAnchor {
   height: number
 }
 
+interface PreviewAnchorCache {
+  version: number
+  clientWidth: number
+  scrollHeight: number
+  anchors: PreviewLineAnchor[]
+}
+
 function getVisiblePreviewAnchors(container: HTMLElement): PreviewLineAnchor[] {
   const containerRect = container.getBoundingClientRect()
   return Array.from(container.querySelectorAll<HTMLElement>('[data-md-line]'))
@@ -1200,13 +1207,24 @@ function getVisiblePreviewAnchors(container: HTMLElement): PreviewLineAnchor[] {
 function getCachedPreviewAnchors(
   container: HTMLElement,
   version: number,
-  cache: WeakMap<HTMLElement, { version: number; anchors: PreviewLineAnchor[] }>
+  cache: WeakMap<HTMLElement, PreviewAnchorCache>
 ): PreviewLineAnchor[] {
   const cached = cache.get(container)
-  if (cached?.version === version) return cached.anchors
+  if (
+    cached?.version === version
+    && cached.clientWidth === container.clientWidth
+    && cached.scrollHeight === container.scrollHeight
+  ) {
+    return cached.anchors
+  }
 
   const anchors = getVisiblePreviewAnchors(container)
-  cache.set(container, { version, anchors })
+  cache.set(container, {
+    version,
+    clientWidth: container.clientWidth,
+    scrollHeight: container.scrollHeight,
+    anchors,
+  })
   return anchors
 }
 
@@ -1274,7 +1292,7 @@ function reportPreviewSwitchPerformance(tabId: string, restoreStartedAt: number)
 function getPreviewLineAtTop(
   container: HTMLElement,
   version: number,
-  cache: WeakMap<HTMLElement, { version: number; anchors: PreviewLineAnchor[] }>
+  cache: WeakMap<HTMLElement, PreviewAnchorCache>
 ): number | undefined {
   const anchors = getCachedPreviewAnchors(container, version, cache)
   if (anchors.length === 0) return undefined
