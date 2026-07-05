@@ -8,7 +8,7 @@ import { exportMarkdownAsHtml } from '@/services/markdownExport'
 import { Sidebar } from './Sidebar'
 import { StatusBar } from './StatusBar'
 import { TitleBar } from './TitleBar'
-import { EditorArea } from '../editor/EditorArea'
+import { EditorArea, OPEN_EDITOR_SEARCH_EVENT } from '../editor/EditorArea'
 import { AiPanel } from '../ai/AiPanel'
 import { CommandPalette } from '../common/CommandPalette'
 import { SettingsPage } from '@/features/settings/SettingsPage'
@@ -90,8 +90,7 @@ export function AppLayout() {
   }, [setAiPanelWidth])
 
   const handleOpenSearch = useCallback(() => {
-    setCommandPaletteMode('files')
-    setCommandPaletteOpen(true)
+    window.dispatchEvent(new Event(OPEN_EDITOR_SEARCH_EVENT))
   }, [])
 
   const handleExportHtml = useCallback(async () => {

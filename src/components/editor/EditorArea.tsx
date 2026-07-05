@@ -23,6 +23,8 @@ import { SearchOverlay } from './SearchOverlay'
 import { TabBar } from './TabBar'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 
+export const OPEN_EDITOR_SEARCH_EVENT = 'guanmo:open-editor-search'
+
 interface PreviewMenuState {
   x: number
   y: number
@@ -376,8 +378,13 @@ export function EditorArea() {
         setSearchOpen(true)
       }
     }
+    const openSearch = () => setSearchOpen(true)
     window.addEventListener('keydown', handler, true)
-    return () => window.removeEventListener('keydown', handler, true)
+    window.addEventListener(OPEN_EDITOR_SEARCH_EVENT, openSearch)
+    return () => {
+      window.removeEventListener('keydown', handler, true)
+      window.removeEventListener(OPEN_EDITOR_SEARCH_EVENT, openSearch)
+    }
   }, [])
 
   // Ctrl + 滚轮快捷调节字号
