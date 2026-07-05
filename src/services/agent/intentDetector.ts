@@ -214,7 +214,7 @@ function scoreCapability(
   const selectionRequestKind = classifySelectionRequest(query, context)
   if (
     selectionRequestKind === 'fast'
-    && (capability === 'knowledge' || capability === 'file_read' || capability === 'file_write')
+    && (capability === 'knowledge' || capability === 'file_read')
   ) {
     score = 0
     signals.push('context:selection_fast_path')
