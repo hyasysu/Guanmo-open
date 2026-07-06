@@ -144,12 +144,15 @@ export function EditorArea() {
   const scrollSyncSourceRef = useRef<'editor' | 'preview' | null>(null)
   const scrollSyncTimerRef = useRef<number | null>(null)
   const editorScrollFrameRef = useRef<number | null>(null)
+  const editorTocFrameRef = useRef<number | null>(null)
   const previewScrollFrameRef = useRef<number | null>(null)
   const lastEditorInputAtRef = useRef(0)
   const [, setPreviewRestoreTick] = useState(0)
   const [searchOpen, setSearchOpen] = useState(false)
   const [rightPaneDragOver, setRightPaneDragOver] = useState(false)
   const [tocCollapsed, setTocCollapsed] = useState(false)
+  const [activeEditorHeading, setActiveEditorHeading] = useState<string | null>(null)
+  const [tocFocus, setTocFocus] = useState<'editor' | 'preview'>('editor')
   const [previewMenu, setPreviewMenu] = useState<PreviewMenuState | null>(null)
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
@@ -188,6 +191,13 @@ export function EditorArea() {
   }
   const toc = useMemo(() => extractToc(activeTab?.content || ''), [activeTab?.content])
   const rightToc = useMemo(() => extractToc(rightTab?.content || ''), [rightTab?.content])
+
+  const updateEditorHeading = useCallback((view: EditorView) => {
+    const line = getEditorTopLine(view)
+    if (typeof line !== 'number') return
+    const headingId = getHeadingIdAtLine(toc, line)
+    setActiveEditorHeading((current) => current === headingId ? current : headingId)
+  }, [toc])
 
   // 使用 IntersectionObserver 监听当前活跃的标题
   // 传递 viewMode 作为 trigger，当模式切换时重新检查容器
@@ -326,10 +336,17 @@ export function EditorArea() {
       const currentMode = useEditorStore.getState().viewMode
       if (currentMode !== 'edit' && currentMode !== 'edit-preview') return
       saveEditorReadingPosition(activeTab.id)
+      setTocFocus('editor')
+      if (editorTocFrameRef.current !== null || !view) return
+      editorTocFrameRef.current = window.requestAnimationFrame(() => {
+        editorTocFrameRef.current = null
+        if (view) updateEditorHeading(view)
+      })
     }
     let frame = window.requestAnimationFrame(() => {
       view = editorViewRef.current
       if (!view) return
+      updateEditorHeading(view)
       view.scrollDOM.addEventListener('scroll', handleScroll, { passive: true })
     })
 
@@ -338,8 +355,12 @@ export function EditorArea() {
       if (view) {
         view.scrollDOM.removeEventListener('scroll', handleScroll)
       }
+      if (editorTocFrameRef.current !== null) {
+        window.cancelAnimationFrame(editorTocFrameRef.current)
+        editorTocFrameRef.current = null
+      }
     }
-  }, [activeTab?.id, saveEditorReadingPosition, viewMode])
+  }, [activeTab?.id, saveEditorReadingPosition, updateEditorHeading, viewMode])
 
   useLayoutEffect(() => {
     if (!activeTab?.id) return
@@ -588,6 +609,7 @@ export function EditorArea() {
 
   const handleLeftPreviewScroll = useCallback(() => {
     if (!activeTab?.id) return
+    if (viewModeRef.current === 'edit-preview') setTocFocus('preview')
     savePreviewReadingPosition(activeTab.id, leftPreviewRef.current, activePreview.version)
   }, [activePreview.version, activeTab?.id, savePreviewReadingPosition])
 
@@ -1101,7 +1123,9 @@ export function EditorArea() {
                 collapsed={tocCollapsed}
                 onToggle={() => setTocCollapsed((collapsed) => !collapsed)}
                 onHeadingClick={leftPreviewVisible ? jumpToPreviewHeading : jumpToEditorHeading}
-                activeHeading={activeHeading}
+                activeHeading={viewMode === 'edit' || (viewMode === 'edit-preview' && tocFocus === 'editor')
+                  ? activeEditorHeading
+                  : activeHeading}
               />
             )}
             </div>
@@ -1161,6 +1185,15 @@ function getEditorTopLine(view: EditorView): number | undefined {
   const block = view.lineBlockAtHeight(view.scrollDOM.scrollTop + SCROLL_SYNC_TOP_OFFSET)
   if (!block) return undefined
   return view.state.doc.lineAt(block.from).number
+}
+
+function getHeadingIdAtLine(toc: TocItem[], line: number): string | null {
+  let activeId: string | null = null
+  for (const item of toc) {
+    if (item.line > line) break
+    activeId = item.id
+  }
+  return activeId
 }
 
 interface PreviewLineAnchor {
