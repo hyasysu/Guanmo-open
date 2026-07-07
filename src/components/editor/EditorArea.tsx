@@ -130,6 +130,9 @@ export function EditorArea() {
   const clearPreviewSwitching = useEditorStore((s) => s.clearPreviewSwitching)
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize)
   const editorLineHeight = useSettingsStore((s) => s.editor.lineHeight)
+  const editorFontFamily = useSettingsStore((s) => s.editor.fontFamily)
+  const editorWordWrap = useSettingsStore((s) => s.editor.wordWrap)
+  const editorLineNumbers = useSettingsStore((s) => s.editor.lineNumbers)
   const syncScroll = useSettingsStore((s) => s.editor.syncScroll)
   const editorViewRef = useRef<EditorView | null>(null)
   const readingPositionsRef = useRef<Record<string, ReadingPosition>>({})
@@ -1016,7 +1019,15 @@ export function EditorArea() {
         ) : (
           <>
             {viewMode === 'diff-preview' && (
-              <MarkdownDiffView original={activeTab?.originalContent || ''} current={activeTab?.content || ''} />
+              <MarkdownDiffView
+                original={activeTab?.originalContent || ''}
+                current={activeTab?.content || ''}
+                fontSize={editorFontSize}
+                lineHeight={editorLineHeight}
+                fontFamily={editorFontFamily}
+                wordWrap={editorWordWrap}
+                lineNumbers={editorLineNumbers}
+              />
             )}
             <div className={`${viewMode === 'diff-preview' ? 'hidden' : 'flex'} flex-1 overflow-hidden bg-gm-surface`}>
             <div className={`${editorVisible ? (viewMode === 'edit-preview' ? 'min-w-0 flex-1 border-r border-gm-border-subtle' : 'flex-1') : 'hidden'} overflow-hidden relative`}>
