@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
 import { undo, redo } from '@codemirror/commands'
-import { useEditorStore } from '@/stores/editorStore'
 import { useEditorHistoryStore } from '@/stores/editorHistoryStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { getActiveEditorView } from '@/services/editorViewRef'
@@ -9,7 +8,6 @@ import { isTauri } from '@/hooks/useTauri'
 
 export function TitleBar() {
   const [maximized, setMaximized] = useState(false)
-  const activeTab = useEditorStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
   const canUndo = useEditorHistoryStore((s) => s.canUndo)
   const canRedo = useEditorHistoryStore((s) => s.canRedo)
 
@@ -92,18 +90,11 @@ export function TitleBar() {
         )}
       </div>
 
-      {/* Drag region + current file */}
+      {/* Drag region */}
       <div
         data-tauri-drag-region=""
-        className="flex-1 h-full flex items-center justify-center"
-      >
-        {activeTab && (
-          <span className="text-micro text-gm-text-tertiary truncate max-w-[300px]">
-            {activeTab.title}
-            {activeTab.modified && ' ·'}
-          </span>
-        )}
-      </div>
+        className="flex-1 h-full"
+      />
 
       {/* Undo/Redo + Window controls */}
       <div className="flex items-center h-full flex-shrink-0">
