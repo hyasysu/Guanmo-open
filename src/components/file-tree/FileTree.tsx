@@ -9,6 +9,7 @@ import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparat
 import { renameFileEntry, saveExistingFileAs, validateFileName } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { toast } from '@/services/toast'
+import { Tooltip, TruncatedText } from '@/components/common/Tooltip'
 
 interface FileTreeProps {
   nodes: FileNode[]
@@ -293,7 +294,7 @@ function FileTreeNode({
             className="min-w-0 flex-1 rounded border border-gm-primary bg-gm-canvas px-1 py-0.5 text-caption outline-none"
           />
         ) : (
-          <span className="truncate">{node.name}</span>
+          <TruncatedText text={node.name} className="flex-1" />
         )}
       </button>
 
@@ -329,7 +330,7 @@ export function FileIconSVG({ icon, expanded }: { icon: string; expanded: boolea
   switch (icon) {
     case 'folder':
       return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg className="flex-shrink-0" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           {expanded ? (
             <path d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z" />
           ) : (
@@ -339,21 +340,21 @@ export function FileIconSVG({ icon, expanded }: { icon: string; expanded: boolea
       )
     case 'markdown':
       return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#19c8b9" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg className="flex-shrink-0" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#19c8b9" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
           <path d="M7 17v-5l3 3 3-3v5M17 17v-5h-2l2 3 2-3h-2" />
         </svg>
       )
     case 'code':
       return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#e5a96e" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg className="flex-shrink-0" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#e5a96e" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="16 18 22 12 16 6" />
           <polyline points="8 6 2 12 8 18" />
         </svg>
       )
     case 'image':
       return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#91c88e" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg className="flex-shrink-0" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#91c88e" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
           <circle cx="8.5" cy="8.5" r="1.5" />
           <polyline points="21 15 16 10 5 21" />
@@ -361,14 +362,14 @@ export function FileIconSVG({ icon, expanded }: { icon: string; expanded: boolea
       )
     case 'json':
       return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#f5c31c" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg className="flex-shrink-0" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#f5c31c" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
           <path d="M8 13h2M8 17h2M14 13h2M14 17h2" />
         </svg>
       )
     default:
       return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg className="flex-shrink-0" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
           <path d="M14 2v6h6" />
         </svg>
@@ -486,20 +487,21 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
                 className="min-w-0 flex-1 rounded border border-gm-primary bg-gm-canvas px-1 py-0.5 outline-none"
               />
             ) : (
-              <span className="truncate">{file.name}</span>
+              <TruncatedText text={file.name} className="flex-1" />
             )}
-            <span
-              onClick={(e) => {
-                e.stopPropagation()
-                removeRecentFile(file.path)
-              }}
-              className="ml-auto flex-shrink-0 rounded-full p-0.5 opacity-0 transition-opacity hover:bg-gm-surface-overlay group-hover:opacity-100"
-              title="删除最近记录"
-            >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M18 6L6 18M6 6l12 12" />
-              </svg>
-            </span>
+            <Tooltip content="删除最近记录" className="ml-auto flex-shrink-0">
+              <span
+                onClick={(e) => {
+                  e.stopPropagation()
+                  removeRecentFile(file.path)
+                }}
+                className="block rounded-full p-0.5 opacity-0 transition-opacity hover:bg-gm-surface-overlay group-hover:opacity-100"
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M18 6L6 18M6 6l12 12" />
+                </svg>
+              </span>
+            </Tooltip>
           </button>
         )
       })}

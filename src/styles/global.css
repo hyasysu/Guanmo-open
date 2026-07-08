@@ -598,6 +598,50 @@ body {
   color: var(--gm-markdown-heading);
 }
 
+.gm-tooltip {
+  position: fixed;
+  z-index: 2147483646;
+  max-width: 264px;
+  padding: 6px 9px;
+  color: var(--gm-text-on-primary);
+  background: var(--gm-text);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  box-shadow: 0 8px 18px rgba(61, 52, 40, 0.16);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  animation: gm-tooltip-in 120ms ease-out;
+}
+
+.gm-tooltip::before {
+  content: '';
+  position: absolute;
+  left: var(--gm-tooltip-arrow-left, 12px);
+  bottom: 100%;
+  transform: translateX(-50%);
+  border-right: 4px solid transparent;
+  border-bottom: 4px solid var(--gm-text);
+  border-left: 4px solid transparent;
+}
+
+[data-theme='dark'] .gm-tooltip {
+  color: var(--gm-text);
+  background: var(--gm-surface-overlay);
+  border-color: var(--gm-border-strong);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.36);
+}
+
+[data-theme='dark'] .gm-tooltip::before {
+  border-bottom-color: var(--gm-surface-overlay);
+}
+
+@keyframes gm-tooltip-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .gm-preview-heading-clickable [data-heading-id] {
   cursor: pointer !important;
 }

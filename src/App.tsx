@@ -13,6 +13,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { restorePersistedTabs } from './services/sessionRestore'
 import { useEditorStore } from './stores/editorStore'
 import { isTauri } from './hooks/useTauri'
+import { GlobalTooltip } from './components/common/Tooltip'
 
 type CursorPhase = 'entering' | 'active' | 'exiting'
 
@@ -212,6 +213,7 @@ function App() {
         <AppLayout />
       </CustomCursorFrame>
       <ToastContainer />
+      <GlobalTooltip />
     </>
   )
 }

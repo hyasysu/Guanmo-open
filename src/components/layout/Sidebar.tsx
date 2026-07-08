@@ -16,6 +16,7 @@ import { useChatStore } from '@/stores/chatStore'
 import { renameFileEntry, saveExistingFileAs, validateFileName } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { cleanupMissingWorkspaceDocuments, rebuildWorkspaceDocuments } from '@/services/workspaceIndex'
+import { TruncatedText } from '@/components/common/Tooltip'
 
 interface SidebarProps {
   collapsed: boolean
@@ -610,7 +611,6 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
               e.preventDefault()
               setContextMenu({ x: e.clientX, y: e.clientY, file })
             }}
-            title={isMissing ? `文件已丢失：${file.path}` : file.path}
             className={`w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-caption text-left truncate ${
               isActive
                 ? 'bg-gm-primary-subtle text-gm-text font-bold'
@@ -642,7 +642,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
               />
             ) : (
               <>
-                <span className="truncate">{file.name}</span>
+                <TruncatedText text={isMissing ? `文件已丢失：${file.path}` : file.name} className="flex-1" />
                 {isMissing && <span className="ml-auto shrink-0 text-micro">已丢失</span>}
               </>
             )}
