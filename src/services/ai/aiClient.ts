@@ -1,4 +1,4 @@
-import type { AiProvider, AiConfig, EmbeddingConfig } from './types'
+import type { AiProvider, AiConfig, ChatProtocol, EmbeddingConfig, ProviderId, ValidateResult } from './types'
 import type { AiServiceStatus } from '../../stores/appStore'
 import { AiConfigError } from './errors'
 import { OpenAICompatibleProvider } from './providers/openaiCompatible'
@@ -28,6 +28,35 @@ export function isLocalApi(baseUrl: string): boolean {
   }
 }
 
+/** 根据协议类型创建对话 Provider */
+export function createChatProvider(config: AiConfig): AiProvider {
+  switch (config.protocol) {
+    case 'openai-chat':
+      return new OpenAICompatibleProvider(config)
+    case 'anthropic-messages':
+      throw new AiConfigError('Anthropic Messages 协议尚未实现，请使用 OpenAI Compatible 协议')
+    case 'openai-responses':
+      throw new AiConfigError('OpenAI Responses 协议尚未实现，请使用 OpenAI Compatible 协议')
+    default:
+      throw new AiConfigError(`不支持的协议类型: ${(config as AiConfig).protocol}`)
+  }
+}
+
+/** 从 baseUrl 推断供应商标识（用于旧配置迁移） */
+export function inferProvider(baseUrl: string): ProviderId {
+  if (!baseUrl) return 'custom'
+  const url = baseUrl.toLowerCase()
+  if (url.includes('api.openai.com')) return 'openai'
+  if (url.includes('api.deepseek.com')) return 'deepseek'
+  if (url.includes('api.siliconflow.cn')) return 'siliconflow'
+  if (url.includes('bigmodel.cn')) return 'zhipu'
+  if (url.includes('xiaomimimo.com')) return 'mimo'
+  if (url.includes('localhost') || url.includes('127.0.0.1') || url.includes('::1') || url.includes('ollama')) return 'ollama'
+  if (url.includes('dashscope') || url.includes('coding')) return 'coding-plan'
+  if (url.includes('anthropic') || url.includes('api.anthropic')) return 'anthropic'
+  return 'custom'
+}
+
 export function initAiClient(config: AiConfig): AiProvider {
   if (!config.apiKey && !isLocalApi(config.baseUrl)) {
     throw new AiConfigError('API Key is required')
@@ -43,7 +72,7 @@ export function initAiClient(config: AiConfig): AiProvider {
   const effectiveConfig = isLocalApi(config.baseUrl)
     ? { ...config, timeout: Math.min(config.timeout, 15000) }
     : config
-  currentProvider = new OpenAICompatibleProvider(effectiveConfig)
+  currentProvider = createChatProvider(effectiveConfig)
   return currentProvider
 }
 
@@ -75,6 +104,8 @@ export function initEmbeddingClient(config: EmbeddingConfig): AiProvider {
 
   embeddingConfig = config
   const fullConfig: AiConfig = {
+    protocol: 'openai-chat',
+    provider: config.provider || 'custom',
     baseUrl: config.baseUrl.replace(/\/embeddings\/?$/, '').replace(/\/+$/, ''),
     apiKey: config.apiKey,
     chatModel: config.embeddingModel,
@@ -116,20 +147,26 @@ export async function validateAiStatus(): Promise<AiServiceStatus> {
   const searchCfg = getSearchConfig()
   const searchNeedsCheck = searchCfg.provider !== 'duckduckgo' && searchCfg.provider !== 'custom'
 
-  const [chatOk, embOk, searchOk] = await Promise.all([
-    chatReady ? currentProvider!.validateConfig().catch(() => false) : false,
-    embReady ? embeddingProvider!.validateConfig().catch(() => false) : false,
+  const [chatResult, embResult, searchOk] = await Promise.all([
+    chatReady ? currentProvider!.validateConfig().then(r => r.ok).catch(() => false) : false,
+    embReady ? embeddingProvider!.validateConfig().then(r => r.ok).catch(() => false) : false,
     searchNeedsCheck ? validateSearchApi(searchCfg.provider, searchCfg.apiKey) : true,
   ])
 
-  if (chatOk && embOk && searchOk) return 'ok'
-  if (!chatOk && !embOk && !searchOk) return 'all_unreachable'
-  if (!chatOk && !embOk) return 'both_unreachable'
-  if (!chatOk && !searchOk) return 'chat_search_unreachable'
-  if (!embOk && !searchOk) return 'embedding_search_unreachable'
-  if (!chatOk) return 'chat_unreachable'
-  if (!embOk) return 'embedding_unreachable'
+  if (chatResult && embResult && searchOk) return 'ok'
+  if (!chatResult && !embResult && !searchOk) return 'all_unreachable'
+  if (!chatResult && !embResult) return 'both_unreachable'
+  if (!chatResult && !searchOk) return 'chat_search_unreachable'
+  if (!embResult && !searchOk) return 'embedding_search_unreachable'
+  if (!chatResult) return 'chat_unreachable'
+  if (!embResult) return 'embedding_unreachable'
   return 'search_unreachable'
+}
+
+/** 独立测试连接（不影响全局客户端状态），返回详细 ValidateResult */
+export async function testAiConnection(config: AiConfig): Promise<ValidateResult> {
+  const provider = createChatProvider(config)
+  return provider.validateConfig()
 }
 
 /** 轻量校验搜索 API Key 是否有效 */

@@ -5,6 +5,7 @@ import type {
   ChatResponse,
   StreamChunk,
   EmbeddingResponse,
+  ValidateResult,
 } from '../types'
 import { AiAuthError, AiNetworkError, AiError } from '../errors'
 import { parseSSEStream } from '../stream'
@@ -261,14 +262,71 @@ export class OpenAICompatibleProvider implements AiProvider {
     }
   }
 
-  async validateConfig(): Promise<boolean> {
+  async validateConfig(): Promise<ValidateResult> {
+    // 1. 先尝试 /models 端点
     try {
       const res = await fetch(`${this.baseUrl}/models`, {
         headers: this.headers,
       })
-      return res.ok
-    } catch {
-      return false
+      if (res.ok) {
+        const data = await res.json()
+        const models: string[] = data.data?.map((m: { id: string }) => m.id) || []
+        return { ok: true, models }
+      }
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, error: 'auth_failed', message: 'API Key 无效或权限不足' }
+      }
+    } catch (err) {
+      // /models 网络不通，继续 fallback
+      if ((err as Error).name === 'AbortError') {
+        return { ok: false, error: 'timeout', message: '连接超时，请检查网络或地址是否正确' }
+      }
+    }
+
+    // 2. fallback: 发一条最小 chat 请求检测连通性
+    //    注意：部分 CodingPlan 可能有最小 token 限制或禁用 /models，用实际请求验证
+    try {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 15000)
+      const res = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: this.headers,
+        body: JSON.stringify({
+          model: this.config.chatModel,
+          messages: [{ role: 'user', content: 'hi' }],
+          max_tokens: 5,
+          stream: false,
+        }),
+        signal: controller.signal,
+      })
+      clearTimeout(timeout)
+
+      if (res.ok) {
+        return { ok: true }
+      }
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, error: 'auth_failed', message: 'API Key 无效或权限不足' }
+      }
+      if (res.status === 404) {
+        const body = await res.text().catch(() => '')
+        const hint = body ? `（${body.slice(0, 200)}）` : ''
+        return { ok: false, error: 'not_found', message: `端点或模型不存在，请检查 Base URL 和模型名称${hint}` }
+      }
+      // 400 / 422 通常是参数问题（如模型名不对、max_tokens 不被接受等）
+      if (res.status === 400 || res.status === 422) {
+        const body = await res.text().catch(() => '')
+        const hint = body ? `（${body.slice(0, 200)}）` : ''
+        return { ok: false, error: 'bad_request', message: `请求参数被拒绝，可能是模型名称不支持${hint}` }
+      }
+      const body = await res.text().catch(() => '')
+      const hint = body ? `（${body.slice(0, 200)}）` : ''
+      return { ok: false, error: 'unknown', message: `服务返回 HTTP ${res.status}${hint}` }
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') {
+        return { ok: false, error: 'timeout', message: '连接超时，请检查网络或地址是否正确' }
+      }
+      const rawMsg = (err as Error).message || String(err)
+      return { ok: false, error: 'network_error', message: `网络连接失败：${rawMsg}` }
     }
   }
 

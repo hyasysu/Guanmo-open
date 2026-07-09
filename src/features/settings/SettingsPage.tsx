@@ -5,8 +5,9 @@ import type { IconName } from 'animal-island-ui'
 import { isTauri } from '@/hooks/useTauri'
 import { useSettingsStore } from '@/stores/settingsStore'
 import type { WebSearchConfig } from '@/services/webSearch'
-import { initAiClient, initEmbeddingClient, isLocalApi, validateAiStatus } from '@/services/ai/aiClient'
+import { initAiClient, initEmbeddingClient, isLocalApi, testAiConnection, validateAiStatus } from '@/services/ai/aiClient'
 import { AI_CHAT_PRESETS, AI_EMBEDDING_PRESETS } from '@/services/ai/types'
+import type { AiConfig, ChatProtocol, CustomPreset, EmbeddingProtocol, ValidateResult } from '@/services/ai/types'
 import { updateSearchConfig } from '@/services/webSearch'
 import {
   embedPendingChunks,
@@ -104,6 +105,49 @@ function Sep() {
   return <Divider type="line-brown" className="my-4 opacity-45" />
 }
 
+function ApiKeyInput({ value, onChange, placeholder, disabled }: {
+  value: string
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void
+  placeholder: string
+  disabled?: boolean
+}) {
+  const [show, setShow] = useState(false)
+  return (
+    <Input
+      type={show ? 'text' : 'password'}
+      value={value}
+      onChange={onChange}
+      placeholder={placeholder}
+      disabled={disabled}
+      suffix={
+        <span
+          onClick={() => setShow(!show)}
+          className="cursor-pointer select-none text-gm-text-tertiary hover:text-gm-text-secondary inline-flex items-center"
+          role="button"
+          tabIndex={-1}
+          title={show ? '隐藏' : '显示'}
+        >
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            {show ? (
+              <>
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                <path d="m1 1 22 22" />
+                <path d="m14.12 14.12a3 3 0 1 1-4.24-4.24" />
+              </>
+            ) : (
+              <>
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                <circle cx="12" cy="12" r="3" />
+              </>
+            )}
+          </svg>
+        </span>
+      }
+    />
+  )
+}
+
 function SettingField({
   label,
   description,
@@ -182,8 +226,35 @@ function SliderField({
   )
 }
 
+const CHAT_PROTOCOL_OPTIONS: { key: ChatProtocol; label: string }[] = [
+  { key: 'openai-chat', label: 'OpenAI Chat Completions' },
+  { key: 'anthropic-messages', label: 'Anthropic Messages' },
+  { key: 'openai-responses', label: 'OpenAI Responses' },
+]
+
+const EMB_PROTOCOL_OPTIONS: { key: EmbeddingProtocol; label: string }[] = [
+  { key: 'openai-embedding', label: 'OpenAI Embeddings' },
+]
+
 function AiSettings() {
-  const { ai, webSearch, updateAiConfig, updateEmbeddingConfig, updateWebSearchConfig } = useSettingsStore()
+  const {
+    ai, webSearch,
+    customChatPresets, customEmbeddingPresets,
+    updateAiConfig, updateEmbeddingConfig, updateWebSearchConfig,
+    addCustomChatPreset, removeCustomChatPreset,
+    addCustomEmbeddingPreset, removeCustomEmbeddingPreset,
+  } = useSettingsStore()
+
+  // 测试状态
+  const [chatTestResult, setChatTestResult] = useState<ValidateResult | null>(null)
+  const [chatTesting, setChatTesting] = useState(false)
+  const [embTestResult, setEmbTestResult] = useState<ValidateResult | null>(null)
+  const [embTesting, setEmbTesting] = useState(false)
+  // 保存预设弹窗
+  const [showChatSavePreset, setShowChatSavePreset] = useState(false)
+  const [chatPresetName, setChatPresetName] = useState('')
+  const [showEmbSavePreset, setShowEmbSavePreset] = useState(false)
+  const [embPresetName, setEmbPresetName] = useState('')
 
   useEffect(() => {
     updateSearchConfig(webSearch)
@@ -204,18 +275,117 @@ function AiSettings() {
       }).catch(() => {})
     }, 1000)
     return () => clearTimeout(timer)
-  }, [ai.baseUrl, ai.apiKey, ai.chatModel, ai.embedding.baseUrl, ai.embedding.apiKey, ai.embedding.embeddingModel])
+  }, [ai.protocol, ai.baseUrl, ai.apiKey, ai.chatModel, ai.embedding.protocol, ai.embedding.baseUrl, ai.embedding.apiKey, ai.embedding.embeddingModel])
 
+  // 配置变更时清除旧测试结果
+  useEffect(() => {
+    setChatTestResult(null)
+    setShowChatSavePreset(false)
+  }, [ai.protocol, ai.baseUrl, ai.apiKey, ai.chatModel])
+
+  useEffect(() => {
+    setEmbTestResult(null)
+    setShowEmbSavePreset(false)
+  }, [ai.embedding.protocol, ai.embedding.baseUrl, ai.embedding.apiKey, ai.embedding.embeddingModel])
+
+  const handleChatTest = async () => {
+    setChatTesting(true)
+    setChatTestResult(null)
+    try {
+      const result = await testAiConnection(ai)
+      setChatTestResult(result)
+    } catch (err) {
+      setChatTestResult({ ok: false, error: 'unknown', message: (err as Error).message || String(err) })
+    } finally {
+      setChatTesting(false)
+    }
+  }
+
+  const handleEmbTest = async () => {
+    setEmbTesting(true)
+    setEmbTestResult(null)
+    try {
+      const embConfig: AiConfig = {
+        ...ai,
+        baseUrl: ai.embedding.baseUrl,
+        apiKey: ai.embedding.apiKey,
+        chatModel: ai.embedding.embeddingModel,
+      }
+      const result = await testAiConnection(embConfig)
+      setEmbTestResult(result)
+    } catch (err) {
+      setEmbTestResult({ ok: false, error: 'unknown', message: (err as Error).message || String(err) })
+    } finally {
+      setEmbTesting(false)
+    }
+  }
+
+  const handleSaveChatPreset = () => {
+    const name = chatPresetName.trim()
+    if (!name) return
+    addCustomChatPreset({
+      id: `custom-chat-${Date.now()}`,
+      label: name,
+      protocol: ai.protocol,
+      provider: ai.provider,
+      baseUrl: ai.baseUrl,
+      chatModel: ai.chatModel,
+    })
+    setShowChatSavePreset(false)
+    setChatPresetName('')
+    toast.success(`对话预设"${name}"已保存`)
+  }
+
+  const handleSaveEmbPreset = () => {
+    const name = embPresetName.trim()
+    if (!name) return
+    addCustomEmbeddingPreset({
+      id: `custom-emb-${Date.now()}`,
+      label: name,
+      protocol: ai.embedding.protocol,
+      provider: ai.embedding.provider,
+      baseUrl: ai.embedding.baseUrl,
+      embeddingModel: ai.embedding.embeddingModel,
+    })
+    setShowEmbSavePreset(false)
+    setEmbPresetName('')
+    toast.success(`Embedding 预设"${name}"已保存`)
+  }
+
+  // 按协议过滤系统预设 + 合并用户自定义预设
+  const filteredSysChatPresets = AI_CHAT_PRESETS.filter((p) => p.key === 'custom' || p.protocol === ai.protocol)
+  const filteredCustomChatPresets = customChatPresets.filter((p) => p.protocol === ai.protocol)
+
+  const chatPresetOptions = [
+    ...filteredCustomChatPresets.map((p) => ({ key: p.id, label: p.label })),
+    ...filteredSysChatPresets.map((p) => ({ key: p.key, label: p.label })),
+  ]
+
+  const filteredSysEmbPresets = AI_EMBEDDING_PRESETS.filter((p) => p.key === 'custom' || p.protocol === ai.embedding.protocol)
+  const filteredCustomEmbPresets = customEmbeddingPresets.filter((p) => p.protocol === ai.embedding.protocol)
+
+  const embPresetOptions = [
+    ...filteredCustomEmbPresets.map((p) => ({ key: p.id, label: p.label })),
+    ...filteredSysEmbPresets.map((p) => ({ key: p.key, label: p.label })),
+  ]
+
+  // 当前选中的预设 key（自定义预设优先，协议 + baseUrl + model 三重匹配）
+  const matchedChatCustom = customChatPresets.find((p) => p.protocol === ai.protocol && p.baseUrl === ai.baseUrl && p.chatModel === ai.chatModel)
   const currentChatPreset =
+    matchedChatCustom?.id ??
     AI_CHAT_PRESETS.find((preset) =>
       preset.key !== 'custom' &&
+      preset.protocol === ai.protocol &&
       preset.baseUrl === ai.baseUrl &&
       preset.chatModel === ai.chatModel
     )?.key ?? 'custom'
 
+  const matchedEmbCustom = customEmbeddingPresets.find((p) => p.protocol === ai.embedding.protocol && p.baseUrl === ai.embedding.baseUrl && p.embeddingModel === ai.embedding.embeddingModel)
   const currentEmbeddingPreset =
+    matchedEmbCustom?.id ??
     AI_EMBEDDING_PRESETS.find((preset) =>
       preset.key !== 'custom' &&
+      preset.protocol === ai.embedding.protocol &&
       preset.baseUrl === ai.embedding.baseUrl &&
       preset.embeddingModel === ai.embedding.embeddingModel
     )?.key ?? 'custom'
@@ -230,17 +400,39 @@ function AiSettings() {
         </div>
       )}
       <SectionTitle>对话 API 配置</SectionTitle>
-      <SettingField label="服务预设" description="选择后自动填入地址和模型">
+      <SettingField label="协议类型" description="决定请求格式，大部分服务选择 OpenAI Chat Completions">
         <Select
-          options={AI_CHAT_PRESETS.map((preset) => ({ key: preset.key, label: preset.label }))}
+          options={CHAT_PROTOCOL_OPTIONS}
+          value={ai.protocol}
+          onChange={(key) => {
+            updateAiConfig({ protocol: key as ChatProtocol, provider: 'custom' })
+          }}
+        />
+      </SettingField>
+      <SettingField label="服务预设" description="按协议类型过滤，选择后自动填入">
+        <Select
+          options={chatPresetOptions}
           value={currentChatPreset}
           onChange={(key) => {
-            const preset = AI_CHAT_PRESETS.find((item) => item.key === key)
-            if (!preset || preset.key === 'custom') return
-            updateAiConfig({
-              baseUrl: preset.baseUrl,
-              chatModel: preset.chatModel ?? '',
-            })
+            const sysPreset = AI_CHAT_PRESETS.find((item) => item.key === key)
+            if (sysPreset && sysPreset.key !== 'custom') {
+              updateAiConfig({
+                protocol: sysPreset.protocol as ChatProtocol,
+                provider: sysPreset.provider,
+                baseUrl: sysPreset.baseUrl,
+                chatModel: sysPreset.chatModel ?? '',
+              })
+              return
+            }
+            const customPreset = customChatPresets.find((p) => p.id === key)
+            if (customPreset) {
+              updateAiConfig({
+                protocol: customPreset.protocol as ChatProtocol,
+                provider: customPreset.provider,
+                baseUrl: customPreset.baseUrl,
+                chatModel: customPreset.chatModel ?? '',
+              })
+            }
           }}
         />
       </SettingField>
@@ -249,27 +441,102 @@ function AiSettings() {
       </SettingField>
       {!isLocalApi(ai.baseUrl) && (
         <SettingField label="API Key" description="通过系统安全存储保存，不写入普通设置">
-          <Input type="password" value={ai.apiKey} onChange={(e) => updateAiConfig({ apiKey: e.target.value })} placeholder="sk-..." disabled={!isTauri()} />
+          <ApiKeyInput value={ai.apiKey} onChange={(e) => updateAiConfig({ apiKey: e.target.value })} placeholder="sk-..." disabled={!isTauri()} />
         </SettingField>
       )}
       <SettingField label="对话模型" description="用于日常对话和 Agent 执行的模型">
         <Input value={ai.chatModel} onChange={(e) => updateAiConfig({ chatModel: e.target.value })} placeholder="gpt-4o-mini" />
       </SettingField>
 
+      {/* 测试连接 */}
+      <div className="py-1 flex items-center gap-2">
+        <Button type="default" size="small" loading={chatTesting} onClick={handleChatTest}>
+          测试连接
+        </Button>
+        {currentChatPreset !== 'custom' && customChatPresets.some(p => p.id === currentChatPreset) && (
+          <Button type="text" size="small" className="text-gm-text-tertiary hover:text-gm-error"
+            onClick={() => { removeCustomChatPreset(currentChatPreset); toast.success('预设已删除') }}>
+            删除此预设
+          </Button>
+        )}
+      </div>
+
+      {/* 测试结果 */}
+      {chatTesting && (
+        <p className="text-caption text-gm-text-secondary py-1">连接中…</p>
+      )}
+      {chatTestResult && !chatTesting && (
+        <div className={`rounded-lg border px-3 py-2 mb-1 text-caption ${
+          chatTestResult.ok
+            ? 'border-gm-success/30 bg-gm-success/5 text-gm-success'
+            : 'border-gm-error/30 bg-gm-error/5 text-gm-error'
+        }`}>
+          <div className="flex items-center gap-1.5 font-semibold">
+            <span>{chatTestResult.ok ? '✓' : '✗'}</span>
+            <span>{chatTestResult.ok ? '连接成功' : chatTestResult.message || '连接失败'}</span>
+          </div>
+          {chatTestResult.ok && chatTestResult.models && chatTestResult.models.length > 0 && (
+            <div className="mt-1 text-gm-text-secondary font-normal">
+              可用模型：{chatTestResult.models.slice(0, 8).join(', ')}
+              {chatTestResult.models.length > 8 && ` 等 ${chatTestResult.models.length} 个`}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 保存 / 删除预设 */}
+      {chatTestResult?.ok && (
+        <div className="py-1 flex items-center gap-2">
+          {!showChatSavePreset ? (
+            <Button type="text" size="small" onClick={() => setShowChatSavePreset(true)}>
+              保存为预设
+            </Button>
+          ) : (
+            <>
+              <Input value={chatPresetName} onChange={(e) => setChatPresetName(e.target.value)} placeholder="输入预设名称" style={{ width: 180 }} />
+              <Button type="primary" size="small" onClick={handleSaveChatPreset} disabled={!chatPresetName.trim()}>保存</Button>
+              <Button type="text" size="small" onClick={() => { setShowChatSavePreset(false); setChatPresetName('') }}>取消</Button>
+            </>
+          )}
+        </div>
+      )}
+
       <Sep />
 
       <SectionTitle>Embedding 配置</SectionTitle>
-      <SettingField label="服务预设" description="可与对话使用不同服务商">
+      <SettingField label="协议类型" description="决定 Embedding 请求格式，目前仅支持 OpenAI Embeddings">
         <Select
-          options={AI_EMBEDDING_PRESETS.map((preset) => ({ key: preset.key, label: preset.label }))}
+          options={EMB_PROTOCOL_OPTIONS}
+          value={ai.embedding.protocol}
+          onChange={(key) => {
+            updateEmbeddingConfig({ protocol: key as EmbeddingProtocol, provider: 'custom' })
+          }}
+        />
+      </SettingField>
+      <SettingField label="服务预设" description="按协议类型过滤，可与对话使用不同服务商">
+        <Select
+          options={embPresetOptions}
           value={currentEmbeddingPreset}
           onChange={(key) => {
-            const preset = AI_EMBEDDING_PRESETS.find((item) => item.key === key)
-            if (!preset || preset.key === 'custom') return
-            updateEmbeddingConfig({
-              baseUrl: preset.baseUrl,
-              embeddingModel: preset.embeddingModel ?? '',
-            })
+            const sysPreset = AI_EMBEDDING_PRESETS.find((item) => item.key === key)
+            if (sysPreset && sysPreset.key !== 'custom') {
+              updateEmbeddingConfig({
+                protocol: (sysPreset.protocol as EmbeddingProtocol),
+                provider: sysPreset.provider,
+                baseUrl: sysPreset.baseUrl,
+                embeddingModel: sysPreset.embeddingModel ?? '',
+              })
+              return
+            }
+            const customPreset = customEmbeddingPresets.find((p) => p.id === key)
+            if (customPreset) {
+              updateEmbeddingConfig({
+                protocol: customPreset.protocol as EmbeddingProtocol,
+                provider: customPreset.provider,
+                baseUrl: customPreset.baseUrl,
+                embeddingModel: customPreset.embeddingModel ?? '',
+              })
+            }
           }}
         />
       </SettingField>
@@ -278,12 +545,65 @@ function AiSettings() {
       </SettingField>
       {!isLocalApi(ai.embedding.baseUrl) && (
         <SettingField label="API Key" description="通过系统安全存储保存">
-          <Input type="password" value={ai.embedding.apiKey} onChange={(e) => updateEmbeddingConfig({ apiKey: e.target.value })} placeholder="sk-..." disabled={!isTauri()} />
+          <ApiKeyInput value={ai.embedding.apiKey} onChange={(e) => updateEmbeddingConfig({ apiKey: e.target.value })} placeholder="sk-..." disabled={!isTauri()} />
         </SettingField>
       )}
       <SettingField label="Embedding 模型" description="将文本转为向量，用于知识库语义检索">
         <Input value={ai.embedding.embeddingModel} onChange={(e) => updateEmbeddingConfig({ embeddingModel: e.target.value })} placeholder="text-embedding-3-small" />
       </SettingField>
+
+      {/* Embedding 测试连接 */}
+      <div className="py-1 flex items-center gap-2">
+        <Button type="default" size="small" loading={embTesting} onClick={handleEmbTest}>
+          测试连接
+        </Button>
+        {currentEmbeddingPreset !== 'custom' && customEmbeddingPresets.some(p => p.id === currentEmbeddingPreset) && (
+          <Button type="text" size="small" className="text-gm-text-tertiary hover:text-gm-error"
+            onClick={() => { removeCustomEmbeddingPreset(currentEmbeddingPreset); toast.success('预设已删除') }}>
+            删除此预设
+          </Button>
+        )}
+      </div>
+
+      {/* Embedding 测试结果 */}
+      {embTesting && (
+        <p className="text-caption text-gm-text-secondary py-1">连接中…</p>
+      )}
+      {embTestResult && !embTesting && (
+        <div className={`rounded-lg border px-3 py-2 mb-1 text-caption ${
+          embTestResult.ok
+            ? 'border-gm-success/30 bg-gm-success/5 text-gm-success'
+            : 'border-gm-error/30 bg-gm-error/5 text-gm-error'
+        }`}>
+          <div className="flex items-center gap-1.5 font-semibold">
+            <span>{embTestResult.ok ? '✓' : '✗'}</span>
+            <span>{embTestResult.ok ? '连接成功' : embTestResult.message || '连接失败'}</span>
+          </div>
+          {embTestResult.ok && embTestResult.models && embTestResult.models.length > 0 && (
+            <div className="mt-1 text-gm-text-secondary font-normal">
+              可用模型：{embTestResult.models.slice(0, 8).join(', ')}
+              {embTestResult.models.length > 8 && ` 等 ${embTestResult.models.length} 个`}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Embedding 保存 / 删除预设 */}
+      {embTestResult?.ok && (
+        <div className="py-1 flex items-center gap-2">
+          {!showEmbSavePreset ? (
+            <Button type="text" size="small" onClick={() => setShowEmbSavePreset(true)}>
+              保存为预设
+            </Button>
+          ) : (
+            <>
+              <Input value={embPresetName} onChange={(e) => setEmbPresetName(e.target.value)} placeholder="输入预设名称" style={{ width: 180 }} />
+              <Button type="primary" size="small" onClick={handleSaveEmbPreset} disabled={!embPresetName.trim()}>保存</Button>
+              <Button type="text" size="small" onClick={() => { setShowEmbSavePreset(false); setEmbPresetName('') }}>取消</Button>
+            </>
+          )}
+        </div>
+      )}
 
       <Sep />
 
@@ -332,8 +652,7 @@ function AiSettings() {
       )}
       {webSearch.provider !== 'duckduckgo' && (
         <SettingField label="搜索 API Key" description="同样通过系统安全存储保存">
-          <Input
-            type="password"
+          <ApiKeyInput
             value={webSearch.apiKey}
             onChange={(e) => updateWebSearchConfig({ apiKey: e.target.value })}
             placeholder={webSearch.provider === 'tavily' ? 'tvly-...' : webSearch.provider === 'custom' ? '可选，用于 Authorization 头' : '...'}
@@ -530,6 +849,9 @@ function EditorSettings() {
       <SettingField label="同步滚动" description="编辑 + 预览模式下同步两侧滚动位置">
         <Switch checked={editor.syncScroll} onChange={(v) => updateEditorSettings({ syncScroll: v })} />
       </SettingField>
+      <SettingField label="快捷 AI 自动发送" description="点击编辑区右键菜单中的快捷 AI 操作后立即发送；关闭时仅填入输入框">
+        <Switch checked={editor.autoSendAiShortcut} onChange={(v) => updateEditorSettings({ autoSendAiShortcut: v })} />
+      </SettingField>
       <SettingField label="自动保存" description={!isTauri() ? "浏览器模式下自动保存不可用" : "编辑后自动保存"}>
         <Switch checked={isTauri() && editor.autoSave} onChange={(v) => updateEditorSettings({ autoSave: v })} disabled={!isTauri()} />
       </SettingField>
@@ -590,6 +912,8 @@ function GeneralSettings() {
 
   const handleRestoreDefaults = () => {
     updateAiConfig({
+      protocol: 'openai-chat',
+      provider: 'custom',
       baseUrl: '',
       chatModel: '',
       streamEnabled: true,
@@ -601,6 +925,8 @@ function GeneralSettings() {
       topP: 1,
     })
     updateEmbeddingConfig({
+      protocol: 'openai-embedding',
+      provider: 'custom',
       baseUrl: '',
       embeddingModel: '',
     })
@@ -614,6 +940,7 @@ function GeneralSettings() {
       autoSave: true,
       autoSaveDelay: 1000,
       syncScroll: true,
+      autoSendAiShortcut: false,
     })
     updateAppearanceSettings({ customCursorEnabled: true, theme: 'light' })
     updateWebSearchConfig({ provider: 'duckduckgo', apiKey: '', maxResults: 5, customUrl: '' })
@@ -699,7 +1026,7 @@ function GeneralSettings() {
           <img src={appIcon} alt="观墨" className="w-full h-full object-cover" />
         </div>
         <div>
-          <div className="text-body font-bold text-gm-text">观墨 v1.0.3</div>
+          <div className="text-body font-bold text-gm-text">观墨 v1.1.0</div>
           <div className="text-caption text-gm-text-tertiary">AI 驱动的 Markdown 知识管理</div>
         </div>
       </div>

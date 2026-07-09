@@ -1,7 +1,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { AiConfig, EmbeddingConfig } from '@/services/ai/types'
+import type { AiConfig, ChatProtocol, CustomPreset, EmbeddingConfig, EmbeddingProtocol, ProviderId } from '@/services/ai/types'
 import { DEFAULT_AI_CONFIG } from '@/services/ai/types'
+import { inferProvider } from '@/services/ai/aiClient'
 import type { WebSearchConfig } from '@/services/webSearch'
 import { updateSearchConfig } from '@/services/webSearch'
 import {
@@ -39,12 +40,18 @@ interface SettingsState {
   editor: EditorSettings
   appearance: AppearanceSettings
   webSearch: WebSearchConfig
+  customChatPresets: CustomPreset[]
+  customEmbeddingPresets: CustomPreset[]
 
   updateAiConfig: (config: Partial<AiConfig>) => void
   updateEmbeddingConfig: (config: Partial<EmbeddingConfig>) => void
   updateEditorSettings: (settings: Partial<EditorSettings>) => void
   updateAppearanceSettings: (settings: Partial<AppearanceSettings>) => void
   updateWebSearchConfig: (config: Partial<WebSearchConfig>) => void
+  addCustomChatPreset: (preset: CustomPreset) => void
+  removeCustomChatPreset: (id: string) => void
+  addCustomEmbeddingPreset: (preset: CustomPreset) => void
+  removeCustomEmbeddingPreset: (id: string) => void
 }
 
 const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
@@ -90,6 +97,8 @@ export const useSettingsStore = create<SettingsState>()(
       editor: DEFAULT_EDITOR_SETTINGS,
       appearance: DEFAULT_APPEARANCE_SETTINGS,
       webSearch: DEFAULT_WEB_SEARCH,
+      customChatPresets: [],
+      customEmbeddingPresets: [],
 
       updateAiConfig: (config) => {
         if ('apiKey' in config) {
@@ -147,6 +156,34 @@ export const useSettingsStore = create<SettingsState>()(
           return { webSearch }
         })
       },
+
+      addCustomChatPreset: (preset) =>
+        set((s) => {
+          const existing = s.customChatPresets.findIndex((p) => p.id === preset.id)
+          if (existing >= 0) {
+            const updated = [...s.customChatPresets]
+            updated[existing] = preset
+            return { customChatPresets: updated }
+          }
+          return { customChatPresets: [...s.customChatPresets, preset] }
+        }),
+
+      removeCustomChatPreset: (id) =>
+        set((s) => ({ customChatPresets: s.customChatPresets.filter((p) => p.id !== id) })),
+
+      addCustomEmbeddingPreset: (preset) =>
+        set((s) => {
+          const existing = s.customEmbeddingPresets.findIndex((p) => p.id === preset.id)
+          if (existing >= 0) {
+            const updated = [...s.customEmbeddingPresets]
+            updated[existing] = preset
+            return { customEmbeddingPresets: updated }
+          }
+          return { customEmbeddingPresets: [...s.customEmbeddingPresets, preset] }
+        }),
+
+      removeCustomEmbeddingPreset: (id) =>
+        set((s) => ({ customEmbeddingPresets: s.customEmbeddingPresets.filter((p) => p.id !== id) })),
     }),
     {
       name: 'guanmo-settings',
@@ -161,19 +198,50 @@ export const useSettingsStore = create<SettingsState>()(
       }),
       merge: (persisted, current) => {
         const saved = persisted as Partial<SettingsState>
+        // 向后兼容：旧配置没有 protocol/provider，自动补全
+        const savedAi = saved.ai
+        const patchedAi = savedAi ? {
+          ...savedAi,
+          protocol: savedAi.protocol || 'openai-chat' as const,
+          provider: savedAi.provider || (savedAi.baseUrl ? inferProvider(savedAi.baseUrl) : 'custom' as const),
+          embedding: savedAi.embedding ? {
+            ...savedAi.embedding,
+            protocol: savedAi.embedding.protocol || 'openai-embedding' as const,
+            provider: savedAi.embedding.provider || (savedAi.embedding.baseUrl ? inferProvider(savedAi.embedding.baseUrl) : 'custom' as const),
+            apiKey: '',
+          } : current.ai.embedding,
+          apiKey: '',
+        } : undefined
+        // 向后兼容：旧自定义预设没有 protocol/provider，补齐后类型断言
+        const VALID_CHAT_PROTOCOLS: ChatProtocol[] = ['openai-chat', 'anthropic-messages', 'openai-responses']
+        const patchedChatPresets: CustomPreset[] = (saved.customChatPresets || []).map((p) => ({
+          id: p.id || '',
+          label: p.label || '',
+          protocol: VALID_CHAT_PROTOCOLS.includes((p as unknown as Record<string, unknown>).protocol as ChatProtocol)
+            ? (p as unknown as Record<string, unknown>).protocol as ChatProtocol
+            : 'openai-chat',
+          provider: ((p as unknown as Record<string, unknown>).provider as ProviderId) || (p.baseUrl ? inferProvider(p.baseUrl) : 'custom'),
+          baseUrl: p.baseUrl || '',
+          chatModel: p.chatModel,
+          embeddingModel: p.embeddingModel,
+          capabilities: p.capabilities,
+        }))
+        const patchedEmbPresets: CustomPreset[] = (saved.customEmbeddingPresets || []).map((p) => ({
+          id: p.id || '',
+          label: p.label || '',
+          protocol: ((p as unknown as Record<string, unknown>).protocol as EmbeddingProtocol) || 'openai-embedding',
+          provider: ((p as unknown as Record<string, unknown>).provider as ProviderId) || (p.baseUrl ? inferProvider(p.baseUrl) : 'custom'),
+          baseUrl: p.baseUrl || '',
+          chatModel: p.chatModel,
+          embeddingModel: p.embeddingModel,
+          capabilities: p.capabilities,
+        }))
         return {
           ...current,
           ...saved,
-          ai: {
-            ...current.ai,
-            ...saved.ai,
-            apiKey: '',
-            embedding: {
-              ...current.ai.embedding,
-              ...saved.ai?.embedding,
-              apiKey: '',
-            },
-          },
+          ai: patchedAi || current.ai,
+          customChatPresets: patchedChatPresets.length > 0 ? patchedChatPresets : current.customChatPresets,
+          customEmbeddingPresets: patchedEmbPresets.length > 0 ? patchedEmbPresets : current.customEmbeddingPresets,
           editor: {
             ...current.editor,
             ...saved.editor,
