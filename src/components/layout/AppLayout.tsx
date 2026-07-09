@@ -9,11 +9,13 @@ import { Sidebar } from './Sidebar'
 import { StatusBar } from './StatusBar'
 import { TitleBar } from './TitleBar'
 import { EditorArea, OPEN_EDITOR_SEARCH_EVENT } from '../editor/EditorArea'
+import { FullscreenControlBar } from '../editor/FullscreenControlBar'
 import { AiPanel } from '../ai/AiPanel'
 import { CommandPalette } from '../common/CommandPalette'
 import { SettingsPage } from '@/features/settings/SettingsPage'
 import { toast } from '@/services/toast'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useFullscreen } from '@/hooks/useFullscreen'
 
 export function AppLayout() {
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
@@ -27,32 +29,28 @@ export function AppLayout() {
   const toggleDiffPreview = useEditorStore((s) => s.toggleDiffPreview)
   const setViewMode = useEditorStore((s) => s.setViewMode)
   const { handleNewFile, handleOpenFile, handleSaveFile } = useFileOperations()
+  const { isFullscreen, toggleFullscreen, exitFullscreen } = useFullscreen()
   const customCursorEnabled = useSettingsStore((s) => s.appearance.customCursorEnabled)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [commandPaletteMode, setCommandPaletteMode] = useState<'commands' | 'files'>('commands')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [fullscreenAiPosition, setFullscreenAiPosition] = useState(() => getDefaultFullscreenAiPosition())
+  const fullscreenAiDragRef = useRef<{
+    pointerId: number
+    startX: number
+    startY: number
+    originX: number
+    originY: number
+    dragged: boolean
+  } | null>(null)
+  const fullscreenAiPanelRef = useRef<HTMLDivElement | null>(null)
 
-  // Intercept browser default shortcuts (Ctrl+S save, Ctrl+F find, etc.)
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
-        const key = e.key.toLowerCase()
-        const isSettingsShortcut = e.code === 'Comma' || key === ',' || key === '，'
-        if (isSettingsShortcut) {
-          e.preventDefault()
-          e.stopPropagation()
-          setSettingsOpen(true)
-          return
-        }
-        if (key === 's' || key === 'f' || key === 'g' || key === 'h' || key === 'p' || key === 'j' || key === 'e' || key === 'd' || ['1', '2', '3', '4', '5'].includes(key)) {
-          e.preventDefault()
-          e.stopPropagation()
-        }
-      }
+    if (isFullscreen) {
+      useAppStore.setState({ aiPanelOpen: false })
+      setFullscreenAiPosition(getDefaultFullscreenAiPosition())
     }
-    window.addEventListener('keydown', handler, true)
-    return () => window.removeEventListener('keydown', handler, true)
-  }, [])
+  }, [isFullscreen])
 
   // AI panel resize
   const isResizing = useRef(false)
@@ -89,6 +87,59 @@ export function AppLayout() {
     }
   }, [setAiPanelWidth])
 
+  useEffect(() => {
+    if (!isFullscreen) return
+    const handleResize = () => {
+      setFullscreenAiPosition((position) => clampFullscreenAiPosition(position.x, position.y))
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [isFullscreen])
+
+  const handleFullscreenAiDragStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    fullscreenAiDragRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      originX: fullscreenAiPosition.x,
+      originY: fullscreenAiPosition.y,
+      dragged: false,
+    }
+    document.body.style.userSelect = 'none'
+  }, [fullscreenAiPosition])
+
+  const handleFullscreenAiDragMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = fullscreenAiDragRef.current
+    if (!drag || drag.pointerId !== e.pointerId) return
+    const dx = e.clientX - drag.startX
+    const dy = e.clientY - drag.startY
+    if (Math.abs(dx) + Math.abs(dy) > 3) drag.dragged = true
+    setFullscreenAiPosition(clampFullscreenAiPosition(drag.originX + dx, drag.originY + dy))
+  }, [])
+
+  const handleFullscreenAiDragEnd = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = fullscreenAiDragRef.current
+    if (drag?.pointerId === e.pointerId) {
+      fullscreenAiDragRef.current = null
+      document.body.style.userSelect = ''
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isFullscreen || !aiPanelOpen) return
+    const handlePointerDown = (e: PointerEvent) => {
+      if (fullscreenAiPanelRef.current?.contains(e.target as Node)) return
+      useAppStore.setState({ aiPanelOpen: false })
+    }
+    document.addEventListener('pointerdown', handlePointerDown, true)
+    return () => document.removeEventListener('pointerdown', handlePointerDown, true)
+  }, [aiPanelOpen, isFullscreen])
+
   const handleOpenSearch = useCallback(() => {
     window.dispatchEvent(new Event(OPEN_EDITOR_SEARCH_EVENT))
   }, [])
@@ -104,29 +155,70 @@ export function AppLayout() {
     }
   }, [])
 
+  const toggleTheme = useCallback(() => {
+    const theme = useSettingsStore.getState().appearance.theme
+    useSettingsStore.getState().updateAppearanceSettings({ theme: theme === 'dark' ? 'light' : 'dark' })
+  }, [])
+
+  const runAfterNormalLayout = useCallback(async (action: () => void | Promise<void>) => {
+    if (useAppStore.getState().isFullscreen) {
+      await exitFullscreen()
+    }
+    await action()
+  }, [exitFullscreen])
+
+  const openSettings = useCallback(() => {
+    void runAfterNormalLayout(() => setSettingsOpen(true))
+  }, [runAfterNormalLayout])
+
+  const openCommandPalette = useCallback((mode: 'commands' | 'files') => {
+    void runAfterNormalLayout(() => {
+      setCommandPaletteMode(mode)
+      setCommandPaletteOpen(true)
+    })
+  }, [runAfterNormalLayout])
+
+  // Intercept browser default shortcuts (Ctrl+S save, Ctrl+F find, etc.)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        const key = e.key.toLowerCase()
+        const isSettingsShortcut = key === 'i'
+        if (isSettingsShortcut) {
+          e.preventDefault()
+          e.stopPropagation()
+          openSettings()
+          return
+        }
+        if (key === 's' || key === 'f' || key === 'g' || key === 'h' || key === 'p' || key === 'j' || key === 'e' || key === 'd' || ['1', '2', '3', '4', '5'].includes(key)) {
+          e.preventDefault()
+          e.stopPropagation()
+        }
+      }
+    }
+    window.addEventListener('keydown', handler, true)
+    return () => window.removeEventListener('keydown', handler, true)
+  }, [openSettings])
+
   const shortcuts = {
-    'CTRL+P': () => {
-      setCommandPaletteMode('files')
-      setCommandPaletteOpen(true)
-    },
-    'CTRL+SHIFT+P': () => {
-      setCommandPaletteMode('commands')
-      setCommandPaletteOpen(true)
-    },
+    'CTRL+P': () => openCommandPalette('files'),
+    'CTRL+SHIFT+P': () => openCommandPalette('commands'),
     'CTRL+B': () => toggleSidebar(),
     'CTRL+J': () => toggleAiPanel(),
     'CTRL+N': () => handleNewFile(),
-    'CTRL+O': () => handleOpenFile(),
+    'CTRL+O': () => void runAfterNormalLayout(() => handleOpenFile()),
     'CTRL+S': () => handleSaveFile(),
     'CTRL+SHIFT+V': () => togglePreview(),
     'CTRL+SHIFT+D': () => toggleDiffPreview(),
+    'CTRL+SHIFT+L': () => toggleTheme(),
+    'F11': () => void toggleFullscreen(),
     'CTRL+SHIFT+1': () => setViewMode('edit'),
     'CTRL+SHIFT+2': () => setViewMode('preview'),
     'CTRL+SHIFT+3': () => setViewMode('edit-preview'),
     'CTRL+SHIFT+4': () => setViewMode('dual-preview'),
     'CTRL+SHIFT+5': () => setViewMode('diff-preview'),
     'CTRL+SHIFT+E': () => handleExportHtml(),
-    'CTRL+,': () => setSettingsOpen(true),
+    'CTRL+I': () => openSettings(),
   }
 
   useKeyboardShortcuts(shortcuts)
@@ -138,17 +230,19 @@ export function AppLayout() {
   return (
     <div className="flex flex-col h-full w-full bg-gm-canvas">
       {/* Title Bar */}
-      <TitleBar />
+      {!isFullscreen && <TitleBar />}
 
       {/* Main Content Area */}
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
-        <Sidebar
-          collapsed={sidebarCollapsed}
-          width={sidebarWidth}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onOpenSearch={handleOpenSearch}
-        />
+        {!isFullscreen && (
+          <Sidebar
+            collapsed={sidebarCollapsed}
+            width={sidebarWidth}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSearch={handleOpenSearch}
+          />
+        )}
 
         {/* Editor Area */}
         <div className="flex-1 flex overflow-hidden">
@@ -156,7 +250,7 @@ export function AppLayout() {
         </div>
 
         {/* AI Panel */}
-        {aiPanelOpen && (
+        {!isFullscreen && aiPanelOpen && (
           <div
             className="border-l border-gm-border flex-shrink-0 animate-slideInRight relative"
             style={{ width: aiPanelWidth, contain: 'layout' }}
@@ -171,8 +265,35 @@ export function AppLayout() {
         )}
       </div>
 
+      {isFullscreen && <FullscreenControlBar />}
+
+      {isFullscreen && aiPanelOpen && (
+        <div
+          ref={fullscreenAiPanelRef}
+          className="fixed z-[45] flex flex-col overflow-hidden rounded-2xl border border-gm-border bg-gm-surface/92 shadow-lg backdrop-blur-xl animate-slideInRight"
+          style={{
+            left: fullscreenAiPosition.x,
+            top: fullscreenAiPosition.y,
+            width: getFullscreenAiSize().width,
+            height: getFullscreenAiSize().height,
+            contain: 'layout',
+          }}
+        >
+          <div className="min-h-0 min-w-0 flex-1">
+            <AiPanel
+              fullscreenDragHandleProps={{
+                onPointerDown: handleFullscreenAiDragStart,
+                onPointerMove: handleFullscreenAiDragMove,
+                onPointerUp: handleFullscreenAiDragEnd,
+                onPointerCancel: handleFullscreenAiDragEnd,
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Status Bar */}
-      <StatusBar />
+      {!isFullscreen && <StatusBar />}
 
       {/* Command Palette */}
       <CommandPalette
@@ -205,4 +326,28 @@ export function AppLayout() {
       `}</style>
     </div>
   )
+}
+
+const FULLSCREEN_AI_MARGIN = 16
+const FULLSCREEN_AI_MAX_WIDTH = 404
+
+function getFullscreenAiSize() {
+  const width = Math.min(FULLSCREEN_AI_MAX_WIDTH, Math.max(320, window.innerWidth - FULLSCREEN_AI_MARGIN * 2))
+  const height = Math.min(680, Math.max(360, window.innerHeight - FULLSCREEN_AI_MARGIN * 2))
+  return { width, height }
+}
+
+function getDefaultFullscreenAiPosition() {
+  const size = getFullscreenAiSize()
+  return clampFullscreenAiPosition(window.innerWidth - size.width - FULLSCREEN_AI_MARGIN, 64)
+}
+
+function clampFullscreenAiPosition(x: number, y: number) {
+  const size = getFullscreenAiSize()
+  const maxX = Math.max(FULLSCREEN_AI_MARGIN, window.innerWidth - size.width - FULLSCREEN_AI_MARGIN)
+  const maxY = Math.max(FULLSCREEN_AI_MARGIN, window.innerHeight - size.height - FULLSCREEN_AI_MARGIN)
+  return {
+    x: Math.min(Math.max(FULLSCREEN_AI_MARGIN, x), maxX),
+    y: Math.min(Math.max(FULLSCREEN_AI_MARGIN, y), maxY),
+  }
 }

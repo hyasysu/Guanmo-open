@@ -20,6 +20,7 @@ interface AppState {
   aiPanelWidth: number
   workspacePath: string | null
   aiStatus: AiServiceStatus
+  isFullscreen: boolean
 
   toggleSidebar: () => void
   toggleAiPanel: () => void
@@ -27,6 +28,7 @@ interface AppState {
   setAiPanelWidth: (width: number) => void
   setWorkspacePath: (path: string | null) => void
   setAiStatus: (status: AiServiceStatus) => void
+  setFullscreen: (isFullscreen: boolean) => void
 }
 
 export const useAppStore = create<AppState>()(
@@ -38,6 +40,7 @@ export const useAppStore = create<AppState>()(
       aiPanelWidth: 360,
       workspacePath: null,
       aiStatus: 'unchecked',
+      isFullscreen: false,
 
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       toggleAiPanel: () => set((s) => ({ aiPanelOpen: !s.aiPanelOpen })),
@@ -45,6 +48,7 @@ export const useAppStore = create<AppState>()(
       setAiPanelWidth: (width) => set({ aiPanelWidth: width }),
       setWorkspacePath: (path) => set({ workspacePath: path }),
       setAiStatus: (status) => set({ aiStatus: status }),
+      setFullscreen: (isFullscreen) => set({ isFullscreen }),
     }),
     {
       name: 'guanmo-app',

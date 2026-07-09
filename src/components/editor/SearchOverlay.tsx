@@ -283,7 +283,7 @@ export function SearchOverlay({ onClose, editorViewRef, previewPanes = [] }: Sea
   useEffect(() => { inputRef.current?.focus() }, [])
 
   return (
-    <div className="absolute top-2 right-2 z-50 bg-gm-surface border border-gm-border rounded-xl shadow-lg p-3 animate-slideInUp min-w-[300px]">
+    <div data-editor-search-overlay className="absolute top-2 right-2 z-50 bg-gm-surface border border-gm-border rounded-xl shadow-lg p-3 animate-slideInUp min-w-[300px]">
       <div className="flex flex-col gap-2">
         {/* Search row */}
         <div className="flex items-center gap-2">

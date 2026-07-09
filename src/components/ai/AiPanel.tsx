@@ -1,4 +1,4 @@
-import { memo, useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { memo, useState, useRef, useEffect, useCallback, useMemo, type PointerEventHandler } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { useChatStore } from '@/stores/chatStore'
 import type { RagSource, RagStatus, TimelineItem, PendingEdit } from '@/stores/chatStore'
@@ -16,7 +16,16 @@ import { toast } from '@/services/toast'
 import type { ChatMessageSource } from '@/services/ai/types'
 import { AI_SHORTCUT_SUBMIT_EVENT } from '@/services/aiContext'
 
-export function AiPanel() {
+type AiPanelProps = {
+  fullscreenDragHandleProps?: {
+    onPointerDown: PointerEventHandler<HTMLDivElement>
+    onPointerMove: PointerEventHandler<HTMLDivElement>
+    onPointerUp: PointerEventHandler<HTMLDivElement>
+    onPointerCancel: PointerEventHandler<HTMLDivElement>
+  }
+}
+
+export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
   const { messages, streaming, error, ragStatus, ragSources, timeline, sendMessage, cancelStream } = useAiChat()
   const setDraftInput = useChatStore((s) => s.setDraftInput)
@@ -147,7 +156,13 @@ export function AiPanel() {
   return (
     <div className="gm-instant-color h-full min-h-0 flex flex-col relative">
       {/* Header */}
-      <div className="h-11 flex items-center px-4 border-b border-gm-border-subtle bg-gm-surface relative z-10">
+      <div
+        className={`flex items-center border-b border-gm-border-subtle bg-gm-surface relative z-10 ${
+          fullscreenDragHandleProps ? 'h-9 cursor-grab touch-none px-3 active:cursor-grabbing' : 'h-11 px-4'
+        }`}
+        aria-label={fullscreenDragHandleProps ? '拖动 AI 助手' : undefined}
+        {...fullscreenDragHandleProps}
+      >
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 rounded-lg flex items-center justify-center">
             <Icon name="icon-chat" size={18} bounce={streaming} />
@@ -160,30 +175,32 @@ export function AiPanel() {
           )}
         </div>
         <div className="flex-1" />
-        {messages.length > 0 && (
+        <div className="flex items-center" onPointerDown={(e) => e.stopPropagation()}>
+          {messages.length > 0 && (
+            <Button
+              type="text"
+              size="small"
+              onClick={clearMessages}
+              title="清空对话"
+              icon={
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                </svg>
+              }
+            />
+          )}
           <Button
             type="text"
             size="small"
-            onClick={clearMessages}
-            title="清空对话"
+            onClick={toggleAiPanel}
+            title="关闭面板"
             icon={
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                <path d="M18 6L6 18M6 6l12 12" />
               </svg>
             }
           />
-        )}
-        <Button
-          type="text"
-          size="small"
-          onClick={toggleAiPanel}
-          title="关闭面板"
-          icon={
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M18 6L6 18M6 6l12 12" />
-            </svg>
-          }
-        />
+        </div>
       </div>
 
       <AgentTimeline timeline={timeline} />

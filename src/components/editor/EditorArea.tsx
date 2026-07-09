@@ -134,6 +134,7 @@ export function EditorArea() {
   const editorWordWrap = useSettingsStore((s) => s.editor.wordWrap)
   const editorLineNumbers = useSettingsStore((s) => s.editor.lineNumbers)
   const syncScroll = useSettingsStore((s) => s.editor.syncScroll)
+  const isFullscreen = useAppStore((s) => s.isFullscreen)
   const editorViewRef = useRef<EditorView | null>(null)
   const readingPositionsRef = useRef<Record<string, ReadingPosition>>({})
   const leftPreviewRef = useRef<HTMLDivElement>(null)
@@ -157,6 +158,10 @@ export function EditorArea() {
   const [activeEditorHeading, setActiveEditorHeading] = useState<string | null>(null)
   const [tocFocus, setTocFocus] = useState<'editor' | 'preview'>('editor')
   const [previewMenu, setPreviewMenu] = useState<PreviewMenuState | null>(null)
+
+  useEffect(() => {
+    if (isFullscreen) setTocCollapsed(true)
+  }, [isFullscreen])
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
   const selectedRightTab = rightPaneTabId ? tabs.find((t) => t.id === rightPaneTabId) : null
@@ -1011,7 +1016,7 @@ export function EditorArea() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-gm-canvas">
-      <TabBar />
+      {!isFullscreen && <TabBar />}
 
       <div className="flex-1 flex overflow-hidden relative">
         {tabs.length === 0 ? (

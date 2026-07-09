@@ -3,6 +3,7 @@ import { undo, redo } from '@codemirror/commands'
 import { useEditorHistoryStore } from '@/stores/editorHistoryStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { getActiveEditorView } from '@/services/editorViewRef'
+import { useFullscreen } from '@/hooks/useFullscreen'
 
 import { isTauri } from '@/hooks/useTauri'
 
@@ -10,6 +11,7 @@ export function TitleBar() {
   const [maximized, setMaximized] = useState(false)
   const canUndo = useEditorHistoryStore((s) => s.canUndo)
   const canRedo = useEditorHistoryStore((s) => s.canRedo)
+  const { isFullscreen, toggleFullscreen } = useFullscreen()
 
   useEffect(() => {
     if (!isTauri()) return
@@ -152,6 +154,21 @@ export function TitleBar() {
         </button>
         {/* Divider */}
         <div className="w-px h-5 bg-gm-border-subtle mx-1" />
+        <button
+          onClick={() => void toggleFullscreen()}
+          className="h-full w-12 flex items-center justify-center text-gm-text-secondary hover:bg-gm-surface-hover transition-colors"
+          title={isFullscreen ? '退出全屏 F11' : '进入全屏 F11'}
+        >
+          {isFullscreen ? (
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4.5 1.5H1.5v3M7.5 1.5h3v3M4.5 10.5H1.5v-3M7.5 10.5h3v-3" />
+            </svg>
+          ) : (
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M1.5 4.5v-3h3M10.5 4.5v-3h-3M1.5 7.5v3h3M10.5 7.5v3h-3" />
+            </svg>
+          )}
+        </button>
         {/* Window controls */}
         <button
           onClick={handleMinimize}
@@ -168,12 +185,13 @@ export function TitleBar() {
           title={maximized ? '还原' : '最大化'}
         >
           {maximized ? (
-            <svg width="12" height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" />
+            <svg width="12" height={12} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2">
+              <path d="M4.2 2.2h5.1v5.1" />
+              <rect x="2.2" y="4.2" width="5.6" height="5.6" />
             </svg>
           ) : (
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="3" y="3" width="18" height="18" rx="2" />
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2">
+              <rect x="2.2" y="2.2" width="7.6" height="7.6" />
             </svg>
           )}
         </button>
