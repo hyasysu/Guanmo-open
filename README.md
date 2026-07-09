@@ -97,6 +97,7 @@ VITE_GUANMO_WEB_SEARCH_API_KEY_SECRET=guanmo.web-search.api-key
 
 - CodeMirror 6 编辑器，支持多标签页、搜索替换、自动保存和会话恢复。
 - 编辑、预览、并排、双文档与 Diff 视图；编辑和预览共用阅读位置并支持同步滚动。
+- 全屏专注模式提供独立控制栏，可快速切换侧边栏、AI 面板和编辑视图，适合沉浸式写作、阅读与对照。
 - 支持 GFM、代码高亮、可交互任务列表、目录导航和 Mermaid 图表。
 - KaTeX 统一处理行内公式、独立公式块及常见 LaTeX 定界符，并保持预览、选区和 HTML 导出的格式一致。
 - 支持选择、拖拽和粘贴图片，自动生成相对资源路径；支持一键导出 HTML。
@@ -281,6 +282,7 @@ guanmo/
 | `Ctrl + P` | 命令面板（文件） |
 | `Ctrl + Shift + P` | 命令面板（命令） |
 | `Ctrl + Shift + E` | 导出为 HTML |
+| `F11` | 切换全屏专注模式 |
 | `Ctrl + Shift + 1 ~ 5` | 快速切换编辑视图模式 |
 | `Ctrl + 滚轮` | 调整编辑器字号 |
 | `Ctrl + Tab` | 切换标签页 |
@@ -306,8 +308,8 @@ Contributions are welcome! Feel free to open issues and submit pull requests.
 推送 `v*` 格式的 tag 会触发 GitHub Actions，在 Windows 上构建 Tauri 应用、创建 GitHub Release，并上传 NSIS `.exe` 与 WiX `.msi` 安装包。安装包不会提交到 Git 仓库。
 
 ```bash
-git tag -a v1.0.3
-git push origin v1.0.3
+git tag -a v1.1.0
+git push origin v1.1.0
 ```
 
 发布 tag 应与 `package.json`、`src-tauri/Cargo.toml` 和 `src-tauri/tauri.conf.json` 中的版本号保持一致。
