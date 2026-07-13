@@ -134,24 +134,19 @@ export function ManualToolToggle({ onChange, disabled = false, resetKey }: Manua
         return (
           <div key={option.id} className="relative group">
             <Button
-              type="primary"
+              type="default"
               size="small"
               disabled={disabled || !isEnabled}
               onClick={() => toggleCapability(option.id)}
               icon={option.icon}
               className={`
-                !px-2 !py-1 !h-7 !text-micro !font-medium
+                gm-manual-tool-toggle !px-2 !py-1 !h-7 !text-micro !font-medium
                 ${isSelected
-                  ? '!translate-y-[2px] !text-gm-text-on-primary'
+                  ? 'gm-manual-tool-toggle--active'
                   : ''
                 }
                 ${!isEnabled ? '!opacity-50 !cursor-not-allowed' : ''}
               `}
-              style={isSelected ? {
-                transform: 'translateY(2px)',
-                boxShadow: '0 1px 0 0 var(--animal-button-primary-shadow)',
-                color: 'var(--animal-button-primary-text)',
-              } : undefined}
             >
               {option.label}
             </Button>

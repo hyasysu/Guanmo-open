@@ -1142,7 +1142,7 @@ function GeneralSettings() {
       autoSendAiShortcut: false,
       modePrewarm: 'smart',
     })
-    updateAppearanceSettings({ customCursorEnabled: true, theme: 'light', lightPalette: 'warm' })
+    updateAppearanceSettings({ customCursorEnabled: true, aiMascotAvatarEnabled: false, theme: 'light', lightPalette: 'warm' })
     updateWebSearchConfig({ provider: 'duckduckgo', apiKey: '', maxResults: 5, customUrl: '' })
     toast.success('已恢复默认设置')
   }
@@ -1266,6 +1266,9 @@ function GeneralSettings() {
       </SettingField>
       <SettingField label="定制光标" description="使用 animal-island-ui 的手作风光标">
         <Switch checked={appearance.customCursorEnabled} onChange={(v) => updateAppearanceSettings({ customCursorEnabled: v })} />
+      </SettingField>
+      <SettingField label="AI 吉祥物头像" description="使用吉祥物作为 AI 助手图标和消息头像">
+        <Switch checked={appearance.aiMascotAvatarEnabled} onChange={(v) => updateAppearanceSettings({ aiMascotAvatarEnabled: v })} />
       </SettingField>
       <Sep />
       <Button type="default" block onClick={handleRestoreDefaults}>恢复默认设置</Button>

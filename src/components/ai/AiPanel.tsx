@@ -1,11 +1,14 @@
 import { memo, useState, useRef, useEffect, useCallback, useMemo, type PointerEventHandler } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { useChatStore } from '@/stores/chatStore'
+import { useSettingsStore } from '@/stores/settingsStore'
 import type { RagSource, RagStatus, TimelineItem, PendingEdit } from '@/stores/chatStore'
 import { useAiChat } from '@/hooks/useAiChat'
 import { Button, Icon } from 'animal-island-ui'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import mascotIdle from '@/assets/ai-mascot/mascot-idle.png'
+import mascotStreaming from '@/assets/ai-mascot/mascot-streaming.gif'
 import { PromptComposer } from '@/components/ai/PromptComposer'
 import type { ManualCapability } from '@/components/ai/ManualToolToggle'
 import { authorizeSelectedPath, readFile } from '@/hooks/useTauri'
@@ -104,6 +107,10 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
       if (visibleMessages.length <= pendingOutgoingMessageCountRef.current) return
       pendingOutgoingMessageCountRef.current = null
       streamingMessageIdRef.current = null
+      // 用户刚发送消息，直接跳转到底部，后续流式更新按现有规则跟随
+      programmaticScrollUntilRef.current = Date.now() + 120
+      container.scrollTo({ top: container.scrollHeight })
+      return
     }
     const lastMessage = visibleMessages[visibleMessages.length - 1]
     const lastMessageKey = lastMessage
@@ -243,9 +250,6 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
         {...fullscreenDragHandleProps}
       >
         <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-lg flex items-center justify-center">
-            <Icon name="icon-chat" size={18} bounce={streaming} className="gm-ai-chat-icon" />
-          </div>
           <span className="text-body font-bold text-gm-text">
             AI 助手
           </span>
@@ -298,9 +302,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
                 {loadingHistory ? '加载中...' : '加载历史记录'}
               </button>
             )}
-            <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4">
-              <Icon name="icon-chat" size={38} />
-            </div>
+            <AiAvatar size="empty" />
             <p className="text-body font-bold text-gm-text mb-1">开始对话</p>
             <p className="text-caption text-gm-text-secondary text-center leading-relaxed">
               选择文档中的文字，或直接提问
@@ -533,9 +535,7 @@ const ChatBubble = memo(function ChatBubble({
   return (
     <div className={`flex min-w-0 ${isUser ? 'justify-end' : 'justify-start'} animate-slideInUp`}>
       {!isUser && (
-        <div className="w-8 h-8 rounded-xl bg-gm-primary-subtle flex items-center justify-center mr-2 flex-shrink-0 mt-1">
-          <Icon name="icon-chat" size={20} bounce={isEmpty} className="gm-ai-chat-icon" />
-        </div>
+        <AiAvatar size="message" streaming={isAssistantStreaming} bounce={isEmpty} />
       )}
       <div
         className={`max-w-[80%] min-w-0 rounded-2xl px-4 py-2.5 text-body ${
@@ -566,6 +566,39 @@ const ChatBubble = memo(function ChatBubble({
     </div>
   )
 })
+
+function AiAvatar({
+  size,
+  streaming = false,
+  bounce = false,
+}: {
+  size: 'empty' | 'message'
+  streaming?: boolean
+  bounce?: boolean
+}) {
+  const mascotEnabled = useSettingsStore((s) => s.appearance.aiMascotAvatarEnabled)
+  const className = size === 'empty'
+    ? 'gm-ai-empty-icon-shell w-16 h-16 rounded-2xl flex items-center justify-center mb-4'
+    : 'gm-ai-avatar w-8 h-8 rounded-xl flex items-center justify-center mr-2 flex-shrink-0 mt-1'
+
+  if (!mascotEnabled) {
+    return (
+      <div className={className}>
+        <Icon name="icon-chat" size={size === 'empty' ? 38 : 20} bounce={bounce} className="gm-ai-chat-icon" />
+      </div>
+    )
+  }
+
+  return (
+    <div className={`${className} gm-ai-avatar--mascot`} data-streaming={streaming || undefined}>
+      {streaming ? (
+        <img src={mascotStreaming} alt="AI 正在生成" className="gm-ai-mascot-image gm-ai-mascot-image--streaming" />
+      ) : (
+        <img src={mascotIdle} alt="AI 吉祥物" className="gm-ai-mascot-image" />
+      )}
+    </div>
+  )
+}
 
 function MessageSources({ sources, onOpenSource }: { sources: ChatMessageSource[]; onOpenSource: (source: ChatMessageSource) => void }) {
   const [expanded, setExpanded] = useState(false)

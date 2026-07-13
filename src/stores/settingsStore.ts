@@ -31,6 +31,7 @@ interface EditorSettings {
 
 interface AppearanceSettings {
   customCursorEnabled: boolean
+  aiMascotAvatarEnabled: boolean
   theme: 'light' | 'dark'
   lightPalette: 'warm' | 'plain'
 }
@@ -74,6 +75,7 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
 
 const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   customCursorEnabled: false,
+  aiMascotAvatarEnabled: false,
   theme: 'light',
   lightPalette: 'warm',
 }
@@ -257,6 +259,7 @@ export const useSettingsStore = create<SettingsState>()(
           appearance: {
             ...current.appearance,
             ...saved.appearance,
+            aiMascotAvatarEnabled: saved.appearance?.aiMascotAvatarEnabled ?? current.appearance.aiMascotAvatarEnabled,
           },
           webSearch: {
             ...current.webSearch,
