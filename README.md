@@ -308,8 +308,8 @@ Contributions are welcome! Feel free to open issues and submit pull requests.
 推送 `v*` 格式的 tag 会触发 GitHub Actions，在 Windows 上构建 Tauri 应用、创建 GitHub Release，并上传 NSIS `.exe` 与 WiX `.msi` 安装包。安装包不会提交到 Git 仓库。
 
 ```bash
-git tag -a v1.1.0
-git push origin v1.1.0
+git tag -a v1.2.0
+git push origin v1.2.0
 ```
 
 发布 tag 应与 `package.json`、`src-tauri/Cargo.toml` 和 `src-tauri/tauri.conf.json` 中的版本号保持一致。
