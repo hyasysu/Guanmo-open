@@ -12,6 +12,7 @@ import {
   isLocalResearchIntent,
   isWebComparisonIntent,
   isFileSummaryIntent,
+  isDocumentRewriteIntent,
   type Capability,
   type AppContext,
 } from './intentDetector'
@@ -51,13 +52,13 @@ ${CONTEXT_SAFETY_PROMPT}
 {"tool": "工具名", "args": {"参数名": "参数值"}}
 
 当你判断需要弹出文本修改确认卡片时，也可以输出以下 JSON。系统会校验 needsEditConfirmation，并自动转换为 replace_current_tab_text 工具调用：
-{"needsEditConfirmation": true, "targetId": "本轮可编辑目标 ID", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本"}
+{"needsEditConfirmation": true, "targetId": "本轮可编辑目标 ID", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本", "changeSummary": "简短变更摘要"}
 修改用户添加到聊天框的 selection 或 file 标签所指向的文件时，优先使用【本轮可编辑目标】里的 targetId：
-{"needsEditConfirmation": true, "targetId": "edit-target-1", "oldText": "目标文件中的原文", "newText": "替换后的新文本"}
+{"needsEditConfirmation": true, "targetId": "edit-target-1", "oldText": "目标文件中的原文", "newText": "替换后的新文本", "changeSummary": "调整语气、保留原意"}
 修改 selection 标签时不要回传 oldText，由工具读取授权范围内的当前原文：
-{"needsEditConfirmation": true, "targetId": "edit-target-1", "newText": "替换后的新文本"}
+{"needsEditConfirmation": true, "targetId": "edit-target-1", "newText": "替换后的新文本", "changeSummary": "润色表达、保留原意"}
 修改整份已授权文件时，不要回传完整 oldText，使用：
-{"needsEditConfirmation": true, "targetId": "edit-target-1", "replaceWholeDocument": true, "newText": "替换后的完整新稿"}
+{"needsEditConfirmation": true, "targetId": "edit-target-1", "replaceWholeDocument": true, "newText": "替换后的完整新稿", "changeSummary": "优化标题层级、压缩重复、保留原意"}
 
 当你能直接回答时，直接输出答案文本。
 
@@ -81,9 +82,10 @@ ${CONTEXT_SAFETY_PROMPT}
 8. 如果本轮用户消息里带有 file 标签并要求片段替换，oldText 必须来自目标文件当前内容；如果是 selection 标签，省略 oldText。
 9. get_recent_context_tag 仅可用于查看历史上下文，不得用于生成修改确认卡片；不得在没有本轮目标 tag 时通过 get_current_tab_text 修改当前活动标签。
 10. file 片段替换时 oldText 必须与目标标签页内容完全一致；selection 修改由工具读取 oldText。newText 是修改后的完整替换片段。
-11. replace_current_tab_text 只会生成用户确认卡片，不会直接写入文件。调用该工具后，等待用户在确认卡片中确认或拒绝。
-12. 对携带本轮目标 tag 的修改意图，最终必须输出工具 JSON 或 needsEditConfirmation JSON；未携带时只提示用户重新添加 tag。
-13. 调用 replace_current_tab_text 或输出 needsEditConfirmation 时只输出 JSON，不要同时输出解释文本。
+11. 生成确认卡片时必须提供简短 changeSummary，概括本次修改方式，例如“调整语气、压缩重复、优化标题层级、保留原意”。没有把握时至少说明“保留原意并润色表达”。
+12. replace_current_tab_text 只会生成用户确认卡片，不会直接写入文件。调用该工具后，等待用户在确认卡片中确认或拒绝。
+13. 对携带本轮目标 tag 的修改意图，最终必须输出工具 JSON 或 needsEditConfirmation JSON；未携带时只提示用户重新添加 tag。
+14. 调用 replace_current_tab_text 或输出 needsEditConfirmation 时只输出 JSON，不要同时输出解释文本。
 
 保存记忆的规则：
 1. 当用户要求记住、保存记忆、记下来时，调用 save_memory 工具保存。
@@ -569,6 +571,7 @@ export async function runAgent(
 
   // 意图检测
   const intentResult = detectIntentScores(userIntent, appContext)
+  const isDocumentRewrite = isDocumentRewriteIntent(userIntent)
   const isWebComparison = isWebComparisonIntent(userIntent)
   const isLocalResearch = !isWebComparison && isLocalResearchIntent(userIntent)
   const isFileSummary = !isWebComparison && isFileSummaryIntent(userIntent, appContext)
@@ -586,8 +589,24 @@ export async function runAgent(
   const candidateTools = candidateToolNames && candidateToolNames.length > 0
     ? [...candidateToolNames] as AgentToolName[]
     : buildCandidateTools(intentResult.candidates)
+  if (
+    isDocumentRewrite
+    && appContext.hasSelection
+    && intentResult.candidates.includes('selection_context')
+    && !candidateTools.includes('read_selection_context')
+  ) {
+    candidateTools.unshift('read_selection_context')
+  }
   if (isFileSummary && !candidateTools.includes('read_context_file')) {
     candidateTools.unshift('read_context_file')
+  }
+  if (isDocumentRewrite && currentEditTargetCount === 0) {
+    return {
+      answer: '本轮没有可修改的 selection 或 file 标签。请重新框选要改写的文本，或把要整体改写的文件添加为 tag 后再发起请求。',
+      steps: [],
+      toolCalls: 0,
+      reason: 'completed',
+    }
   }
 
   // 判断是否需要编辑确认
@@ -866,11 +885,11 @@ export async function runAgent(
             '系统校验失败：本轮用户表达了文本修改或撤销意图，但你的回复没有生成修改确认卡片。',
             '请不要只回复"已修改""已撤销"或修改后的文本。',
             '你必须重新输出以下两种 JSON 之一：',
-            '{"needsEditConfirmation": true, "targetId": "本轮可编辑目标 ID", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本"}',
+            '{"needsEditConfirmation": true, "targetId": "本轮可编辑目标 ID", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本", "changeSummary": "简短变更摘要"}',
             '修改已添加的 selection 或 file 标签时必须优先使用【本轮可编辑目标】里的 targetId。',
             '修改 selection 标签时省略 oldText，由工具读取授权选区当前完整原文，不得选择文档内其他相同文本。',
             '修改整份已授权文件时增加 "replaceWholeDocument": true，并省略 oldText。',
-            '或 {"tool": "replace_current_tab_text", "args": {"targetId": "本轮可编辑目标 ID", "newText": "替换后的新文本", "replaceWholeDocument": false}}',
+            '或 {"tool": "replace_current_tab_text", "args": {"targetId": "本轮可编辑目标 ID", "newText": "替换后的新文本", "replaceWholeDocument": false, "changeSummary": "简短变更摘要"}}',
           ].join('\n'),
         })
         continue

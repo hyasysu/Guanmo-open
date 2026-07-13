@@ -29,7 +29,7 @@ const CAPABILITY_TOOLS: Record<Capability, AgentToolName[]> = {
   knowledge: ['search_knowledge', 'list_database_contents'],
   selection_context: ['read_selection_context'],
   file_read: ['read_context_file'],
-  file_write: ['replace_current_tab_text'],
+  file_write: ['list_current_edit_targets', 'replace_current_tab_text'],
   web: ['web_search'],
   time: ['get_current_time'],
 }

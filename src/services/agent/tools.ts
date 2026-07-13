@@ -668,13 +668,14 @@ export function registerBuiltinTools() {
 
   registerTool({
     name: 'replace_current_tab_text',
-    description: '为用户本轮明确添加的 file/selection 标签生成文本替换确认卡片。必须传入目标文件 path；selection 会由工具读取授权范围内当前完整原文，整文替换应设置 replaceWholeDocument=true。工具不会直接写入文件。',
+    description: '为用户本轮明确添加的 file/selection 标签生成文本替换确认卡片。必须传入目标文件 path；selection 会由工具读取授权范围内当前完整原文，整文替换应设置 replaceWholeDocument=true。工具不会直接写入文件。确认卡片应包含简短 changeSummary。',
     parameters: [
       { name: 'targetId', type: 'string', description: '本轮 list_current_edit_targets 返回的可编辑目标 ID。优先使用；提供后工具会自动解析 path 和 selection 范围', required: false },
       { name: 'oldText', type: 'string', description: 'file 片段替换时要被替换的原文，必须与文档内容完全匹配；selection 修改和整文替换时省略', required: false },
       { name: 'newText', type: 'string', description: '替换后的新文本', required: true },
       { name: 'path', type: 'string', description: '兼容旧格式的目标文件绝对路径；优先使用 targetId', required: false },
       { name: 'replaceWholeDocument', type: 'boolean', description: '是否替换目标标签页整份内容；为 true 时由工具自动使用完整原文', required: false },
+      { name: 'changeSummary', type: 'string', description: '简短变更摘要，例如：调整语气、压缩重复、优化标题层级、保留原意', required: false },
     ],
     execute: async (args) => {
       const newTextErr = validateString(args.newText, 'newText')
@@ -753,11 +754,13 @@ export function registerBuiltinTools() {
       }
 
       const newText = args.newText as string
-      const changeSummary = replaceWholeDocument
+      const providedSummary = typeof args.changeSummary === 'string' ? args.changeSummary.trim() : ''
+      const fallbackSummary = replaceWholeDocument
         ? `整文替换：将替换当前文档全部 ${oldText.length} 字符`
         : oldText.length >= 1200
           ? `大段替换：将替换 ${oldText.length} 字符`
           : `将替换 ${oldText.length} 字符`
+      const changeSummary = providedSummary || fallbackSummary
       // 返回待确认内容，不直接修改编辑器
       return JSON.stringify({
         __pendingEdit: true,

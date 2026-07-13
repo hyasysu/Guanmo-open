@@ -143,6 +143,10 @@ const targetEditConfirmation = parseToolCall('{"needsEditConfirmation":true,"tar
 assert.equal(targetEditConfirmation?.name, 'replace_current_tab_text')
 assert.deepEqual(targetEditConfirmation?.args, { targetId: 'edit-target-1', newText: '新' })
 
+const summarizedEditConfirmation = parseToolCall('{"needsEditConfirmation":true,"targetId":"edit-target-1","newText":"新","changeSummary":"润色表达、保留原意"}')
+assert.equal(summarizedEditConfirmation?.name, 'replace_current_tab_text')
+assert.deepEqual(summarizedEditConfirmation?.args, { targetId: 'edit-target-1', newText: '新', changeSummary: '润色表达、保留原意' })
+
 const fileEditConfirmation = parseToolCall('{"needsEditConfirmation":true,"path":"D:/notes/a.md","oldText":"旧","newText":"新"}')
 assert.equal(fileEditConfirmation?.name, 'replace_current_tab_text')
 assert.deepEqual(fileEditConfirmation?.args, { oldText: '旧', newText: '新', path: 'D:/notes/a.md' })
@@ -208,9 +212,20 @@ const selectionContext = {
   hasSelection: true,
   hasContextTags: true,
 }
-for (const query of ['总结这段', '翻译选中内容', '润色这段', '改写选区', '解释一下这个函数', '说明这里', '整理并提炼格式']) {
+for (const query of ['总结这段', '解释一下这个函数', '说明这里', '整理并提炼格式']) {
   assert.equal(classifySelectionRequest(query, selectionContext), 'fast', query)
   assert.deepEqual(detectIntentScores(query, selectionContext).candidates, [], query)
+}
+for (const query of ['翻译选中内容', '润色这段', '改写选区']) {
+  assert.equal(classifySelectionRequest(query, selectionContext), 'fast', query)
+  const result = detectIntentScores(query, selectionContext)
+  assert.equal(result.candidates.includes('file_write'), true, query)
+  assert.equal(result.candidates.includes('file_read'), false, query)
+}
+for (const query of ['结合上下文润色这段', '根据前后文改写选区', '优化标题层级']) {
+  const result = detectIntentScores(query, selectionContext)
+  assert.equal(result.candidates.includes('file_write'), true, query)
+  assert.equal(result.candidates.includes('selection_context'), true, query)
 }
 for (const query of ['为什么这样写', '这个函数为什么报错', '怎么推导', '这里和那个有什么区别', '这段是否正确', '如何改进这段']) {
   const result = detectIntentScores(query, selectionContext)
@@ -576,9 +591,10 @@ setAgentScopeContext({
 const selectionContextResult = JSON.parse(await readSelectionContext.execute({ targetId: 'edit-target-1' }))
 assert.deepEqual(selectionContextResult.chunks.map((chunk: { role: string }) => chunk.role), ['before', 'current', 'after'])
 assert.equal(selectionContextResult.chunks[1].content, 'alpha beta alpha')
-assert.deepEqual(Object.keys(selectionContextResult), ['chunks'])
+assert.deepEqual(Object.keys(selectionContextResult), ['chunks', 'source'])
+assert.equal(selectionContextResult.source.filePath, 'D:/notes/a.md')
 for (const chunk of selectionContextResult.chunks) {
-  assert.deepEqual(Object.keys(chunk), ['role', 'headingPath', 'content'])
+  assert.deepEqual(Object.keys(chunk), ['role', 'headingPath', 'startLine', 'endLine', 'content'])
 }
 assert.equal('currentChunk' in selectionContextResult, false)
 assert.equal('beforeChunks' in selectionContextResult, false)

@@ -75,6 +75,7 @@ export function parseToolCall(text: string): ParsedToolCall | null {
             ...(typeof parsed.newText === 'string' ? { newText: parsed.newText } : {}),
             ...(typeof parsed.path === 'string' ? { path: parsed.path } : {}),
             ...(parsed.replaceWholeDocument === true ? { replaceWholeDocument: true } : {}),
+            ...(typeof parsed.changeSummary === 'string' ? { changeSummary: parsed.changeSummary } : {}),
           },
           rawJson: candidate,
         }
