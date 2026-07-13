@@ -2,6 +2,8 @@ import { useCallback, useEffect } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { isTauri } from '@/hooks/useTauri'
 
+let shouldRestoreMaximizedAfterFullscreen = false
+
 async function readFullscreenState(): Promise<boolean> {
   if (isTauri()) {
     const { getCurrentWindow } = await import('@tauri-apps/api/window')
@@ -13,7 +15,21 @@ async function readFullscreenState(): Promise<boolean> {
 async function setFullscreenState(next: boolean): Promise<void> {
   if (isTauri()) {
     const { getCurrentWindow } = await import('@tauri-apps/api/window')
-    await getCurrentWindow().setFullscreen(next)
+    const win = getCurrentWindow()
+    if (next) {
+      const maximized = await win.isMaximized()
+      shouldRestoreMaximizedAfterFullscreen = maximized
+      if (maximized) {
+        await win.unmaximize()
+        await waitForWindowStateSettle()
+        await expandWindowToCurrentMonitor()
+        await waitForWindowStateSettle()
+      }
+      await win.setFullscreen(true)
+    } else {
+      await win.setFullscreen(false)
+      await restoreMaximizedAfterFullscreenIfNeeded(win)
+    }
     return
   }
 
@@ -22,6 +38,26 @@ async function setFullscreenState(next: boolean): Promise<void> {
   } else if (!next && document.fullscreenElement) {
     await document.exitFullscreen()
   }
+}
+
+function waitForWindowStateSettle(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 50))
+}
+
+async function restoreMaximizedAfterFullscreenIfNeeded(win: { maximize: () => Promise<void> }): Promise<void> {
+  if (!shouldRestoreMaximizedAfterFullscreen) return
+  shouldRestoreMaximizedAfterFullscreen = false
+  await waitForWindowStateSettle()
+  await win.maximize()
+}
+
+async function expandWindowToCurrentMonitor(): Promise<void> {
+  const { currentMonitor, getCurrentWindow } = await import('@tauri-apps/api/window')
+  const monitor = await currentMonitor()
+  if (!monitor) return
+  const win = getCurrentWindow()
+  await win.setPosition(monitor.position)
+  await win.setSize(monitor.size)
 }
 
 export function useFullscreen() {
@@ -36,6 +72,11 @@ export function useFullscreen() {
       readFullscreenState()
         .then((next) => {
           if (!disposed) setFullscreen(next)
+          if (!next && isTauri()) {
+            import('@tauri-apps/api/window')
+              .then(({ getCurrentWindow }) => restoreMaximizedAfterFullscreenIfNeeded(getCurrentWindow()))
+              .catch((err) => console.error('Fullscreen: failed to restore maximized state:', err))
+          }
         })
         .catch((err) => console.error('Fullscreen: failed to read state:', err))
     }

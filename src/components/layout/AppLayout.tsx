@@ -10,6 +10,7 @@ import { StatusBar } from './StatusBar'
 import { TitleBar } from './TitleBar'
 import { EditorArea, OPEN_EDITOR_SEARCH_EVENT } from '../editor/EditorArea'
 import { FullscreenControlBar } from '../editor/FullscreenControlBar'
+import { FullscreenFileDrawer } from './FullscreenFileDrawer'
 import { AiPanel } from '../ai/AiPanel'
 import { CommandPalette } from '../common/CommandPalette'
 import { SettingsPage } from '@/features/settings/SettingsPage'
@@ -34,6 +35,7 @@ export function AppLayout() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [commandPaletteMode, setCommandPaletteMode] = useState<'commands' | 'files'>('commands')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [fullscreenFileDrawerOpen, setFullscreenFileDrawerOpen] = useState(false)
   const [fullscreenAiPosition, setFullscreenAiPosition] = useState(() => getDefaultFullscreenAiPosition())
   const fullscreenAiDragRef = useRef<{
     pointerId: number
@@ -49,6 +51,9 @@ export function AppLayout() {
     if (isFullscreen) {
       useAppStore.setState({ aiPanelOpen: false })
       setFullscreenAiPosition(getDefaultFullscreenAiPosition())
+      setFullscreenFileDrawerOpen(false)
+    } else {
+      setFullscreenFileDrawerOpen(false)
     }
   }, [isFullscreen])
 
@@ -144,6 +149,18 @@ export function AppLayout() {
     window.dispatchEvent(new Event(OPEN_EDITOR_SEARCH_EVENT))
   }, [])
 
+  const toggleFullscreenFileDrawer = useCallback(() => {
+    setFullscreenFileDrawerOpen((open) => !open)
+  }, [])
+
+  const closeFullscreenFileDrawer = useCallback(() => {
+    setFullscreenFileDrawerOpen(false)
+  }, [])
+
+  const handleFullscreenFileSelected = useCallback(() => {
+    setFullscreenFileDrawerOpen(false)
+  }, [])
+
   const handleExportHtml = useCallback(async () => {
     const state = useEditorStore.getState()
     const tab = state.tabs.find((t) => t.id === state.activeTabId)
@@ -190,7 +207,7 @@ export function AppLayout() {
           openSettings()
           return
         }
-        if (key === 's' || key === 'f' || key === 'g' || key === 'h' || key === 'p' || key === 'j' || key === 'e' || key === 'd' || ['1', '2', '3', '4', '5'].includes(key)) {
+        if (key === 's' || key === 'f' || key === 'g' || key === 'h' || key === 'p' || key === 'b' || key === 'j' || key === 'e' || key === 'd' || ['1', '2', '3', '4', '5'].includes(key)) {
           e.preventDefault()
           e.stopPropagation()
         }
@@ -203,7 +220,13 @@ export function AppLayout() {
   const shortcuts = {
     'CTRL+P': () => openCommandPalette('files'),
     'CTRL+SHIFT+P': () => openCommandPalette('commands'),
-    'CTRL+B': () => toggleSidebar(),
+    'CTRL+B': () => {
+      if (useAppStore.getState().isFullscreen) {
+        toggleFullscreenFileDrawer()
+        return
+      }
+      toggleSidebar()
+    },
     'CTRL+J': () => toggleAiPanel(),
     'CTRL+N': () => handleNewFile(),
     'CTRL+O': () => void runAfterNormalLayout(() => handleOpenFile()),
@@ -265,7 +288,22 @@ export function AppLayout() {
         )}
       </div>
 
-      {isFullscreen && <FullscreenControlBar />}
+      {isFullscreen && (
+        <FullscreenControlBar
+          fileDrawerOpen={fullscreenFileDrawerOpen}
+          onToggleFileDrawer={toggleFullscreenFileDrawer}
+          onCloseFileDrawer={closeFullscreenFileDrawer}
+        />
+      )}
+
+      {isFullscreen && (
+        <FullscreenFileDrawer
+          open={fullscreenFileDrawerOpen}
+          onClose={closeFullscreenFileDrawer}
+          onOpenSearch={handleOpenSearch}
+          onFileSelected={handleFullscreenFileSelected}
+        />
+      )}
 
       {isFullscreen && aiPanelOpen && (
         <div

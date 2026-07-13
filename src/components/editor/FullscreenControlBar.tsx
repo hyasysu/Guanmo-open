@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { useAppStore } from '@/stores/appStore'
@@ -22,8 +22,19 @@ const MODES: Array<{ key: ViewMode; label: string }> = [
   { key: 'dual-preview', label: '对照' },
   { key: 'diff-preview', label: 'Diff' },
 ]
+const PANEL_CONTENT_REVEAL_DELAY = 190
 
-export function FullscreenControlBar() {
+interface FullscreenControlBarProps {
+  fileDrawerOpen: boolean
+  onToggleFileDrawer: () => void
+  onCloseFileDrawer: () => void
+}
+
+export function FullscreenControlBar({
+  fileDrawerOpen,
+  onToggleFileDrawer,
+  onCloseFileDrawer,
+}: FullscreenControlBarProps) {
   const tabs = useEditorStore((s) => s.tabs)
   const activeTabId = useEditorStore((s) => s.activeTabId)
   const viewMode = useEditorStore((s) => s.viewMode)
@@ -39,12 +50,19 @@ export function FullscreenControlBar() {
   const { exitFullscreen } = useFullscreen()
   const [visible, setVisible] = useState(false)
   const [tabMode, setTabMode] = useState(false)
+  const [renderedTabMode, setRenderedTabMode] = useState(false)
+  const [contentVisible, setContentVisible] = useState(true)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null)
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const hideTimerRef = useRef<number | null>(null)
+  const contentTimerRef = useRef<number | null>(null)
   const renameCancelledRef = useRef(false)
   const renameSubmittingRef = useRef(false)
+  const shellRef = useRef<HTMLDivElement>(null)
+  const widthBeforeRef = useRef<number>(0)
+  const widthAnimatingRef = useRef(false)
+  const renderedTabModeRef = useRef(false)
 
   const clearHideTimer = useCallback(() => {
     if (hideTimerRef.current !== null) {
@@ -53,20 +71,68 @@ export function FullscreenControlBar() {
     }
   }, [])
 
+  const clearPanelTimers = useCallback(() => {
+    if (contentTimerRef.current !== null) {
+      window.clearTimeout(contentTimerRef.current)
+      contentTimerRef.current = null
+    }
+  }, [])
+
+  const switchPanel = useCallback((nextTabMode: boolean) => {
+    clearPanelTimers()
+    setTabMode(nextTabMode)
+
+    if (renderedTabModeRef.current === nextTabMode) {
+      setContentVisible(true)
+      return
+    }
+
+    setContentVisible(false)
+    renderedTabModeRef.current = nextTabMode
+    setRenderedTabMode(nextTabMode)
+    contentTimerRef.current = window.setTimeout(() => {
+      setContentVisible(true)
+    }, PANEL_CONTENT_REVEAL_DELAY)
+  }, [clearPanelTimers])
+
   const showBar = useCallback(() => {
     clearHideTimer()
     setVisible(true)
   }, [clearHideTimer])
 
+  const hideTabs = useCallback(() => {
+    clearHideTimer()
+    if (fileDrawerOpen) {
+      onCloseFileDrawer()
+      return
+    }
+    setVisible(true)
+    switchPanel(false)
+  }, [clearHideTimer, fileDrawerOpen, onCloseFileDrawer, switchPanel])
+
   const scheduleHide = useCallback(() => {
+    if (fileDrawerOpen) return
     clearHideTimer()
     hideTimerRef.current = window.setTimeout(() => {
       setVisible(false)
-      if (!contextMenu) setTabMode(false)
+      if (!contextMenu) switchPanel(false)
     }, tabMode ? 2200 : 700)
-  }, [clearHideTimer, contextMenu, tabMode])
+  }, [clearHideTimer, contextMenu, fileDrawerOpen, switchPanel, tabMode])
 
-  useEffect(() => () => clearHideTimer(), [clearHideTimer])
+  useEffect(() => () => {
+    clearHideTimer()
+    clearPanelTimers()
+  }, [clearHideTimer, clearPanelTimers])
+
+  useEffect(() => {
+    clearHideTimer()
+    if (fileDrawerOpen) {
+      setVisible(true)
+      switchPanel(true)
+    } else if (!contextMenu) {
+      switchPanel(false)
+    }
+  }, [clearHideTimer, contextMenu, fileDrawerOpen, switchPanel])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -78,10 +144,18 @@ export function FullscreenControlBar() {
         setContextMenu(null)
         return
       }
+      if (fileDrawerOpen) {
+        const target = e.target as HTMLElement | null
+        if (target?.closest('[data-fullscreen-file-drawer] input')) return
+        e.preventDefault()
+        e.stopPropagation()
+        onCloseFileDrawer()
+        return
+      }
       if (tabMode) {
         e.preventDefault()
         e.stopPropagation()
-        setTabMode(false)
+        switchPanel(false)
         setVisible(true)
         return
       }
@@ -98,7 +172,42 @@ export function FullscreenControlBar() {
 
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [contextMenu, exitFullscreen, tabMode])
+  }, [contextMenu, exitFullscreen, fileDrawerOpen, onCloseFileDrawer, switchPanel, tabMode])
+
+  useLayoutEffect(() => {
+    const shell = shellRef.current
+    if (!shell || widthAnimatingRef.current) return
+
+    const newWidth = shell.offsetWidth
+    const oldWidth = widthBeforeRef.current
+    widthBeforeRef.current = newWidth
+
+    if (oldWidth === 0 || Math.abs(newWidth - oldWidth) < 3) return
+
+    widthAnimatingRef.current = true
+    shell.style.width = `${oldWidth}px`
+    shell.style.transition = 'none'
+    shell.getBoundingClientRect()
+    shell.style.transition = 'width 440ms cubic-bezier(0.18, 0.9, 0.18, 1)'
+    shell.style.width = `${newWidth}px`
+
+    const onEnd = () => {
+      shell.style.width = ''
+      shell.style.transition = ''
+      widthAnimatingRef.current = false
+      widthBeforeRef.current = shell.offsetWidth
+    }
+    shell.addEventListener('transitionend', onEnd, { once: true })
+
+    return () => {
+      shell.removeEventListener('transitionend', onEnd)
+      if (widthAnimatingRef.current) {
+        shell.style.width = ''
+        shell.style.transition = ''
+        widthAnimatingRef.current = false
+      }
+    }
+  })
 
   const toggleTheme = useCallback(() => {
     useSettingsStore.getState().updateAppearanceSettings({ theme: theme === 'dark' ? 'light' : 'dark' })
@@ -163,6 +272,8 @@ export function FullscreenControlBar() {
       case 'rename':
         if (contextTab?.filePath) {
           renameCancelledRef.current = false
+          setVisible(true)
+          switchPanel(true)
           setRenamingTabId(contextTab.id)
           setRenameValue(contextTab.title)
         }
@@ -178,7 +289,7 @@ export function FullscreenControlBar() {
         }
         break
     }
-  }, [closeTab, contextMenu, contextTab, setRightPaneTabId, setViewMode, tabs, togglePinTab, viewMode])
+  }, [closeTab, contextMenu, contextTab, setRightPaneTabId, setViewMode, switchPanel, tabs, togglePinTab, viewMode])
 
   const commitRename = useCallback(async (tab: Tab) => {
     if (renameCancelledRef.current) {
@@ -215,71 +326,27 @@ export function FullscreenControlBar() {
 
   return (
     <>
-      <div className="fixed left-0 right-0 top-0 z-40 h-7" onMouseEnter={showBar} />
+      <div className="fixed left-0 right-0 top-0 z-40 h-9" onMouseEnter={showBar} />
       <div
-        className={`fixed left-1/2 top-3 z-50 max-w-[calc(100vw-32px)] -translate-x-1/2 transition-opacity duration-200 ${
-          visible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        data-fullscreen-control-bar="true"
+        className={`fixed left-1/2 top-4 z-50 max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-visible transition-[opacity,transform] duration-300 ease-out ${
+          visible ? 'translate-y-0 opacity-100' : '-translate-y-1.5 opacity-0 pointer-events-none'
         }`}
         onMouseEnter={showBar}
         onMouseLeave={scheduleHide}
       >
-        <div className="gm-instant-color flex max-w-full items-center gap-1 rounded-full border border-gm-border/70 bg-gm-surface/82 px-2 py-1 shadow-lg backdrop-blur-xl">
-          {tabMode ? (
-            <>
-              <BubbleButton onClick={() => setTabMode(false)} title="返回">
-                ←
-              </BubbleButton>
-              <div className="flex max-w-[min(70vw,760px)] items-center gap-1 overflow-x-auto px-1">
-                {sortedTabs.map((tab) => {
-                  const active = tab.id === activeTabId
-                  const isFav = tab.filePath ? favorites.some((path) => isSameFilePath(path, tab.filePath)) : false
-                  return (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      onClick={() => setActiveTab(tab.id)}
-                      onContextMenu={(e) => {
-                        e.preventDefault()
-                        setVisible(true)
-                        setContextMenu({ x: e.clientX, y: e.clientY, tabId: tab.id })
-                      }}
-                      className={`flex h-8 max-w-[180px] flex-shrink-0 items-center gap-1.5 rounded-full px-3 text-caption transition-colors ${
-                        active
-                          ? 'bg-gm-primary-subtle text-gm-primary font-bold'
-                          : 'text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text'
-                      }`}
-                      title={tab.title}
-                    >
-                      <span className="truncate">{renamingTabId === tab.id ? (
-                        <input
-                          autoFocus
-                          value={renameValue}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => setRenameValue(e.target.value)}
-                          onBlur={() => void commitRename(tab)}
-                          onKeyDown={(e) => {
-                            e.stopPropagation()
-                            if (e.key === 'Enter') void commitRename(tab)
-                            if (e.key === 'Escape') {
-                              renameCancelledRef.current = true
-                              setRenamingTabId(null)
-                            }
-                          }}
-                          className="w-28 bg-transparent text-caption outline-none"
-                        />
-                      ) : tab.title}</span>
-                      {tab.pinned && <span className="text-gm-primary">◆</span>}
-                      {isFav && <span className="text-gm-warning">★</span>}
-                      {tab.modified && <span className="h-1.5 w-1.5 rounded-full bg-gm-primary" />}
-                    </button>
-                  )
-                })}
-              </div>
-            </>
-          ) : (
-            <>
-              <BubbleButton onClick={() => setTabMode(true)} title="标签">
-                标签
+        <div
+          ref={shellRef}
+          className="gm-fullscreen-control-shell gm-instant-color relative max-w-[min(960px,calc(100vw-32px))] overflow-hidden rounded-2xl border px-3 py-2 [backface-visibility:hidden] [isolation:isolate]"
+        >
+          {/* 一级：模式按钮 */}
+          <div className={`flex w-full max-w-full items-center gap-2 transition-opacity duration-200 ease-out ${
+            renderedTabMode ? 'absolute inset-0 opacity-0 pointer-events-none' : `relative ${contentVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`
+          }`}
+          >
+            <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
+              <BubbleButton onClick={onToggleFileDrawer} active={fileDrawerOpen} title="标签 / 文件 Ctrl+B">
+                标签 / 文件
               </BubbleButton>
               <Separator />
               {MODES.map((mode) => (
@@ -287,10 +354,13 @@ export function FullscreenControlBar() {
                   key={mode.key}
                   active={viewMode === mode.key}
                   onClick={() => setViewMode(mode.key)}
+                  variant="text"
                 >
                   {mode.label}
                 </BubbleButton>
               ))}
+            </div>
+            <div className="flex flex-shrink-0 items-center gap-1">
               <Separator />
               <BubbleButton onClick={toggleAiPanel} active={aiPanelOpen} title="切换 AI 助手">
                 AI
@@ -301,8 +371,77 @@ export function FullscreenControlBar() {
               <BubbleButton onClick={() => void exitFullscreen()} title="退出全屏">
                 退出
               </BubbleButton>
-            </>
-          )}
+            </div>
+          </div>
+
+          {/* 二级：标签列表 */}
+          <div className={`flex w-[min(900px,calc(100vw-56px))] max-w-full items-center justify-center gap-2 transition-opacity duration-200 ease-out ${
+            renderedTabMode ? `relative ${contentVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}` : 'absolute inset-0 opacity-0 pointer-events-none'
+          }`}
+          >
+            <BubbleButton onClick={hideTabs} title="返回">
+              <span aria-hidden="true" className="block -translate-y-px text-[22px] font-serif leading-none">‹</span>
+            </BubbleButton>
+            <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-1">
+              {sortedTabs.map((tab) => {
+                const active = tab.id === activeTabId
+                const isFav = tab.filePath ? favorites.some((path) => isSameFilePath(path, tab.filePath)) : false
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    data-active={active ? 'true' : 'false'}
+                    onClick={() => setActiveTab(tab.id)}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      setVisible(true)
+                      setContextMenu({ x: e.clientX, y: e.clientY, tabId: tab.id })
+                    }}
+                    className={`group gm-fullscreen-tab-button flex h-9 max-w-[300px] flex-shrink-0 items-center gap-2 rounded-lg px-3 text-body font-semibold transition-colors ${
+                      active
+                        ? 'text-gm-primary underline underline-offset-4'
+                        : 'text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text'
+                    }`}
+                    title={tab.title}
+                  >
+                    <span className="truncate">{renamingTabId === tab.id ? (
+                      <input
+                        autoFocus
+                        value={renameValue}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onBlur={() => void commitRename(tab)}
+                        onKeyDown={(e) => {
+                          e.stopPropagation()
+                          if (e.key === 'Enter') void commitRename(tab)
+                          if (e.key === 'Escape') {
+                            renameCancelledRef.current = true
+                            setRenamingTabId(null)
+                          }
+                        }}
+                        className="w-32 bg-transparent text-body font-semibold outline-none"
+                      />
+                    ) : tab.title}</span>
+                    {tab.pinned && <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-gm-primary" />}
+                    {isFav && <span className="text-gm-warning">★</span>}
+                    {tab.modified && <span className="h-1.5 w-1.5 rounded-full bg-gm-primary" />}
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        closeTab(tab.id)
+                      }}
+                      className="flex-shrink-0 opacity-0 group-hover:opacity-100 rounded-full p-0 text-gm-text-tertiary hover:bg-gm-surface-overlay hover:text-gm-error transition-opacity"
+                      title="关闭"
+                    >
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M18 6L6 18M6 6l12 12" />
+                      </svg>
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -374,20 +513,25 @@ function BubbleButton({
   active = false,
   onClick,
   title,
+  variant,
 }: {
   children: React.ReactNode
   active?: boolean
   onClick: () => void
   title?: string
+  variant?: 'pill' | 'text'
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       title={title}
-      className={`h-8 rounded-full px-3 text-caption font-bold transition-colors ${
+      data-active={active ? 'true' : 'false'}
+      className={`gm-fullscreen-bubble h-8 flex-shrink-0 whitespace-nowrap rounded-full px-3 text-body font-bold transition-colors ${
         active
-          ? 'bg-gm-primary text-white shadow-sm'
+          ? variant === 'text'
+            ? 'text-gm-primary'
+            : 'bg-gm-primary text-gm-text-on-primary shadow-sm'
           : 'text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text'
       }`}
     >
@@ -397,5 +541,5 @@ function BubbleButton({
 }
 
 function Separator() {
-  return <div className="mx-1 h-5 w-px bg-gm-border-subtle" />
+  return <div className="mx-1.5 h-4 w-px bg-gm-border-subtle" />
 }

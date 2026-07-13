@@ -1,10 +1,10 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
-import { isTauri, joinPath } from '@/hooks/useTauri'
+import { isTauri } from '@/hooks/useTauri'
 import { openFile } from '@/services/fileSystem'
-import { pickDirectory, listDirectory } from '@/services/fileSystem'
-import { isWorkspaceDisplayFile, shouldSkipWorkspaceDirectory, getFileIcon, type FileNode } from '@/services/fileTree'
+import { pickDirectory } from '@/services/fileSystem'
+import { isWorkspaceDisplayFile, getFileIcon } from '@/services/fileTree'
 import { indexMarkdownDocument, indexWorkspaceMarkdown, scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
@@ -17,6 +17,7 @@ import { renameFileEntry, saveExistingFileAs, validateFileName } from '@/service
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { cleanupMissingWorkspaceDocuments, rebuildWorkspaceDocuments } from '@/services/workspaceIndex'
 import { TruncatedText } from '@/components/common/Tooltip'
+import { useWorkspaceFileTree } from '@/hooks/useWorkspaceFileTree'
 
 interface SidebarProps {
   collapsed: boolean
@@ -27,78 +28,23 @@ interface SidebarProps {
 
 export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: SidebarProps) {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
-  const workspacePath = useAppStore((s) => s.workspacePath)
   const setWorkspacePath = useAppStore((s) => s.setWorkspacePath)
   const recentFiles = useEditorStore((s) => s.recentFiles)
   const favorites = useEditorStore((s) => s.favorites)
   const tabs = useEditorStore((s) => s.tabs)
   const activeTabId = useEditorStore((s) => s.activeTabId)
-  const [workspaceFiles, setWorkspaceFiles] = useState<FileNode[]>([])
-  const [workspaceHiddenCount, setWorkspaceHiddenCount] = useState(0)
+  const {
+    workspacePath,
+    workspaceFiles,
+    workspaceHiddenCount,
+    loadWorkspace,
+    refreshWorkspace,
+    closeWorkspace,
+  } = useWorkspaceFileTree()
   const [indexingWorkspace, setIndexingWorkspace] = useState(false)
   const [workspaceCleanupSummary, setWorkspaceCleanupSummary] = useState<string | null>(null)
   const [indexMenuOpen, setIndexMenuOpen] = useState(false)
   const indexMenuRef = useRef<HTMLDivElement>(null)
-
-  // 递归读取目录并构建文件树
-  const readDirRecursive = useCallback(async (dirPath: string, depth: number): Promise<{ nodes: FileNode[]; hidden: number }> => {
-    if (depth > 5) return { nodes: [], hidden: 0 }
-    const entries = await listDirectory(dirPath)
-    const nodes: FileNode[] = []
-    let hidden = 0
-    for (const entry of entries) {
-      const fullPath = await joinPath(dirPath, entry.name)
-      if (entry.isDirectory) {
-        if (shouldSkipWorkspaceDirectory(entry.name)) {
-          hidden++
-          continue
-        }
-        const { nodes: children, hidden: childHidden } = await readDirRecursive(fullPath, depth + 1)
-        nodes.push({ name: entry.name, path: fullPath, type: 'directory', children })
-        hidden += childHidden
-      } else if (isWorkspaceDisplayFile(entry.name)) {
-        const ext = entry.name.includes('.') ? entry.name.split('.').pop()?.toLowerCase() : undefined
-        nodes.push({ name: entry.name, path: fullPath, type: 'file', extension: ext })
-      } else {
-        hidden++
-      }
-    }
-    nodes.sort((a, b) => {
-      if (a.type === 'directory' && b.type !== 'directory') return -1
-      if (a.type !== 'directory' && b.type === 'directory') return 1
-      return a.name.localeCompare(b.name)
-    })
-    return { nodes, hidden }
-  }, [])
-
-  const loadWorkspace = useCallback(async (dirPath: string) => {
-    try {
-      const { nodes, hidden } = await readDirRecursive(dirPath, 0)
-      setWorkspaceHiddenCount(hidden)
-      setWorkspaceFiles(nodes)
-    } catch (err) {
-      console.error('Load workspace failed:', err)
-      toast.error('加载工作区失败')
-      setWorkspacePath(null)
-      setWorkspaceFiles([])
-    }
-  }, [setWorkspacePath, readDirRecursive])
-
-  // 启动时自动恢复工作区
-  useEffect(() => {
-    if (workspacePath) {
-      loadWorkspace(workspacePath)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!workspacePath) return
-    const handler = () => {
-      void loadWorkspace(workspacePath)
-    }
-    window.addEventListener('guanmo:workspace-refresh', handler)
-    return () => window.removeEventListener('guanmo:workspace-refresh', handler)
-  }, [loadWorkspace, workspacePath])
 
   // 点击外部关闭索引下拉菜单
   useEffect(() => {
@@ -190,8 +136,7 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
         state.setActiveTab(existing.id)
         return
       }
-      const { authorizeSelectedPath, readFile } = await import('@/hooks/useTauri')
-      await authorizeSelectedPath(file.path)
+      const { readFile } = await import('@/hooks/useTauri')
       const content = await readFile(file.path)
       state.addTab(file.path, file.name, content)
       scheduleMarkdownDocumentIndex(file.path, file.name, content)
@@ -201,21 +146,17 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
         return
       }
       console.error('Open recent file failed:', err)
-      toast.error(describeFileOperationError(err, '打开最近文件失败'))
     }
   }, [])
 
   const handleCloseWorkspace = useCallback(() => {
-    setWorkspaceFiles([])
-    setWorkspacePath(null)
-    setWorkspaceHiddenCount(0)
+    closeWorkspace()
     setWorkspaceCleanupSummary(null)
-  }, [setWorkspacePath])
+  }, [closeWorkspace])
 
   const handleRefreshWorkspace = useCallback(async () => {
-    if (!workspacePath) return
-    await loadWorkspace(workspacePath)
-  }, [loadWorkspace, workspacePath])
+    await refreshWorkspace()
+  }, [refreshWorkspace])
 
   const handleIndexWorkspace = useCallback(async () => {
     if (!workspacePath || indexingWorkspace) return
@@ -563,8 +504,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
       if (existing) {
         state.setActiveTab(existing.id)
       } else {
-        const { authorizeSelectedPath, readFile } = await import('@/hooks/useTauri')
-        await authorizeSelectedPath(file.path)
+        const { readFile } = await import('@/hooks/useTauri')
         const content = await readFile(file.path)
         state.addTab(file.path, file.name, content)
         scheduleMarkdownDocumentIndex(file.path, file.name, content)
