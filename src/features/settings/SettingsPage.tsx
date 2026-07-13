@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Collapse, Divider, Footer, Icon, Input, Select, Switch, Table, Tabs } from 'animal-island-ui'
 import appIcon from '@/assets/icon.png'
 import type { IconName } from 'animal-island-ui'
@@ -221,6 +221,120 @@ function SliderField({
         <span className="text-mono text-caption text-gm-text-secondary w-12 text-right tabular-nums">
           {format ? format(value) : value}
         </span>
+      </div>
+    </div>
+  )
+}
+
+const MODE_PREWARM_OPTIONS = [
+  { key: 'off', label: '关闭', description: '关闭闲时预热，首次切换其他模式时再进行渲染。' },
+  { key: 'smart', label: '智能', description: '当前模式渲染完成并空闲后，优先预热预览模式，再预热一个常用模式。' },
+  { key: 'turbo', label: '极速', description: '当前模式渲染完成并空闲后，优先预热预览模式，再预热两个常用模式，可能增加资源占用。' },
+] as const
+
+type ModePrewarmLevel = typeof MODE_PREWARM_OPTIONS[number]['key']
+const MODE_PREWARM_KEYS = MODE_PREWARM_OPTIONS.map((option) => option.key)
+const MODE_PREWARM_STOP_POSITIONS = ['var(--gm-mode-prewarm-stop-edge)', '50%', 'calc(100% - var(--gm-mode-prewarm-stop-edge))'] as const
+const MODE_PREWARM_LABEL_POSITIONS = ['var(--gm-mode-prewarm-stop-edge)', 'calc(50% - 14px)', 'calc(100% - var(--gm-mode-prewarm-stop-edge) - 26px)'] as const
+
+function getModePrewarmIndex(value: ModePrewarmLevel) {
+  return Math.max(0, MODE_PREWARM_KEYS.indexOf(value))
+}
+
+function ModePrewarmSlider({
+  value,
+  onChange,
+}: {
+  value: ModePrewarmLevel
+  onChange: (value: ModePrewarmLevel) => void
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const committedIndex = getModePrewarmIndex(value)
+  const [draftIndex, setDraftIndex] = useState(committedIndex)
+  const [dragging, setDragging] = useState(false)
+  const activeOption = MODE_PREWARM_OPTIONS[draftIndex] ?? MODE_PREWARM_OPTIONS[0]
+  const thumbPosition = MODE_PREWARM_STOP_POSITIONS[draftIndex] ?? MODE_PREWARM_STOP_POSITIONS[0]
+
+  useEffect(() => {
+    if (!dragging) setDraftIndex(committedIndex)
+  }, [committedIndex, dragging])
+
+  const commitIndex = useCallback((index: number) => {
+    const nextIndex = Math.max(0, Math.min(MODE_PREWARM_OPTIONS.length - 1, Math.round(index)))
+    setDraftIndex(nextIndex)
+    const nextValue = MODE_PREWARM_OPTIONS[nextIndex].key
+    if (nextValue !== value) onChange(nextValue)
+  }, [onChange, value])
+
+  const handleRangeChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    commitIndex(Number(event.currentTarget.value))
+  }, [commitIndex])
+
+  const handlePointerEnd = useCallback(() => {
+    setDragging(false)
+    commitIndex(Number(inputRef.current?.value ?? draftIndex))
+  }, [commitIndex, draftIndex])
+
+  const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
+    const keyTargets: Record<string, number> = {
+      ArrowLeft: draftIndex - 1,
+      ArrowDown: draftIndex - 1,
+      ArrowRight: draftIndex + 1,
+      ArrowUp: draftIndex + 1,
+      Home: 0,
+      End: MODE_PREWARM_OPTIONS.length - 1,
+    }
+    if (!(event.key in keyTargets)) return
+    event.preventDefault()
+    commitIndex(keyTargets[event.key])
+  }, [commitIndex, draftIndex])
+
+  const labelNodes = useMemo(() => MODE_PREWARM_OPTIONS.map((option, index) => (
+    <span
+      key={option.key}
+      className="gm-mode-prewarm__label"
+      data-active={index === draftIndex}
+      style={{ left: MODE_PREWARM_LABEL_POSITIONS[index] }}
+    >
+      {option.label}
+    </span>
+  )), [draftIndex])
+
+  return (
+    <div className={`gm-mode-prewarm gm-mode-prewarm--${activeOption.key}`} data-dragging={dragging}>
+      <div className="gm-mode-prewarm__labels" aria-hidden="true">
+        {labelNodes}
+      </div>
+      <div className="gm-mode-prewarm__slider">
+        <div className="gm-mode-prewarm__track" aria-hidden="true">
+          <span className="gm-mode-prewarm__fill" style={{ width: thumbPosition }} />
+          {MODE_PREWARM_OPTIONS.map((option, index) => (
+            <span
+              key={option.key}
+              className="gm-mode-prewarm__node"
+              data-active={index <= draftIndex}
+              style={{ left: MODE_PREWARM_STOP_POSITIONS[index] }}
+            />
+          ))}
+          <span className="gm-mode-prewarm__thumb" style={{ left: thumbPosition }} />
+        </div>
+        <input
+          ref={inputRef}
+          type="range"
+          min={0}
+          max={2}
+          step={1}
+          value={draftIndex}
+          aria-label="模式闲时预热"
+          aria-valuetext={activeOption.label}
+          className="gm-mode-prewarm__input"
+          onChange={handleRangeChange}
+          onPointerDown={() => setDragging(true)}
+          onPointerUp={handlePointerEnd}
+          onPointerCancel={handlePointerEnd}
+          onBlur={handlePointerEnd}
+          onKeyDown={handleKeyDown}
+        />
       </div>
     </div>
   )
@@ -822,6 +936,7 @@ function StatItem({ label, value }: { label: string; value: number }) {
 
 function EditorSettings() {
   const { editor, updateEditorSettings } = useSettingsStore()
+  const modePrewarmDescription = MODE_PREWARM_OPTIONS[getModePrewarmIndex(editor.modePrewarm)].description
 
   return (
     <div className="w-full pb-6">
@@ -854,6 +969,14 @@ function EditorSettings() {
       </SettingField>
       <SettingField label="自动保存" description={!isTauri() ? "浏览器模式下自动保存不可用" : "编辑后自动保存"}>
         <Switch checked={isTauri() && editor.autoSave} onChange={(v) => updateEditorSettings({ autoSave: v })} disabled={!isTauri()} />
+      </SettingField>
+      <Sep />
+      <SectionTitle>性能</SectionTitle>
+      <SettingField label="模式闲时预热" description={modePrewarmDescription}>
+        <ModePrewarmSlider
+          value={editor.modePrewarm}
+          onChange={(modePrewarm) => updateEditorSettings({ modePrewarm })}
+        />
       </SettingField>
     </div>
   )
@@ -941,6 +1064,7 @@ function GeneralSettings() {
       autoSaveDelay: 1000,
       syncScroll: true,
       autoSendAiShortcut: false,
+      modePrewarm: 'smart',
     })
     updateAppearanceSettings({ customCursorEnabled: true, theme: 'light' })
     updateWebSearchConfig({ provider: 'duckduckgo', apiKey: '', maxResults: 5, customUrl: '' })

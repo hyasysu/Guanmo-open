@@ -3,6 +3,7 @@ import { EditorView } from '@codemirror/view'
 import { Card } from 'animal-island-ui'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
+import type { ViewMode, ViewModeUsageStat } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useFileOperations } from '@/hooks/useFileOperations'
 import { useActiveHeading } from '@/hooks/useActiveHeading'
@@ -53,6 +54,13 @@ const SCROLL_SYNC_TOP_OFFSET = 32
 const SCROLL_SYNC_LOCK_MS = 220
 const SCROLL_SYNC_INPUT_PAUSE_MS = 700
 const PREVIEW_SWITCH_MARK_PREFIX = 'guanmo:preview-switch'
+const MODE_PREWARM_IDLE_DELAY = 650
+const MODE_PREWARM_ACTIVITY_PAUSE = 1200
+const MODE_PREWARM_HUGE_DOC_LENGTH = 100000
+const MODE_PREWARM_DIFF_LINE_LIMIT = 900
+
+type PrewarmTargetMode = Exclude<ViewMode, 'edit'>
+type PrewarmedModeKeys = Partial<Record<PrewarmTargetMode, string>>
 
 interface ScheduledPreviewContent {
   content: string
@@ -134,6 +142,8 @@ export function EditorArea() {
   const editorWordWrap = useSettingsStore((s) => s.editor.wordWrap)
   const editorLineNumbers = useSettingsStore((s) => s.editor.lineNumbers)
   const syncScroll = useSettingsStore((s) => s.editor.syncScroll)
+  const modePrewarm = useSettingsStore((s) => s.editor.modePrewarm)
+  const viewModeUsage = useEditorStore((s) => s.viewModeUsage)
   const isFullscreen = useAppStore((s) => s.isFullscreen)
   const editorViewRef = useRef<EditorView | null>(null)
   const readingPositionsRef = useRef<Record<string, ReadingPosition>>({})
@@ -158,6 +168,13 @@ export function EditorArea() {
   const [activeEditorHeading, setActiveEditorHeading] = useState<string | null>(null)
   const [tocFocus, setTocFocus] = useState<'editor' | 'preview'>('editor')
   const [previewMenu, setPreviewMenu] = useState<PreviewMenuState | null>(null)
+  const [prewarmedModeKeys, setPrewarmedModeKeys] = useState<PrewarmedModeKeys>({})
+  const prewarmedModeKeysRef = useRef<PrewarmedModeKeys>({})
+  prewarmedModeKeysRef.current = prewarmedModeKeys
+  const warmedModeKeysRef = useRef<Set<string>>(new Set())
+  const warmScopeRef = useRef<string | null>(null)
+  const prewarmCancelRef = useRef(0)
+  const lastUserActivityAtRef = useRef(Date.now())
 
   useEffect(() => {
     if (isFullscreen) setTocCollapsed(true)
@@ -168,21 +185,28 @@ export function EditorArea() {
   const dualRightTab = !rightPaneUserSelected
     ? activeTab
     : selectedRightTab
+  const prewarmLeftPreview = Boolean(
+    prewarmedModeKeys.preview
+    || prewarmedModeKeys['edit-preview']
+    || prewarmedModeKeys['dual-preview']
+  )
+  const prewarmRightPreview = Boolean(prewarmedModeKeys['dual-preview'])
+  const prewarmDiffPreview = Boolean(prewarmedModeKeys['diff-preview'])
   const retainedRightTabRef = useRef<(typeof tabs)[number] | null>(null)
-  if (viewMode === 'dual-preview') {
+  if (viewMode === 'dual-preview' || prewarmRightPreview) {
     retainedRightTabRef.current = dualRightTab ?? null
   }
-  const rightTab = viewMode === 'dual-preview' ? dualRightTab : retainedRightTabRef.current
+  const rightTab = viewMode === 'dual-preview' || prewarmRightPreview ? dualRightTab : retainedRightTabRef.current
   const leftPreviewVisible = viewMode === 'preview' || viewMode === 'edit-preview' || viewMode === 'dual-preview'
   const editorVisible = viewMode === 'edit' || viewMode === 'edit-preview'
   const leftPreviewMountedRef = useRef(false)
   const rightPreviewMountedRef = useRef(false)
   const viewModeRef = useRef(viewMode)
   viewModeRef.current = viewMode
-  if (leftPreviewVisible) {
+  if (leftPreviewVisible || prewarmLeftPreview) {
     leftPreviewMountedRef.current = true
   }
-  if (viewMode === 'dual-preview') {
+  if (viewMode === 'dual-preview' || prewarmRightPreview) {
     rightPreviewMountedRef.current = true
   }
   const activePreview = useScheduledPreviewContent(activeTab?.content || '', activeTab?.id)
@@ -191,7 +215,7 @@ export function EditorArea() {
     content: activePreview.content,
     filePath: activeTab?.filePath,
   })
-  if (leftPreviewVisible) {
+  if (leftPreviewVisible || prewarmLeftPreview) {
     leftPreviewRenderRef.current = {
       content: activePreview.content,
       filePath: activeTab?.filePath,
@@ -199,6 +223,50 @@ export function EditorArea() {
   }
   const toc = useMemo(() => extractToc(activeTab?.content || ''), [activeTab?.content])
   const rightToc = useMemo(() => extractToc(rightTab?.content || ''), [rightTab?.content])
+  const activeContentSignature = useMemo(
+    () => getContentSignature(activeTab?.content || ''),
+    [activeTab?.content]
+  )
+  const activeOriginalSignature = useMemo(
+    () => getContentSignature(activeTab?.originalContent || ''),
+    [activeTab?.originalContent]
+  )
+  const activeDiffLineCount = useMemo(
+    () => Math.max(
+      countMarkdownLines(activeTab?.originalContent || ''),
+      countMarkdownLines(activeTab?.content || '')
+    ),
+    [activeTab?.content, activeTab?.originalContent]
+  )
+
+  const getModeRenderKey = useCallback((mode: PrewarmTargetMode) => {
+    if (!activeTab?.id) return null
+    const base = `${activeTab.id}:${activeContentSignature}`
+    return mode === 'diff-preview'
+      ? `${mode}:${base}:${activeOriginalSignature}`
+      : `${mode}:${base}`
+  }, [activeContentSignature, activeOriginalSignature, activeTab?.id])
+
+  const warmScope = activeTab?.id
+    ? `${activeTab.id}:${activeContentSignature}:${activeOriginalSignature}`
+    : null
+  if (warmScopeRef.current !== warmScope) {
+    warmScopeRef.current = warmScope
+    warmedModeKeysRef.current.clear()
+  }
+
+  const rememberWarmMode = (mode: PrewarmTargetMode) => {
+    const key = getModeRenderKey(mode)
+    if (key) warmedModeKeysRef.current.add(key)
+  }
+  if (leftPreviewVisible) {
+    rememberWarmMode('preview')
+    if (viewMode === 'edit-preview') rememberWarmMode('edit-preview')
+    if (viewMode === 'dual-preview') rememberWarmMode('dual-preview')
+  }
+  if (viewMode === 'diff-preview') {
+    rememberWarmMode('diff-preview')
+  }
 
   const updateEditorHeading = useCallback((view: EditorView) => {
     const line = getEditorTopLine(view)
@@ -221,6 +289,86 @@ export function EditorArea() {
     `${viewMode}:${rightTab?.id ?? ''}:${rightPreview.version}`,
     viewMode === 'dual-preview'
   )
+
+  const cancelModePrewarm = useCallback(() => {
+    prewarmCancelRef.current += 1
+    lastUserActivityAtRef.current = Date.now()
+  }, [])
+
+  useEffect(() => {
+    const handleActivity = () => cancelModePrewarm()
+    window.addEventListener('keydown', handleActivity, true)
+    window.addEventListener('pointerdown', handleActivity, true)
+    window.addEventListener('wheel', handleActivity, { capture: true, passive: true })
+    window.addEventListener('scroll', handleActivity, { capture: true, passive: true })
+    return () => {
+      window.removeEventListener('keydown', handleActivity, true)
+      window.removeEventListener('pointerdown', handleActivity, true)
+      window.removeEventListener('wheel', handleActivity, { capture: true })
+      window.removeEventListener('scroll', handleActivity, { capture: true })
+    }
+  }, [cancelModePrewarm])
+
+  useEffect(() => {
+    cancelModePrewarm()
+  }, [viewMode, cancelModePrewarm])
+
+  useEffect(() => {
+    if (modePrewarm === 'off') setPrewarmedModeKeys({})
+  }, [modePrewarm])
+
+  useEffect(() => {
+    cancelModePrewarm()
+    setPrewarmedModeKeys({})
+  }, [activeTab?.id, activeTab?.content, activeTab?.originalContent, cancelModePrewarm])
+
+  useEffect(() => {
+    if (!activeTab?.id || modePrewarm === 'off' || viewMode === 'edit') return
+    if (activePreview.pending || rightPreview.pending) return
+
+    const target = getNextPrewarmTarget({
+      activeMode: viewMode,
+      contentLength: activeTab.content.length,
+      diffLineCount: activeDiffLineCount,
+      level: modePrewarm,
+      resolveKey: getModeRenderKey,
+      warmedKeys: new Set([
+        ...warmedModeKeysRef.current,
+        ...Object.values(prewarmedModeKeysRef.current).filter((key): key is string => Boolean(key)),
+      ]),
+      usage: viewModeUsage,
+    })
+    if (!target) return
+
+    const token = prewarmCancelRef.current
+    const timer = window.setTimeout(() => {
+      const idleSince = Date.now() - lastUserActivityAtRef.current
+      if (prewarmCancelRef.current !== token || idleSince < MODE_PREWARM_ACTIVITY_PAUSE) return
+      scheduleIdlePrewarm(() => {
+        if (prewarmCancelRef.current !== token) return
+        const key = getModeRenderKey(target)
+        if (!key) return
+        setPrewarmedModeKeys((current) => (
+          current[target] === key
+            ? current
+            : { ...current, [target]: key }
+        ))
+      })
+    }, MODE_PREWARM_IDLE_DELAY)
+
+    return () => window.clearTimeout(timer)
+  }, [
+    activeDiffLineCount,
+    activePreview.pending,
+    activeTab?.content.length,
+    activeTab?.id,
+    getModeRenderKey,
+    modePrewarm,
+    prewarmedModeKeys,
+    rightPreview.pending,
+    viewMode,
+    viewModeUsage,
+  ])
 
   const getStoredPreviewTop = useCallback((tabId: string | null | undefined) => {
     if (!tabId) return 0
@@ -1023,16 +1171,18 @@ export function EditorArea() {
           <WelcomeScreen />
         ) : (
           <>
-            {viewMode === 'diff-preview' && (
-              <MarkdownDiffView
-                original={activeTab?.originalContent || ''}
-                current={activeTab?.content || ''}
-                fontSize={editorFontSize}
-                lineHeight={editorLineHeight}
-                fontFamily={editorFontFamily}
-                wordWrap={editorWordWrap}
-                lineNumbers={editorLineNumbers}
-              />
+            {(viewMode === 'diff-preview' || prewarmDiffPreview) && (
+              <div className={viewMode === 'diff-preview' ? 'flex min-w-0 flex-1' : 'hidden'}>
+                <MarkdownDiffView
+                  original={activeTab?.originalContent || ''}
+                  current={activeTab?.content || ''}
+                  fontSize={editorFontSize}
+                  lineHeight={editorLineHeight}
+                  fontFamily={editorFontFamily}
+                  wordWrap={editorWordWrap}
+                  lineNumbers={editorLineNumbers}
+                />
+              </div>
             )}
             <div className={`${viewMode === 'diff-preview' ? 'hidden' : 'flex'} flex-1 overflow-hidden bg-gm-surface`}>
             <div className={`${editorVisible ? (viewMode === 'edit-preview' ? 'min-w-0 flex-1 border-r border-gm-border-subtle' : 'flex-1') : 'hidden'} overflow-hidden relative`}>
@@ -1370,6 +1520,84 @@ function getPreviewLineAtTop(
   }
 
   return previous.line
+}
+
+function getNextPrewarmTarget({
+  activeMode,
+  contentLength,
+  diffLineCount,
+  level,
+  resolveKey,
+  warmedKeys,
+  usage,
+}: {
+  activeMode: ViewMode
+  contentLength: number
+  diffLineCount: number
+  level: 'smart' | 'turbo'
+  resolveKey: (mode: PrewarmTargetMode) => string | null
+  warmedKeys: Set<string>
+  usage: Partial<Record<PrewarmTargetMode, ViewModeUsageStat>>
+}): PrewarmTargetMode | null {
+  const extraCount = level === 'smart' ? 1 : 2
+  const targets: PrewarmTargetMode[] = ['preview']
+
+  if (contentLength < MODE_PREWARM_HUGE_DOC_LENGTH) {
+    targets.push(...getFrequentPrewarmModes(usage).slice(0, extraCount))
+  }
+
+  for (const target of targets) {
+    if (target === activeMode) continue
+    if (target === 'diff-preview' && diffLineCount > MODE_PREWARM_DIFF_LINE_LIMIT) continue
+    const key = resolveKey(target)
+    if (key && !warmedKeys.has(key)) return target
+  }
+
+  return null
+}
+
+function getFrequentPrewarmModes(
+  usage: Partial<Record<PrewarmTargetMode, ViewModeUsageStat>>
+): PrewarmTargetMode[] {
+  const fallbackOrder: PrewarmTargetMode[] = ['edit-preview', 'dual-preview', 'diff-preview']
+  return fallbackOrder
+    .map((mode, index) => ({
+      mode,
+      index,
+      count: usage[mode]?.count ?? 0,
+      lastUsedAt: usage[mode]?.lastUsedAt ?? 0,
+    }))
+    .sort((a, b) => b.count - a.count || b.lastUsedAt - a.lastUsedAt || a.index - b.index)
+    .map((item) => item.mode)
+}
+
+function getContentSignature(content: string) {
+  let hash = 2166136261
+  for (let i = 0; i < content.length; i++) {
+    hash ^= content.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `${content.length}:${hash >>> 0}`
+}
+
+function countMarkdownLines(content: string) {
+  if (!content) return 1
+  let lines = 1
+  for (let i = 0; i < content.length; i++) {
+    if (content.charCodeAt(i) === 10) lines += 1
+  }
+  return lines
+}
+
+function scheduleIdlePrewarm(callback: () => void) {
+  const idleWindow = window as Window & {
+    requestIdleCallback?: (cb: IdleRequestCallback, options?: IdleRequestOptions) => number
+  }
+  if (idleWindow.requestIdleCallback) {
+    idleWindow.requestIdleCallback(callback, { timeout: 900 })
+    return
+  }
+  window.setTimeout(callback, 120)
 }
 
 function PaneHeader({ title, onClose }: { title: string; onClose?: () => void }) {

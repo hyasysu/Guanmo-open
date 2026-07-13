@@ -20,7 +20,13 @@ export interface RecentFile {
   lastOpened: number
 }
 
-type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
+export type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
+type PrewarmableViewMode = Exclude<ViewMode, 'edit'>
+
+export interface ViewModeUsageStat {
+  count: number
+  lastUsedAt: number
+}
 
 interface PersistedEditorState {
   recentFiles: RecentFile[]
@@ -30,6 +36,7 @@ interface PersistedEditorState {
   viewMode: ViewMode
   rightPaneTabId: string | null
   rightPaneUserSelected: boolean
+  viewModeUsage: Partial<Record<PrewarmableViewMode, ViewModeUsageStat>>
   pendingReveal: null
 }
 
@@ -40,6 +47,7 @@ interface EditorState {
   viewMode: ViewMode
   rightPaneTabId: string | null
   rightPaneUserSelected: boolean
+  viewModeUsage: Partial<Record<PrewarmableViewMode, ViewModeUsageStat>>
   recentFiles: RecentFile[]
   favorites: string[]
   pendingReveal: { tabId: string; startLine: number; endLine?: number } | null
@@ -117,7 +125,6 @@ function compactPersistedTab(tab: Tab): Tab {
 }
 
 function createDeferredEditorStorage(delayMs: number): PersistStorage<PersistedEditorState> {
-  const storage = typeof window !== 'undefined' ? window.localStorage : null
   let timer: ReturnType<typeof setTimeout> | null = null
   let pending: { name: string; value: StorageValue<PersistedEditorState> } | null = null
 
@@ -126,21 +133,17 @@ function createDeferredEditorStorage(delayMs: number): PersistStorage<PersistedE
     if (!pending) return
     const { name, value } = pending
     pending = null
-    storage?.setItem(name, JSON.stringify(value))
+    localStorage.setItem(name, JSON.stringify(value))
   }
 
-  if (typeof window !== 'undefined') {
-    window.addEventListener('beforeunload', flush)
-  }
-  if (typeof document !== 'undefined') {
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') flush()
-    })
-  }
+  window.addEventListener('beforeunload', flush)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flush()
+  })
 
   return {
     getItem(name) {
-      const raw = storage?.getItem(name)
+      const raw = localStorage.getItem(name)
       return raw ? JSON.parse(raw) as StorageValue<PersistedEditorState> : null
     },
     setItem(name, value) {
@@ -154,7 +157,7 @@ function createDeferredEditorStorage(delayMs: number): PersistStorage<PersistedE
         clearTimeout(timer)
         timer = null
       }
-      storage?.removeItem(name)
+      localStorage.removeItem(name)
     },
   }
 }
@@ -170,6 +173,26 @@ function markPreviewSwitchStart(tabId: string, viewMode: ViewMode) {
   performance.mark(markName)
 }
 
+function isPrewarmableViewMode(mode: ViewMode): mode is PrewarmableViewMode {
+  return mode !== 'edit'
+}
+
+function markUserViewModeUse(
+  usage: Partial<Record<PrewarmableViewMode, ViewModeUsageStat>>,
+  mode: ViewMode,
+  previousMode: ViewMode
+) {
+  if (mode === previousMode || !isPrewarmableViewMode(mode)) return usage
+  const current = usage[mode] ?? { count: 0, lastUsedAt: 0 }
+  return {
+    ...usage,
+    [mode]: {
+      count: current.count + 1,
+      lastUsedAt: Date.now(),
+    },
+  }
+}
+
 export const useEditorStore = create<EditorState>()(
   persist(
     (set, get) => ({
@@ -179,6 +202,7 @@ export const useEditorStore = create<EditorState>()(
       viewMode: 'edit',
       rightPaneTabId: null,
       rightPaneUserSelected: false,
+      viewModeUsage: {},
       recentFiles: [],
       favorites: [],
       pendingReveal: null,
@@ -310,7 +334,11 @@ export const useEditorStore = create<EditorState>()(
         if (viewMode === 'edit-preview' || viewMode === 'preview') {
           set({ viewMode: 'edit', previewVisible: false })
         } else {
-          set({ viewMode: 'edit-preview', previewVisible: true })
+          set((s) => ({
+            viewMode: 'edit-preview',
+            previewVisible: true,
+            viewModeUsage: markUserViewModeUse(s.viewModeUsage, 'edit-preview', s.viewMode),
+          }))
         }
       },
 
@@ -319,7 +347,11 @@ export const useEditorStore = create<EditorState>()(
         if (viewMode === 'diff-preview') {
           set({ viewMode: 'edit', previewVisible: false })
         } else {
-          set({ viewMode: 'diff-preview', previewVisible: false })
+          set((s) => ({
+            viewMode: 'diff-preview',
+            previewVisible: false,
+            viewModeUsage: markUserViewModeUse(s.viewModeUsage, 'diff-preview', s.viewMode),
+          }))
         }
       },
 
@@ -339,9 +371,17 @@ export const useEditorStore = create<EditorState>()(
         if (mode === 'edit') {
           set({ viewMode: 'edit', previewVisible: false })
         } else if (mode === 'preview') {
-          set({ viewMode: 'preview', previewVisible: true })
+          set((s) => ({
+            viewMode: 'preview',
+            previewVisible: true,
+            viewModeUsage: markUserViewModeUse(s.viewModeUsage, mode, s.viewMode),
+          }))
         } else if (mode === 'edit-preview') {
-          set({ viewMode: 'edit-preview', previewVisible: true })
+          set((s) => ({
+            viewMode: 'edit-preview',
+            previewVisible: true,
+            viewModeUsage: markUserViewModeUse(s.viewModeUsage, mode, s.viewMode),
+          }))
         } else if (mode === 'dual-preview') {
           const { activeTabId, rightPaneTabId, rightPaneUserSelected, tabs } = get()
           const hasRightPaneTab = tabs.some((tab) => tab.id === rightPaneTabId)
@@ -353,9 +393,14 @@ export const useEditorStore = create<EditorState>()(
             previewVisible: false,
             rightPaneTabId: nextRightPaneTabId,
             rightPaneUserSelected: rightPaneUserSelected && hasRightPaneTab,
+            viewModeUsage: markUserViewModeUse(get().viewModeUsage, mode, get().viewMode),
           })
         } else if (mode === 'diff-preview') {
-          set({ viewMode: 'diff-preview', previewVisible: false })
+          set((s) => ({
+            viewMode: 'diff-preview',
+            previewVisible: false,
+            viewModeUsage: markUserViewModeUse(s.viewModeUsage, mode, s.viewMode),
+          }))
         }
       },
 
@@ -449,6 +494,7 @@ export const useEditorStore = create<EditorState>()(
         viewMode: state.viewMode,
         rightPaneTabId: state.rightPaneTabId,
         rightPaneUserSelected: state.rightPaneUserSelected,
+        viewModeUsage: state.viewModeUsage,
         pendingReveal: null,
       }),
       merge: (persisted, current) => {
@@ -469,6 +515,7 @@ export const useEditorStore = create<EditorState>()(
           activeTabId,
           rightPaneTabId,
           rightPaneUserSelected,
+          viewModeUsage: saved.viewModeUsage ?? current.viewModeUsage,
           recentFiles: dedupeRecentFiles(saved.recentFiles ?? current.recentFiles),
           pendingReveal: null,
           previewSwitchingTabId: null,

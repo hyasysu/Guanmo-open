@@ -26,6 +26,7 @@ interface EditorSettings {
   autoSaveDelay: number
   syncScroll: boolean
   autoSendAiShortcut: boolean
+  modePrewarm: 'off' | 'smart' | 'turbo'
 }
 
 interface AppearanceSettings {
@@ -66,6 +67,7 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   autoSaveDelay: 1000,
   syncScroll: true,
   autoSendAiShortcut: false,
+  modePrewarm: 'smart',
 }
 
 const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
