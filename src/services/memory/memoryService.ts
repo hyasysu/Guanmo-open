@@ -8,16 +8,20 @@ import {
 } from '@/services/database/persistence'
 import {
   classifyMemoryRetrievalIntent,
+  chooseCanonicalMemoryContent,
   contentHash,
-  findActiveFactConflict,
   filterInjectableMemories,
   hasReusableEmbedding,
   inferMemoryScope,
   isMemoryVisibleInScope,
+  lexicalMemorySimilarity,
+  normalizeMemoryCandidate,
   normalizeMemoryScopeKey,
+  resolveMemoryCandidateDecision,
   shouldExtractMemoryCandidate,
+  validateMemoryCandidate,
 } from './memoryPolicy'
-import type { MemoryScopeType } from './memoryPolicy'
+import type { MemoryCandidateInput, MemoryScopeType } from './memoryPolicy'
 
 export { classifyMemoryRetrievalIntent } from './memoryPolicy'
 export type { MemoryRetrievalIntent } from './memoryPolicy'
@@ -43,25 +47,14 @@ const CATEGORY_PRIORITY: Record<string, number> = {
   general: 5,
 }
 
-interface ExtractedMemory {
+interface ExtractedMemory extends MemoryCandidateInput {
   action: 'add' | 'update' | 'delete'
   id?: string
-  content: string
-  category: string
-  subject?: string
-  factKey?: string
-  factValue?: string
-  confidence?: number
 }
 
 interface ExtractionOptions {
   triggerReason?: string
   workspacePath?: string | null
-}
-
-interface ValidationResult {
-  valid: boolean
-  reason?: string
 }
 
 type MemoryRetrievalMode = 'light' | 'strong'
@@ -76,41 +69,6 @@ export interface MemorySearchOptions {
   scopeType?: MemoryScopeType
   scopeKey?: string | null
   embeddingModel?: string
-}
-
-function tokenizeMemoryText(content: string): Set<string> {
-  return new Set(
-    content
-      .toLowerCase()
-      .split(/[\s，。、“”‘’；：,.!?;:()（）【】\[\]\-_/]+/)
-      .filter((term) => term.length >= 2)
-  )
-}
-
-function buildSimilarityTerms(content: string): Set<string> {
-  const normalized = content.toLowerCase().replace(/[，。！？；：,.!?;:\s]+/g, '')
-  const terms = tokenizeMemoryText(content)
-  for (let i = 0; i < normalized.length - 1; i += 1) {
-    terms.add(normalized.slice(i, i + 2))
-  }
-  return terms
-}
-
-function lexicalSimilarity(query: string, content: string): number {
-  const queryTerms = buildSimilarityTerms(query)
-  const contentTerms = buildSimilarityTerms(content)
-  if (queryTerms.size === 0 || contentTerms.size === 0) return 0
-
-  let overlap = 0
-  for (const term of queryTerms) {
-    if (contentTerms.has(term)) overlap += 1
-  }
-
-  const cosineLike = overlap / Math.sqrt(queryTerms.size * contentTerms.size)
-  const normalizedQuery = query.toLowerCase().replace(/[，。！？；：,.!?;:\s]+/g, '')
-  const normalizedContent = content.toLowerCase().replace(/[，。！？；：,.!?;:\s]+/g, '')
-  const containsBoost = normalizedQuery.length >= 4 && normalizedContent.includes(normalizedQuery) ? 0.2 : 0
-  return Math.min(1, cosineLike + containsBoost)
 }
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -149,25 +107,6 @@ function sortMemoryScores<T extends { memory: Memory; similarity: number }>(
   })
 }
 
-function isDuplicateMemory(newContent: string, existing: Memory[]): boolean {
-  const newTerms = tokenizeMemoryText(newContent)
-  if (newTerms.size === 0) return false
-
-  for (const memory of existing) {
-    const existingTerms = tokenizeMemoryText(memory.content)
-    if (existingTerms.size === 0) continue
-
-    let overlap = 0
-    for (const term of newTerms) {
-      if (existingTerms.has(term)) overlap += 1
-    }
-    const similarity = overlap / Math.max(newTerms.size, existingTerms.size)
-    if (similarity > 0.7) return true
-  }
-
-  return false
-}
-
 function normalizeMemoryCategory(category: string | undefined): string {
   const normalized = (category || '').trim()
   if (AUTO_CATEGORIES.includes(normalized as (typeof AUTO_CATEGORIES)[number])) return normalized
@@ -183,7 +122,7 @@ function findSimilarMemory(
 ): Memory | undefined {
   return existing
     .filter((memory) => memory.category === category && !memory.locked)
-    .map((memory) => ({ memory, similarity: lexicalSimilarity(content, memory.content) }))
+    .map((memory) => ({ memory, similarity: lexicalMemorySimilarity(content, memory.content) }))
     .filter((item) => item.similarity >= threshold)
     .sort((a, b) => b.similarity - a.similarity)[0]?.memory
 }
@@ -213,11 +152,18 @@ function buildExtractPrompt(existingMemories: Memory[]): string {
 - 用户明确说明会长期沿用的项目约定、技术栈、目录职责或工程边界
 - 用户明确表达的长期工作方式或长期目标
 
+候选格式要求：
+- 每项只表达一个原子事实；多个事实必须拆成多项
+- content 使用中性、稳定、无解释的单句，最多 80 个 Unicode 字符
+- 删除“用户表示”“根据对话”等转述前缀，不附带理由、示例或当前任务背景
+- subject/factKey/factValue 必须能由用户原文直接支持，值应短小且可稳定比较
+
 禁止提取：
 - 一次性任务、当前这轮要做的动作、短期计划
 - 临时情绪、感叹、礼貌客套、随口评价
 - AI 自己的总结、推断、建议或工具结果
 - 文档正文、代码片段、RAG 检索结果、搜索结果
+- 翻译、总结、改写、代码解释、虚构或示例请求中的待处理文本
 - 已有记忆的重复改写
 
 分类规则：
@@ -233,31 +179,6 @@ function buildExtractPrompt(existingMemories: Memory[]): string {
 subject/factKey/factValue 只能来自用户原文可直接支持的事实；无法结构化时可省略。confidence 表示用户表达的明确程度，不得表示模型猜测。
 
 拿不准时输出空数组 []。不要输出任何解释。${existingBlock}`
-}
-
-function validateExtractedMemoryCandidate(item: ExtractedMemory): ValidationResult {
-  const content = item.content.trim()
-  if (content.length < 6) {
-    return { valid: false, reason: 'too_short' }
-  }
-
-  if (/^(好的|收到|明白|辛苦了|谢谢|哈哈|好的呢|行|嗯)$/.test(content)) {
-    return { valid: false, reason: 'ephemeral_tone' }
-  }
-
-  if (/(这轮|本轮|今天|现在|待会|马上|稍后|先|接下来|这一版|当前任务)/.test(content)) {
-    return { valid: false, reason: 'one_off_task' }
-  }
-
-  if (/(我有点|我很|我太|我今天|心情|开心|难受|生气|焦虑|困|累)/.test(content)) {
-    return { valid: false, reason: 'temporary_emotion' }
-  }
-
-  if (/(```|function\s|\bconst\b|\bSELECT\b|\bINSERT\b|<[^>]+>)/i.test(content)) {
-    return { valid: false, reason: 'looks_like_source_text' }
-  }
-
-  return { valid: true }
 }
 
 export async function extractMemories(
@@ -311,6 +232,21 @@ export async function extractMemories(
   }
 }
 
+function hasMaterialMemoryChange(existing: Memory, next: Memory): boolean {
+  return existing.content !== next.content
+    || (existing.subject || null) !== (next.subject || null)
+    || (existing.factKey || null) !== (next.factKey || null)
+    || (existing.factValue || null) !== (next.factValue || null)
+    || (existing.confidence ?? 0.7) !== (next.confidence ?? 0.7)
+    || (existing.evidence || null) !== (next.evidence || null)
+    || (existing.supersedesId || null) !== (next.supersedesId || null)
+}
+
+function replaceMemorySnapshot(memories: Memory[], next: Memory): void {
+  const index = memories.findIndex((memory) => memory.id === next.id)
+  if (index >= 0) memories[index] = next
+}
+
 export async function processMemoryCandidateExtraction(
   messages: ChatMessage[],
   client: { chat: (req: { messages: ChatMessage[]; temperature?: number }) => Promise<{ content: string }> },
@@ -338,9 +274,10 @@ export async function processMemoryCandidateExtraction(
   const allMemories = await loadAllMemories(undefined, ['active', 'candidate'])
   let saved = 0
 
-  for (const item of extracted) {
+  for (const rawItem of extracted) {
     try {
-      const validation = validateExtractedMemoryCandidate(item)
+      const item = normalizeMemoryCandidate(rawItem)
+      const validation = validateMemoryCandidate(item)
       if (!validation.valid) {
         console.info('[Memory] candidate rejected', {
           triggerReason,
@@ -351,63 +288,89 @@ export async function processMemoryCandidateExtraction(
       }
 
       if (item.action === 'add') {
-        item.category = normalizeMemoryCategory(item.category)
-        const similar = findSimilarMemory(item.content, item.category, allMemories)
-        if (similar && similar.source === 'auto_extracted' && similar.status === 'candidate') {
-          await persistMemory({
-            ...similar,
-            content: item.content.trim(),
-            subject: item.subject?.trim() || similar.subject || null,
-            factKey: item.factKey?.trim() || similar.factKey || null,
-            factValue: item.factValue?.trim() || similar.factValue || null,
-            confidence: Math.max(0, Math.min(1, item.confidence ?? similar.confidence ?? 0.7)),
-            evidence,
-            embedding: null,
-            embeddingModel: null,
-            contentHash: contentHash(item.content.trim()),
-            updatedAt: Date.now(),
+        const category = normalizeMemoryCategory(item.category)
+        const itemScope = inferMemoryScope(category, options?.workspacePath)
+        const candidateRecord = {
+          id: 'incoming-candidate',
+          content: item.content,
+          category,
+          source: 'auto_extracted',
+          locked: false,
+          status: 'candidate',
+          ...itemScope,
+          subject: item.subject || null,
+          factKey: item.factKey || null,
+          factValue: item.factValue || null,
+        }
+        const decision = resolveMemoryCandidateDecision(allMemories, candidateRecord)
+        if (decision.action === 'skip') {
+          console.info('[Memory] candidate skipped', {
+            triggerReason,
+            reason: decision.reason,
+            content: item.content,
           })
+          continue
+        }
+        if (decision.action === 'merge') {
+          const mergeable = decision.target
+          const equivalent = decision.equivalent
+          const mergedContent = equivalent
+            ? chooseCanonicalMemoryContent(mergeable.content, item.content)
+            : item.content
+          const contentChanged = mergedContent !== mergeable.content
+          const merged: Memory = {
+            ...mergeable,
+            content: mergedContent,
+            subject: item.subject || mergeable.subject || null,
+            factKey: item.factKey || mergeable.factKey || null,
+            factValue: equivalent
+              ? item.factValue || mergeable.factValue || null
+              : item.factValue || null,
+            confidence: Math.max(item.confidence ?? 0.7, mergeable.confidence ?? 0.7),
+            evidence,
+            supersedesId: decision.supersedes?.id || mergeable.supersedesId,
+            embedding: contentChanged ? null : mergeable.embedding,
+            embeddingModel: contentChanged ? null : mergeable.embeddingModel,
+            contentHash: contentChanged ? contentHash(mergedContent) : mergeable.contentHash,
+            updatedAt: Date.now(),
+          }
+          if (!hasMaterialMemoryChange(mergeable, merged)) {
+            console.info('[Memory] candidate skipped as unchanged', {
+              triggerReason,
+              content: item.content,
+            })
+            continue
+          }
+          await persistMemory(merged)
+          replaceMemorySnapshot(allMemories, merged)
           saved += 1
           continue
         }
 
-        const itemScope = inferMemoryScope(item.category, options?.workspacePath)
-        const sameFact = findActiveFactConflict(allMemories, {
-          subject: item.subject,
-          factKey: item.factKey,
-          ...itemScope,
-        })
-        if (sameFact && sameFact.content !== item.content.trim()) {
+        if (decision.action === 'replace') {
+          const sameFact = decision.target
           const replacement: Memory = {
             id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-            content: item.content.trim(),
-            category: item.category,
+            content: item.content,
+            category,
             source: 'auto_extracted',
             locked: false,
             status: 'candidate',
             scopeType: sameFact.scopeType,
             scopeKey: sameFact.scopeKey,
-            subject: item.subject?.trim() || null,
-            factKey: item.factKey?.trim() || null,
-            factValue: item.factValue?.trim() || null,
-            confidence: Math.max(0, Math.min(1, item.confidence ?? 0.7)),
+            subject: item.subject || null,
+            factKey: item.factKey || null,
+            factValue: item.factValue || null,
+            confidence: item.confidence ?? 0.7,
             evidence,
             supersedesId: sameFact.id,
-            contentHash: contentHash(item.content.trim()),
+            contentHash: contentHash(item.content),
             createdAt: Date.now(),
             updatedAt: Date.now(),
           }
           await persistMemory(replacement)
           allMemories.push(replacement)
           saved += 1
-          continue
-        }
-
-        if (isDuplicateMemory(item.content, allMemories)) {
-          console.info('[Memory] candidate skipped as duplicate', {
-            triggerReason,
-            content: item.content,
-          })
           continue
         }
 
@@ -420,18 +383,18 @@ export async function processMemoryCandidateExtraction(
 
         const memory: Memory = {
           id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          content: item.content.trim(),
-          category: item.category,
+          content: item.content,
+          category,
           source: 'auto_extracted',
           locked: false,
           status: 'candidate',
-          ...inferMemoryScope(item.category, options?.workspacePath),
-          subject: item.subject?.trim() || null,
-          factKey: item.factKey?.trim() || null,
-          factValue: item.factValue?.trim() || null,
-          confidence: Math.max(0, Math.min(1, item.confidence ?? 0.7)),
+          ...itemScope,
+          subject: item.subject || null,
+          factKey: item.factKey || null,
+          factValue: item.factValue || null,
+          confidence: item.confidence ?? 0.7,
           evidence,
-          contentHash: contentHash(item.content.trim()),
+          contentHash: contentHash(item.content),
           createdAt: Date.now(),
           updatedAt: Date.now(),
         }
@@ -444,15 +407,23 @@ export async function processMemoryCandidateExtraction(
       if (item.action === 'update' && item.id) {
         const existing = allMemories.find((memory) => memory.id === item.id)
         if (existing && existing.source === 'auto_extracted' && existing.status === 'candidate' && !existing.locked) {
-          await persistMemory({
+          const contentChanged = existing.content !== item.content
+          const updated: Memory = {
             ...existing,
-            content: item.content.trim(),
+            content: item.content,
+            subject: item.subject || existing.subject || null,
+            factKey: item.factKey || existing.factKey || null,
+            factValue: item.factValue || existing.factValue || null,
+            confidence: Math.max(item.confidence ?? 0.7, existing.confidence ?? 0.7),
             evidence,
-            embedding: null,
-            embeddingModel: null,
-            contentHash: contentHash(item.content.trim()),
+            embedding: contentChanged ? null : existing.embedding,
+            embeddingModel: contentChanged ? null : existing.embeddingModel,
+            contentHash: contentChanged ? contentHash(item.content) : existing.contentHash,
             updatedAt: Date.now(),
-          })
+          }
+          if (!hasMaterialMemoryChange(existing, updated)) continue
+          await persistMemory(updated)
+          replaceMemorySnapshot(allMemories, updated)
           saved += 1
         }
         continue
@@ -580,7 +551,7 @@ export async function searchMemories(
 
   const lexicalScored = allMemories.map((memory) => ({
     memory,
-    similarity: Math.min(1, lexicalSimilarity(query, memory.content) + (
+    similarity: Math.min(1, lexicalMemorySimilarity(query, memory.content) + (
       [memory.subject, memory.factKey, memory.factValue].some((value) => value && query.includes(value)) ? 0.2 : 0
     )),
   }))
