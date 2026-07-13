@@ -79,6 +79,17 @@ CREATE TABLE IF NOT EXISTS memories (
   source TEXT NOT NULL DEFAULT 'auto_extracted',
   locked INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active',
+  scope_type TEXT NOT NULL DEFAULT 'global',
+  scope_key TEXT,
+  subject TEXT,
+  fact_key TEXT,
+  fact_value TEXT,
+  confidence REAL NOT NULL DEFAULT 1,
+  evidence TEXT,
+  supersedes_id TEXT,
+  embedding TEXT,
+  embedding_model TEXT,
+  content_hash TEXT,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
@@ -101,6 +112,19 @@ CREATE INDEX IF NOT EXISTS idx_embedding_jobs_status ON embedding_jobs(status);
 `
 
 export const DB_MIGRATIONS = [
+  ...[
+    ['scope_type', "ALTER TABLE memories ADD COLUMN scope_type TEXT NOT NULL DEFAULT 'global'"],
+    ['scope_key', 'ALTER TABLE memories ADD COLUMN scope_key TEXT'],
+    ['subject', 'ALTER TABLE memories ADD COLUMN subject TEXT'],
+    ['fact_key', 'ALTER TABLE memories ADD COLUMN fact_key TEXT'],
+    ['fact_value', 'ALTER TABLE memories ADD COLUMN fact_value TEXT'],
+    ['confidence', 'ALTER TABLE memories ADD COLUMN confidence REAL NOT NULL DEFAULT 1'],
+    ['evidence', 'ALTER TABLE memories ADD COLUMN evidence TEXT'],
+    ['supersedes_id', 'ALTER TABLE memories ADD COLUMN supersedes_id TEXT'],
+    ['embedding', 'ALTER TABLE memories ADD COLUMN embedding TEXT'],
+    ['embedding_model', 'ALTER TABLE memories ADD COLUMN embedding_model TEXT'],
+    ['content_hash', 'ALTER TABLE memories ADD COLUMN content_hash TEXT'],
+  ].map(([column, sql]) => ({ table: 'memories', column, sql })),
   {
     table: 'memories',
     column: 'source',

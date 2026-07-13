@@ -4,9 +4,23 @@ import {
   persistMemory,
   loadAllMemories,
   removeMemory,
-  updateMemoryContent,
   removeOldestAutoMemories,
 } from '@/services/database/persistence'
+import {
+  classifyMemoryRetrievalIntent,
+  contentHash,
+  findActiveFactConflict,
+  filterInjectableMemories,
+  hasReusableEmbedding,
+  inferMemoryScope,
+  isMemoryVisibleInScope,
+  normalizeMemoryScopeKey,
+  shouldExtractMemoryCandidate,
+} from './memoryPolicy'
+import type { MemoryScopeType } from './memoryPolicy'
+
+export { classifyMemoryRetrievalIntent } from './memoryPolicy'
+export type { MemoryRetrievalIntent } from './memoryPolicy'
 
 const AUTO_CATEGORIES = ['preference', 'project', 'learning', 'profile', 'instruction'] as const
 const MAX_MEMORIES = 200
@@ -34,10 +48,15 @@ interface ExtractedMemory {
   id?: string
   content: string
   category: string
+  subject?: string
+  factKey?: string
+  factValue?: string
+  confidence?: number
 }
 
 interface ExtractionOptions {
   triggerReason?: string
+  workspacePath?: string | null
 }
 
 interface ValidationResult {
@@ -46,7 +65,6 @@ interface ValidationResult {
 }
 
 type MemoryRetrievalMode = 'light' | 'strong'
-export type MemoryRetrievalIntent = 'none' | 'weak' | 'strong'
 
 export interface MemorySearchOptions {
   mode?: MemoryRetrievalMode
@@ -55,6 +73,9 @@ export interface MemorySearchOptions {
   embedding?: (text: string, signal?: AbortSignal) => Promise<number[]>
   batchEmbedding?: (texts: string[], signal?: AbortSignal) => Promise<number[][]>
   signal?: AbortSignal
+  scopeType?: MemoryScopeType
+  scopeKey?: string | null
+  embeddingModel?: string
 }
 
 function tokenizeMemoryText(content: string): Set<string> {
@@ -110,11 +131,21 @@ function categoryPriority(category: string): number {
   return CATEGORY_PRIORITY[category] ?? 4
 }
 
-function sortMemoryScores<T extends { memory: Memory; similarity: number }>(items: T[]): T[] {
+function sortMemoryScores<T extends { memory: Memory; similarity: number }>(
+  items: T[],
+  requestedScopeKey?: string | null
+): T[] {
   return items.sort((a, b) => {
+    const scopeRank = (memory: Memory) => (
+      requestedScopeKey && memory.scopeType === 'project' && memory.scopeKey === requestedScopeKey ? 0 : 1
+    )
+    const scopeDiff = scopeRank(a.memory) - scopeRank(b.memory)
+    if (scopeDiff !== 0) return scopeDiff
+    const similarityDiff = b.similarity - a.similarity
+    if (similarityDiff !== 0) return similarityDiff
     const priorityDiff = categoryPriority(a.memory.category) - categoryPriority(b.memory.category)
     if (priorityDiff !== 0) return priorityDiff
-    return b.similarity - a.similarity
+    return b.memory.updatedAt - a.memory.updatedAt
   })
 }
 
@@ -160,21 +191,14 @@ function findSimilarMemory(
 function shouldAttemptMemoryCandidateExtraction(messages: ChatMessage[]): boolean {
   const recentUserText = messages
     .filter((message) => message.role === 'user' && !message.hidden)
-    .slice(-3)
+    .slice(-1)
     .map((message) => message.displayContent || message.content)
     .join('\n')
     .trim()
 
   if (!recentUserText) return false
 
-  return [
-    /(?:记住|记下来|保存为长期记忆|以后记得|以后都|之后都)/,
-    /(?:我喜欢|我偏好|我的习惯|我的风格|默认用|每次都|总是)/,
-    /(?:称呼我|叫我|我的称呼|用中文|中文回答)/,
-    /(?:项目约定|项目规则|长期项目|目录职责|工程边界|技术栈)/,
-    /(?:我正在学|我开始学|我学完了|学习进度|学习路线)/,
-    /(?:我的背景|我的身份|我是.+(?:工程师|学生|设计师|作者|开发者))/,
-  ].some((pattern) => pattern.test(recentUserText))
+  return shouldExtractMemoryCandidate(recentUserText)
 }
 
 function buildExtractPrompt(existingMemories: Memory[]): string {
@@ -204,7 +228,9 @@ function buildExtractPrompt(existingMemories: Memory[]): string {
 - instruction: 长期指令、协作规则、输出格式
 
 请只输出 JSON 数组，每项格式：
-{"action":"add","content":"记忆内容","category":"preference|project|learning|profile|instruction"}
+{"action":"add","content":"记忆内容","category":"preference|project|learning|profile|instruction","subject":"user|项目名","factKey":"稳定属性名","factValue":"属性值","confidence":0.0}
+
+subject/factKey/factValue 只能来自用户原文可直接支持的事实；无法结构化时可省略。confidence 表示用户表达的明确程度，不得表示模型猜测。
 
 拿不准时输出空数组 []。不要输出任何解释。${existingBlock}`
 }
@@ -241,7 +267,7 @@ export async function extractMemories(
 ): Promise<ExtractedMemory[]> {
   const recentMessages = messages
     .filter((message) => message.role === 'user' && !message.hidden)
-    .slice(-6)
+    .slice(-1)
   if (recentMessages.length < 1) return []
 
   const existingMemories = await loadAllMemories(undefined, ['active', 'candidate'])
@@ -298,6 +324,10 @@ export async function processMemoryCandidateExtraction(
   }
 
   const extracted = await extractMemories(messages, client, temperature)
+  const userEvidence = [...messages]
+    .reverse()
+    .find((message) => message.role === 'user' && !message.hidden)
+  const evidence = (userEvidence?.displayContent || userEvidence?.content || '').trim()
   console.info('[Memory] extraction triggered', {
     triggerReason,
     visibleUserMessages: messages.filter((msg) => msg.role === 'user' && !msg.hidden).length,
@@ -324,7 +354,51 @@ export async function processMemoryCandidateExtraction(
         item.category = normalizeMemoryCategory(item.category)
         const similar = findSimilarMemory(item.content, item.category, allMemories)
         if (similar && similar.source === 'auto_extracted' && similar.status === 'candidate') {
-          await updateMemoryContent(similar.id, item.content.trim())
+          await persistMemory({
+            ...similar,
+            content: item.content.trim(),
+            subject: item.subject?.trim() || similar.subject || null,
+            factKey: item.factKey?.trim() || similar.factKey || null,
+            factValue: item.factValue?.trim() || similar.factValue || null,
+            confidence: Math.max(0, Math.min(1, item.confidence ?? similar.confidence ?? 0.7)),
+            evidence,
+            embedding: null,
+            embeddingModel: null,
+            contentHash: contentHash(item.content.trim()),
+            updatedAt: Date.now(),
+          })
+          saved += 1
+          continue
+        }
+
+        const itemScope = inferMemoryScope(item.category, options?.workspacePath)
+        const sameFact = findActiveFactConflict(allMemories, {
+          subject: item.subject,
+          factKey: item.factKey,
+          ...itemScope,
+        })
+        if (sameFact && sameFact.content !== item.content.trim()) {
+          const replacement: Memory = {
+            id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            content: item.content.trim(),
+            category: item.category,
+            source: 'auto_extracted',
+            locked: false,
+            status: 'candidate',
+            scopeType: sameFact.scopeType,
+            scopeKey: sameFact.scopeKey,
+            subject: item.subject?.trim() || null,
+            factKey: item.factKey?.trim() || null,
+            factValue: item.factValue?.trim() || null,
+            confidence: Math.max(0, Math.min(1, item.confidence ?? 0.7)),
+            evidence,
+            supersedesId: sameFact.id,
+            contentHash: contentHash(item.content.trim()),
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          }
+          await persistMemory(replacement)
+          allMemories.push(replacement)
           saved += 1
           continue
         }
@@ -351,6 +425,13 @@ export async function processMemoryCandidateExtraction(
           source: 'auto_extracted',
           locked: false,
           status: 'candidate',
+          ...inferMemoryScope(item.category, options?.workspacePath),
+          subject: item.subject?.trim() || null,
+          factKey: item.factKey?.trim() || null,
+          factValue: item.factValue?.trim() || null,
+          confidence: Math.max(0, Math.min(1, item.confidence ?? 0.7)),
+          evidence,
+          contentHash: contentHash(item.content.trim()),
           createdAt: Date.now(),
           updatedAt: Date.now(),
         }
@@ -363,7 +444,15 @@ export async function processMemoryCandidateExtraction(
       if (item.action === 'update' && item.id) {
         const existing = allMemories.find((memory) => memory.id === item.id)
         if (existing && existing.source === 'auto_extracted' && existing.status === 'candidate' && !existing.locked) {
-          await updateMemoryContent(item.id, item.content.trim())
+          await persistMemory({
+            ...existing,
+            content: item.content.trim(),
+            evidence,
+            embedding: null,
+            embeddingModel: null,
+            contentHash: contentHash(item.content.trim()),
+            updatedAt: Date.now(),
+          })
           saved += 1
         }
         continue
@@ -395,13 +484,20 @@ export interface ExplicitMemoryUpsertResult {
 
 export async function upsertExplicitMemory(
   content: string,
-  category: string
+  category: string,
+  options?: {
+    workspacePath?: string | null
+    subject?: string | null
+    factKey?: string | null
+    factValue?: string | null
+  }
 ): Promise<ExplicitMemoryUpsertResult> {
   const normalizedContent = content.trim()
   const normalizedCategory = normalizeMemoryCategory(category)
   const allMemories = await loadAllMemories(undefined, ['active', 'candidate'])
   const similar = findSimilarMemory(normalizedContent, normalizedCategory, allMemories, 0.68)
   const now = Date.now()
+  const scope = inferMemoryScope(normalizedCategory, options?.workspacePath)
 
   if (similar) {
     const memory: Memory = {
@@ -410,6 +506,15 @@ export async function upsertExplicitMemory(
       category: normalizedCategory,
       source: 'user_explicit',
       status: 'active',
+      ...scope,
+      subject: options?.subject || similar.subject || null,
+      factKey: options?.factKey || similar.factKey || null,
+      factValue: options?.factValue || normalizedContent,
+      confidence: 1,
+      evidence: normalizedContent,
+      embedding: null,
+      embeddingModel: null,
+      contentHash: contentHash(normalizedContent),
       updatedAt: now,
     }
     await persistMemory(memory)
@@ -423,6 +528,13 @@ export async function upsertExplicitMemory(
     source: 'user_explicit',
     locked: false,
     status: 'active',
+    ...scope,
+    subject: options?.subject || null,
+    factKey: options?.factKey || null,
+    factValue: options?.factValue || normalizedContent,
+    confidence: 1,
+    evidence: normalizedContent,
+    contentHash: contentHash(normalizedContent),
     createdAt: now,
     updatedAt: now,
   }
@@ -434,84 +546,26 @@ export function isStrongMemoryRetrievalQuery(query: string): boolean {
   return classifyMemoryRetrievalIntent(query) === 'strong'
 }
 
-export function classifyMemoryRetrievalIntent(query: string): MemoryRetrievalIntent {
-  const normalized = query.trim().toLowerCase()
-  if (!normalized) return 'none'
-
-  const strongSignals = [
-    '我的偏好',
-    '我的习惯',
-    '我的风格',
-    '我的地址',
-    '我的住址',
-    '我的位置',
-    '我的称呼',
-    '我的记忆',
-    '我的项目约定',
-    '我的长期目标',
-    '你记得我',
-    '你还记得我',
-    '还记得我',
-    '查询记忆',
-    '搜索记忆',
-    '检索记忆',
-    '查看记忆',
-    '调取记忆',
-    'remember me',
-  ]
-  if (strongSignals.some((signal) => normalized.includes(signal))) return 'strong'
-
-  const strongPatterns = [
-    /我的(?:偏好|习惯|风格|地址|住址|位置|个人信息|称呼|长期目标|项目约定)(?:是|有|在哪里|什么|哪些|吗)?/,
-    /(?:查询|搜索|检索|查看|调取).*记忆/,
-    /你还?记得.*我/,
-  ]
-  if (strongPatterns.some((pattern) => pattern.test(normalized))) return 'strong'
-
-  const weakSignals = [
-    '之前',
-    '上次',
-    '以前',
-    '曾经',
-    '按我的习惯',
-    '按我的偏好',
-    '按我的风格',
-    '项目约定',
-    '这个项目的设定',
-    '项目设定',
-    '按照之前讨论的',
-    '之前讨论的',
-    '之前告诉过你',
-    '记忆',
-    '城市',
-  ]
-  if (weakSignals.some((signal) => normalized.includes(signal))) return 'weak'
-
-  const weakPatterns = [
-    /我(?:以前|曾经|之前)(说过|提过|告诉|建议|做过)/,
-    /按(?:照)?我(?:之前|以前|上次).*?(?:说的|讨论的|方案|要求)/,
-    /按我的(?:偏好|习惯|风格|方式)/,
-    /上次.*(?:方案|说过|提过|告诉|建议)/,
-    /你还?记得.*(?:我们|项目)/,
-  ]
-
-  return weakPatterns.some((pattern) => pattern.test(normalized)) ? 'weak' : 'none'
-}
-
 export async function searchMemories(
   query: string,
   topKOrOptions: number | MemorySearchOptions = 5
 ): Promise<Memory[]> {
   if (!query.trim()) return []
 
-  const allMemories = await loadAllMemories(undefined, ['active'])
-  if (allMemories.length === 0) return []
-
   const legacyTopKOnly = typeof topKOrOptions === 'number'
   const options: MemorySearchOptions = legacyTopKOnly
     ? { topK: topKOrOptions, threshold: 0 }
     : topKOrOptions
+  const allMemories = filterInjectableMemories(
+    await loadAllMemories(undefined, ['active'])
+  ).filter((memory) => isMemoryVisibleInScope(
+    memory,
+    options.scopeType === 'project' ? options.scopeKey : null
+  ))
+  if (allMemories.length === 0) return []
+
   const mode = options.mode || 'light'
+  const requestedScopeKey = normalizeMemoryScopeKey(options.scopeType || 'global', options.scopeKey)
   const topK = options.topK ?? (mode === 'strong' ? STRONG_MEMORY_TOP_K : LIGHT_MEMORY_TOP_K)
   const threshold = options.threshold ?? (mode === 'strong' ? STRONG_MEMORY_THRESHOLD : LIGHT_MEMORY_THRESHOLD)
   let queryEmbedding: number[] | null = null
@@ -526,32 +580,42 @@ export async function searchMemories(
 
   const lexicalScored = allMemories.map((memory) => ({
     memory,
-    similarity: lexicalSimilarity(query, memory.content),
+    similarity: Math.min(1, lexicalSimilarity(query, memory.content) + (
+      [memory.subject, memory.factKey, memory.factValue].some((value) => value && query.includes(value)) ? 0.2 : 0
+    )),
   }))
-  const lexicalMatches = sortMemoryScores(lexicalScored.filter((item) => item.similarity > 0))
+  const lexicalMatches = sortMemoryScores(lexicalScored.filter((item) => item.similarity > 0), requestedScopeKey)
   const candidates = options.embedding
     ? (
       lexicalMatches.length > 0
         ? lexicalMatches
-        : (mode === 'strong' ? sortMemoryScores([...lexicalScored]) : [])
+        : (mode === 'strong' ? sortMemoryScores([...lexicalScored], requestedScopeKey) : [])
     ).slice(0, mode === 'strong' ? STRONG_EMBEDDING_CANDIDATE_LIMIT : LIGHT_EMBEDDING_CANDIDATE_LIMIT)
     : lexicalScored
 
   // 使用batchEmbedding批量获取embedding，减少HTTP请求
   if (queryEmbedding && options.batchEmbedding && candidates.length > 0) {
     try {
-      const texts = candidates.map(c => c.memory.content)
-      const embeddings = await options.batchEmbedding(texts, options.signal)
+      const uncached = candidates.filter(({ memory }) => !hasReusableEmbedding(memory, options.embeddingModel))
+      if (uncached.length > 0) {
+        const generated = await options.batchEmbedding(uncached.map(({ memory }) => memory.content), options.signal)
+        await Promise.all(uncached.map(({ memory }, index) => {
+          memory.embedding = generated[index]
+          memory.embeddingModel = options.embeddingModel || null
+          memory.contentHash = contentHash(memory.content)
+          return persistMemory(memory)
+        }))
+      }
 
       const scored: Array<{ memory: Memory; similarity: number }> = []
       for (let i = 0; i < candidates.length; i++) {
-        const similarity = cosineSimilarity(queryEmbedding, embeddings[i])
+        const similarity = cosineSimilarity(queryEmbedding, candidates[i].memory.embedding || [])
         if (similarity >= threshold && (!legacyTopKOnly || similarity > 0)) {
           scored.push({ memory: candidates[i].memory, similarity })
         }
       }
 
-      return sortMemoryScores(scored)
+      return sortMemoryScores(scored, requestedScopeKey)
         .slice(0, topK)
         .map((item) => item.memory)
     } catch (err) {
@@ -565,7 +629,15 @@ export async function searchMemories(
     let similarity = candidate.similarity
     if (queryEmbedding && options.embedding) {
       try {
-        const memoryEmbedding = await options.embedding(candidate.memory.content, options.signal)
+        const memoryEmbedding = hasReusableEmbedding(candidate.memory, options.embeddingModel)
+          ? candidate.memory.embedding as number[]
+          : await options.embedding(candidate.memory.content, options.signal)
+        if (!hasReusableEmbedding(candidate.memory, options.embeddingModel)) {
+          candidate.memory.embedding = memoryEmbedding
+          candidate.memory.embeddingModel = options.embeddingModel || null
+          candidate.memory.contentHash = contentHash(candidate.memory.content)
+          await persistMemory(candidate.memory)
+        }
         similarity = cosineSimilarity(queryEmbedding, memoryEmbedding)
       } catch (err) {
         console.warn('[Memory] memory embedding failed, using lexical similarity:', err)
@@ -577,7 +649,7 @@ export async function searchMemories(
     }
   }
 
-  return sortMemoryScores(scored)
+  return sortMemoryScores(scored, requestedScopeKey)
     .slice(0, topK)
     .map((item) => item.memory)
 }
@@ -601,6 +673,9 @@ export function buildMemoryContext(memories: Memory[]): string {
     return [
       `[记忆 ${index + 1}]`,
       `分类：${categoryLabel}`,
+      `作用域：${memory.scopeType === 'project' ? '当前项目' : '全局'}`,
+      ...(memory.subject && memory.factKey ? [`事实：${memory.subject}.${memory.factKey} = ${memory.factValue || memory.content}`] : []),
+      ...((memory.evidence && memory.evidence !== memory.content) ? [`依据：${memory.evidence}`] : []),
       `内容：${memory.content}`,
     ].join('\n')
   })

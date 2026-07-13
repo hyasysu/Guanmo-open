@@ -367,7 +367,7 @@ export async function retryFailedEmbeddingJobsInDatabase(): Promise<void> {
 // --- Memories ---
 
 export type MemorySource = 'user_explicit' | 'auto_extracted' | 'manual_created'
-export type MemoryStatus = 'active' | 'candidate' | 'ignored'
+export type MemoryStatus = 'active' | 'candidate' | 'ignored' | 'archived' | 'superseded'
 
 export interface Memory {
   id: string
@@ -376,6 +376,17 @@ export interface Memory {
   source: MemorySource
   locked: boolean
   status: MemoryStatus
+  scopeType?: 'global' | 'project'
+  scopeKey?: string | null
+  subject?: string | null
+  factKey?: string | null
+  factValue?: string | null
+  confidence?: number
+  evidence?: string | null
+  supersedesId?: string | null
+  embedding?: number[] | null
+  embeddingModel?: string | null
+  contentHash?: string | null
   createdAt: number
   updatedAt: number
 }
@@ -384,8 +395,11 @@ export async function persistMemory(memory: Memory): Promise<void> {
   if (!isDatabaseReady()) return
   const db = getDatabase()
   await db.execute(
-    `INSERT OR REPLACE INTO memories (id, content, category, source, locked, status, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    `INSERT OR REPLACE INTO memories (
+       id, content, category, source, locked, status, scope_type, scope_key,
+       subject, fact_key, fact_value, confidence, evidence, supersedes_id,
+       embedding, embedding_model, content_hash, created_at, updated_at
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
     [
       memory.id,
       memory.content,
@@ -393,6 +407,17 @@ export async function persistMemory(memory: Memory): Promise<void> {
       memory.source,
       memory.locked ? 1 : 0,
       memory.status,
+      memory.scopeType || 'global',
+      memory.scopeKey || null,
+      memory.subject || null,
+      memory.factKey || null,
+      memory.factValue || null,
+      memory.confidence ?? 1,
+      memory.evidence || null,
+      memory.supersedesId || null,
+      memory.embedding ? JSON.stringify(memory.embedding) : null,
+      memory.embeddingModel || null,
+      memory.contentHash || null,
       memory.createdAt,
       memory.updatedAt,
     ]
@@ -415,6 +440,17 @@ export async function loadAllMemories(category?: string, statuses?: MemoryStatus
     status: string
     created_at: number
     updated_at: number
+    scope_type: string
+    scope_key: string | null
+    subject: string | null
+    fact_key: string | null
+    fact_value: string | null
+    confidence: number
+    evidence: string | null
+    supersedes_id: string | null
+    embedding: string | null
+    embedding_model: string | null
+    content_hash: string | null
   }>(sql, params)
   return rows
     .map((row) => ({
@@ -424,8 +460,19 @@ export async function loadAllMemories(category?: string, statuses?: MemoryStatus
       source: (row.source || 'auto_extracted') as MemorySource,
       locked: row.locked === 1,
       status: (row.status || 'active') as MemoryStatus,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      scopeType: (row.scope_type === 'project' ? 'project' : 'global') as Memory['scopeType'],
+      scopeKey: row.scope_key || null,
+      subject: row.subject || null,
+      factKey: row.fact_key || null,
+      factValue: row.fact_value || null,
+      confidence: Number.isFinite(row.confidence) ? row.confidence : 1,
+      evidence: row.evidence || null,
+      supersedesId: row.supersedes_id || null,
+      embedding: row.embedding ? safeParseEmbedding(row.embedding) : null,
+      embeddingModel: row.embedding_model || null,
+      contentHash: row.content_hash || null,
+      createdAt: normalizeMemoryTimestamp(row.created_at),
+      updatedAt: normalizeMemoryTimestamp(row.updated_at),
     }))
     .filter((memory) => !statuses || statuses.includes(memory.status))
 }
@@ -434,7 +481,7 @@ export async function updateMemoryContent(id: string, content: string): Promise<
   if (!isDatabaseReady()) return
   const db = getDatabase()
   await db.execute(
-    'UPDATE memories SET content = $1, updated_at = unixepoch() WHERE id = $2',
+    'UPDATE memories SET content = $1, embedding = NULL, embedding_model = NULL, content_hash = NULL, updated_at = unixepoch() * 1000 WHERE id = $2',
     [content, id]
   )
 }
@@ -449,7 +496,7 @@ export async function toggleMemoryLocked(id: string, locked: boolean): Promise<v
   if (!isDatabaseReady()) return
   const db = getDatabase()
   await db.execute(
-    'UPDATE memories SET locked = $1, updated_at = unixepoch() WHERE id = $2',
+    'UPDATE memories SET locked = $1, updated_at = unixepoch() * 1000 WHERE id = $2',
     [locked ? 1 : 0, id]
   )
 }
@@ -458,21 +505,50 @@ export async function updateMemoryStatus(id: string, status: MemoryStatus): Prom
   if (!isDatabaseReady()) return
   const db = getDatabase()
   await db.execute(
-    'UPDATE memories SET status = $1, updated_at = unixepoch() WHERE id = $2',
+    'UPDATE memories SET status = $1, updated_at = unixepoch() * 1000 WHERE id = $2',
     [status, id]
   )
 }
 
 export async function confirmMemoryCandidate(id: string): Promise<boolean> {
   if (!isDatabaseReady()) return false
+  const candidate = (await loadAllMemories(undefined, ['candidate'])).find((memory) => memory.id === id)
+  if (!candidate) return false
   const db = getDatabase()
-  const result = await db.execute(
-    `UPDATE memories
-     SET status = 'active', source = 'user_explicit', updated_at = unixepoch()
-     WHERE id = $1 AND status = 'candidate'`,
-    [id]
-  )
-  return result.rowsAffected > 0
+  await db.execute('BEGIN')
+  try {
+    if (candidate.supersedesId) {
+      await db.execute(
+        `UPDATE memories SET status = 'superseded', updated_at = unixepoch() * 1000
+         WHERE id = $1 AND status = 'active'`,
+        [candidate.supersedesId]
+      )
+    }
+    const result = await db.execute(
+      `UPDATE memories
+       SET status = 'active', source = 'user_explicit', updated_at = unixepoch() * 1000
+       WHERE id = $1 AND status = 'candidate'`,
+      [id]
+    )
+    await db.execute('COMMIT')
+    return result.rowsAffected > 0
+  } catch (error) {
+    await db.execute('ROLLBACK')
+    throw error
+  }
+}
+
+function safeParseEmbedding(value: string): number[] | null {
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === 'number') ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function normalizeMemoryTimestamp(value: number): number {
+  return value > 0 && value < 1_000_000_000_000 ? value * 1000 : value
 }
 
 export async function removeOldestAutoMemories(count: number): Promise<void> {
@@ -480,7 +556,7 @@ export async function removeOldestAutoMemories(count: number): Promise<void> {
   const db = getDatabase()
   await db.execute(
     `DELETE FROM memories WHERE id IN (
-      SELECT id FROM memories WHERE source = 'auto_extracted' AND locked = 0 AND status != 'ignored'
+      SELECT id FROM memories WHERE source = 'auto_extracted' AND locked = 0 AND status = 'candidate'
       ORDER BY updated_at ASC LIMIT $1
     )`,
     [count]

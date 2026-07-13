@@ -1,6 +1,7 @@
 import { useCallback, useRef } from 'react'
 import { useChatStore } from '@/stores/chatStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useAppStore } from '@/stores/appStore'
 import { getAiClient, getEmbeddingClient, getEmbeddingConfig, initAiClient, initEmbeddingClient, isAiReady, isEmbeddingReady, isLocalApi } from '@/services/ai/aiClient'
 import type { ChatMessage, ChatMessageSource } from '@/services/ai/types'
 import { SYSTEM_TEMPERATURE } from '@/services/ai/types'
@@ -177,6 +178,7 @@ export function useAiChat() {
   const addTimelineItem = useChatStore((s) => s.addTimelineItem)
   const clearTimeline = useChatStore((s) => s.clearTimeline)
   const ai = useSettingsStore((s) => s.ai)
+  const workspacePath = useAppStore((s) => s.workspacePath)
   const lastConfigRef = useRef('')
   const cancelRef = useRef<() => void>(() => {})
   const activeRequestRef = useRef<{ id: string; assistantMessageId: string; cancelled: boolean } | null>(null)
@@ -387,6 +389,9 @@ export function useAiChat() {
                 mode: memoryIntent === 'strong' ? 'strong' : 'light',
                 embedding,
                 batchEmbedding,
+                scopeType: workspacePath ? 'project' : 'global',
+                scopeKey: workspacePath,
+                embeddingModel: getEmbeddingConfig()?.embeddingModel,
                 signal: requestController.signal,
               })
               return { type: 'memory', result: memories }
@@ -649,7 +654,7 @@ export function useAiChat() {
           if (isCurrentRequest()) {
             const allMsgs = useChatStore.getState().messages
             const agentClient = getAiClient()
-            processMemoryCandidateExtraction(allMsgs, agentClient, SYSTEM_TEMPERATURE.memoryExtract, { triggerReason: 'agent_completed' }).catch((err) =>
+            processMemoryCandidateExtraction(allMsgs, agentClient, SYSTEM_TEMPERATURE.memoryExtract, { triggerReason: 'agent_completed', workspacePath }).catch((err) =>
               console.warn('[Memory] extraction failed:', err)
             )
             // 自动保存会话到数据库
@@ -778,7 +783,7 @@ export function useAiChat() {
         // 异步提取候选记忆（不阻塞用户）
         if (isCurrentRequest()) {
           const allMsgs = useChatStore.getState().messages
-          processMemoryCandidateExtraction(allMsgs, client, SYSTEM_TEMPERATURE.memoryExtract, { triggerReason: 'normal_completed' }).catch((err) =>
+          processMemoryCandidateExtraction(allMsgs, client, SYSTEM_TEMPERATURE.memoryExtract, { triggerReason: 'normal_completed', workspacePath }).catch((err) =>
             console.warn('[Memory] extraction failed:', err)
           )
           // 自动保存会话到数据库
@@ -806,7 +811,7 @@ export function useAiChat() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [streaming, agentMode, ai, ensureClient]
+    [streaming, agentMode, ai, ensureClient, workspacePath]
   )
 
   return {

@@ -35,6 +35,7 @@ import { cleanupMissingWorkspaceDocuments, rebuildWorkspaceDocuments } from '@/s
 import { exportDataBackup, importDataBackup } from '@/services/dataBackup'
 import { useChatStore } from '@/stores/chatStore'
 import { SettingSlider } from '@/components/common/SettingSlider'
+import { contentHash, inferMemoryScope, normalizeMemoryScopeKey } from '@/services/memory/memoryPolicy'
 
 async function openUrl(url: string, external: boolean) {
   if (external) {
@@ -1241,6 +1242,9 @@ function GeneralSettings() {
 const MEMORY_CATEGORY_LABELS: Record<string, string> = {
   preference: '偏好',
   project: '项目',
+  learning: '学习',
+  profile: '画像',
+  instruction: '长期指令',
   context: '上下文',
   general: '其他',
 }
@@ -1252,8 +1256,10 @@ const MEMORY_SOURCE_LABELS: Record<string, string> = {
 }
 
 function MemorySettings() {
+  const workspacePath = useAppStore((s) => s.workspacePath)
   const [memories, setMemories] = useState<Memory[]>([])
   const [filter, setFilter] = useState<string>('all')
+  const [scopeFilter, setScopeFilter] = useState<'all' | 'global' | 'project'>('all')
   const [loading, setLoading] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [newContent, setNewContent] = useState('')
@@ -1267,10 +1273,19 @@ function MemorySettings() {
   useEffect(() => { refresh() }, [])
 
   const activeMemories = memories.filter((m) => m.status === 'active')
-  const candidateMemories = memories.filter((m) => m.status === 'candidate')
+  const allCandidateMemories = memories.filter((m) => m.status === 'candidate')
+  const archivedMemories = memories.filter((m) => m.status === 'archived' || m.status === 'superseded')
+  const normalizedWorkspace = normalizeMemoryScopeKey('project', workspacePath)
+  const matchesScopeFilter = (memory: Memory) => {
+    if (scopeFilter === 'all') return true
+    if (scopeFilter === 'global') return memory.scopeType !== 'project'
+    return memory.scopeType === 'project' && memory.scopeKey === normalizedWorkspace
+  }
+  const candidateMemories = allCandidateMemories.filter(matchesScopeFilter)
+  const scopeFiltered = activeMemories.filter(matchesScopeFilter)
   const filtered = filter === 'all'
-    ? activeMemories
-    : activeMemories.filter((m) => m.category === filter)
+    ? scopeFiltered
+    : scopeFiltered.filter((m) => m.category === filter)
 
   const handleDelete = async (id: string) => {
     setLoading(true)
@@ -1288,6 +1303,17 @@ function MemorySettings() {
     try {
       await toggleMemoryLocked(id, !locked)
       await refresh()
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleArchive = async (id: string) => {
+    setLoading(true)
+    try {
+      await updateMemoryStatus(id, 'archived')
+      await refresh()
+      toast.success('记忆已归档')
     } finally {
       setLoading(false)
     }
@@ -1341,6 +1367,11 @@ function MemorySettings() {
         source: 'manual_created',
         locked: false,
         status: 'active',
+        ...inferMemoryScope(newCategory, workspacePath),
+        factValue: content,
+        confidence: 1,
+        evidence: content,
+        contentHash: contentHash(content),
         createdAt: Date.now(),
         updatedAt: Date.now(),
       })
@@ -1354,7 +1385,7 @@ function MemorySettings() {
     }
   }
 
-  const categories = ['all', 'preference', 'project', 'context', 'general']
+  const categories = ['all', 'preference', 'project', 'learning', 'profile', 'instruction', 'context', 'general']
 
   return (
     <div className="w-full pb-6">
@@ -1368,7 +1399,7 @@ function MemorySettings() {
       )}
       <div className="flex items-center justify-between mb-3">
         <div className="text-caption text-gm-text-secondary">
-          共 {activeMemories.length} 条已保存记忆，{candidateMemories.length} 条候选记忆
+          共 {activeMemories.length} 条已保存记忆，{allCandidateMemories.length} 条候选记忆，{archivedMemories.length} 条已归档/替代
         </div>
         <div className="flex items-center gap-2">
           <Button type="text" size="small" onClick={refresh}>刷新</Button>
@@ -1392,8 +1423,9 @@ function MemorySettings() {
               options={[
                 { key: 'preference', label: '偏好' },
                 { key: 'project', label: '项目' },
-                { key: 'context', label: '上下文' },
-                { key: 'general', label: '其他' },
+                { key: 'learning', label: '学习' },
+                { key: 'profile', label: '画像' },
+                { key: 'instruction', label: '长期指令' },
               ]}
               value={newCategory}
               onChange={setNewCategory}
@@ -1437,6 +1469,11 @@ function MemorySettings() {
                       </span>
                     </div>
                     <p className="text-body text-gm-text break-words">{memory.content}</p>
+                    {memory.supersedesId && (
+                      <p className="mt-1 text-caption text-gm-warning">
+                        将替换：{memories.find((item) => item.id === memory.supersedesId)?.content || '已有记忆'}
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-1 flex-shrink-0">
                     <Button
@@ -1464,7 +1501,23 @@ function MemorySettings() {
         </div>
       )}
 
-      <div className="flex gap-1.5 mb-3">
+      <div className="flex flex-wrap gap-1.5 mb-2">
+        {(['all', 'global', 'project'] as const).map((scope) => (
+          <button
+            key={scope}
+            onClick={() => setScopeFilter(scope)}
+            disabled={scope === 'project' && !workspacePath}
+            className={`px-2.5 py-1 rounded-full text-micro transition-colors ${
+              scopeFilter === scope
+                ? 'bg-gm-secondary text-white'
+                : 'bg-gm-surface-elevated text-gm-text-secondary hover:text-gm-text disabled:opacity-50'
+            }`}
+          >
+            {scope === 'all' ? '全部作用域' : scope === 'global' ? '全局' : '当前项目'}
+          </button>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-1.5 mb-3">
         {categories.map((cat) => (
           <button
             key={cat}
@@ -1505,6 +1558,9 @@ function MemorySettings() {
                       <span className="inline-block rounded px-1.5 py-0.5 text-micro bg-gm-surface text-gm-text-secondary">
                         {MEMORY_SOURCE_LABELS[memory.source] || memory.source}
                       </span>
+                      <span className="inline-block rounded px-1.5 py-0.5 text-micro bg-gm-surface text-gm-text-secondary">
+                        {memory.scopeType === 'project' ? '当前项目' : '全局'}
+                      </span>
                       {memory.locked && (
                         <span className="inline-block rounded px-1.5 py-0.5 text-micro bg-gm-warning/10 text-gm-warning">
                           已锁定
@@ -1515,13 +1571,23 @@ function MemorySettings() {
                       </span>
                     </div>
                     <p className="break-words text-body text-gm-text">{String(value)}</p>
+                    {memory.subject && memory.factKey && (
+                      <p className="mt-1 text-caption text-gm-text-secondary">
+                        事实：{memory.subject}.{memory.factKey} = {memory.factValue || memory.content}
+                      </p>
+                    )}
+                    {memory.evidence && memory.evidence !== memory.content && (
+                      <p className="mt-1 text-caption text-gm-text-tertiary">
+                        依据：{memory.evidence}
+                      </p>
+                    )}
                   </div>
                 )
               },
             },
             {
               title: '操作',
-              width: 132,
+              width: 176,
               align: 'right',
               render: (_value, record) => {
                 const memory = record as unknown as Memory
@@ -1535,6 +1601,15 @@ function MemorySettings() {
                       className={memory.locked ? 'text-gm-warning' : 'text-gm-text-tertiary hover:text-gm-warning'}
                     >
                       {memory.locked ? '解锁' : '锁定'}
+                    </Button>
+                    <Button
+                      type="text"
+                      size="small"
+                      onClick={() => handleArchive(memory.id)}
+                      disabled={loading}
+                      className="text-gm-text-tertiary hover:text-gm-primary"
+                    >
+                      归档
                     </Button>
                     <Button
                       type="text"
