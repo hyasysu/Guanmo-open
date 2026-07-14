@@ -582,7 +582,7 @@ function AiAvatar({
   const mascotEnabled = useSettingsStore((s) => s.appearance.aiMascotAvatarEnabled)
   const className = size === 'empty'
     ? 'gm-ai-empty-icon-shell w-16 h-16 rounded-2xl flex items-center justify-center mb-4'
-    : 'gm-ai-avatar w-8 h-8 rounded-xl flex items-center justify-center mr-2 flex-shrink-0 mt-1'
+    : 'gm-ai-avatar w-9 h-9 rounded-xl flex items-center justify-center mr-2 flex-shrink-0 mt-1'
 
   if (!mascotEnabled) {
     return (
