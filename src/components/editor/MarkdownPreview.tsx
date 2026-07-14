@@ -496,8 +496,8 @@ export function MarkdownToc({
 
   return (
     <aside
-      className={`relative h-full flex-shrink-0 ${
-        collapsed ? 'w-0' : `${dualColumn ? 'w-[26rem]' : 'w-52'} border-l border-gm-border-subtle bg-gm-surface`
+      className={`gm-markdown-toc relative h-full flex-shrink-0 ${dualColumn ? 'gm-markdown-toc--dual' : ''} ${
+        collapsed ? 'w-0' : 'gm-markdown-toc--expanded border-l border-gm-border-subtle bg-gm-surface'
       }`}
     >
       <button

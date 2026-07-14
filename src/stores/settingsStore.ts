@@ -60,8 +60,8 @@ interface SettingsState {
 }
 
 export const FULLSCREEN_CONTENT_PADDING = {
-  min: 32,
-  max: 160,
+  min: 16,
+  max: 256,
   step: 8,
   default: 88,
 } as const

@@ -1238,6 +1238,25 @@ body {
   padding-right: var(--gm-fullscreen-content-padding, 88px);
 }
 
+.gm-markdown-toc,
+.gm-fullscreen-toc-adjacent {
+  --gm-markdown-toc-width: 13rem;
+}
+
+.gm-markdown-toc--dual,
+.gm-fullscreen-toc-adjacent--dual {
+  --gm-markdown-toc-width: 26rem;
+}
+
+.gm-markdown-toc--expanded {
+  width: var(--gm-markdown-toc-width);
+}
+
+.gm-fullscreen-toc-adjacent.gm-fullscreen-editor-content .cm-content,
+.gm-fullscreen-toc-adjacent.gm-fullscreen-preview-content {
+  padding-right: max(16px, calc(var(--gm-fullscreen-content-padding, 88px) - var(--gm-markdown-toc-width)));
+}
+
 .gm-markdown-preview h1,
 .gm-markdown-preview h2,
 .gm-markdown-preview h3,

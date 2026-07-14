@@ -928,6 +928,11 @@ export function EditorArea() {
     return sections.slice(0, 2)
   }, [activeTab, activeHeading, activeRightHeading, jumpToPreviewHeading, jumpToRightPreviewHeading, rightTab, rightToc, toc])
 
+  const fullscreenTocExpanded = isFullscreen && !tocCollapsed && (
+    viewMode === 'dual-preview' ? dualPreviewTocSections.length > 0 : toc.length > 1
+  )
+  const fullscreenTocWidthClass = viewMode === 'dual-preview' ? 'gm-fullscreen-toc-adjacent--dual' : ''
+
   const getPreviewSelectionLineRange = useCallback((selection: Selection, container: HTMLElement): { startLine?: number, endLine?: number } => {
     if (!selection || selection.rangeCount === 0) return {}
 
@@ -1188,7 +1193,7 @@ export function EditorArea() {
               </div>
             )}
             <div className={`${viewMode === 'diff-preview' ? 'hidden' : 'flex'} flex-1 overflow-hidden bg-gm-surface`}>
-            <div className={`${editorVisible ? (viewMode === 'edit-preview' ? 'min-w-0 flex-1 border-r border-gm-border-subtle' : 'flex-1') : 'hidden'} ${isFullscreen ? 'gm-fullscreen-editor-content' : ''} overflow-hidden relative`}>
+            <div className={`${editorVisible ? (viewMode === 'edit-preview' ? 'min-w-0 flex-1 border-r border-gm-border-subtle' : 'flex-1') : 'hidden'} ${isFullscreen ? 'gm-fullscreen-editor-content' : ''} ${fullscreenTocExpanded && viewMode === 'edit' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-hidden relative`}>
               {activeTab && (
                 <CodeMirrorEditor
                   content={activeTab.content}
@@ -1221,7 +1226,7 @@ export function EditorArea() {
             {leftPreviewMountedRef.current && (
               <div
                 ref={leftPreviewRef}
-                className={`${leftPreviewVisible ? 'min-w-0 flex-1' : 'hidden'} ${viewMode === 'dual-preview' ? 'border-r border-gm-border-subtle' : ''} ${viewMode === 'edit-preview' ? 'gm-preview-heading-clickable' : ''} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} overflow-auto select-text bg-gm-surface relative`}
+                className={`${leftPreviewVisible ? 'min-w-0 flex-1' : 'hidden'} ${viewMode === 'dual-preview' ? 'border-r border-gm-border-subtle' : ''} ${viewMode === 'edit-preview' ? 'gm-preview-heading-clickable' : ''} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} ${fullscreenTocExpanded && viewMode !== 'dual-preview' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-auto select-text bg-gm-surface relative`}
                 style={leftPreviewMasked ? { visibility: 'hidden' } : undefined}
                 aria-hidden={!leftPreviewVisible}
                 onScroll={handleLeftPreviewScroll}
@@ -1242,7 +1247,7 @@ export function EditorArea() {
             {rightPreviewMountedRef.current && (
             <div
               ref={rightPreviewRef}
-              className={`${viewMode === 'dual-preview' ? 'min-w-0 flex-1' : 'hidden'} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} overflow-auto select-text bg-gm-surface relative ${rightPaneDragOver ? 'ring-2 ring-inset ring-gm-primary/40' : ''}`}
+              className={`${viewMode === 'dual-preview' ? 'min-w-0 flex-1' : 'hidden'} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} ${fullscreenTocExpanded && viewMode === 'dual-preview' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-auto select-text bg-gm-surface relative ${rightPaneDragOver ? 'ring-2 ring-inset ring-gm-primary/40' : ''}`}
               style={rightPreviewMasked ? { visibility: 'hidden' } : undefined}
               aria-hidden={viewMode !== 'dual-preview'}
               onScroll={handleRightPreviewScroll}
