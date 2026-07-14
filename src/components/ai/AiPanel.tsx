@@ -146,7 +146,10 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
         return
       }
 
-      streamingMessageIdRef.current = null
+      if (streamingMessageIdRef.current !== null) {
+        streamingMessageIdRef.current = null
+        return
+      }
       programmaticScrollUntilRef.current = Date.now() + 120
       container.scrollTo({ top: container.scrollHeight })
     })
