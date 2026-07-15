@@ -279,6 +279,27 @@ export async function loadDocumentFilePaths(): Promise<string[]> {
   return rows.map((row) => row.file_path)
 }
 
+export async function loadChatSourceFilePaths(): Promise<string[]> {
+  if (!isDatabaseReady()) return []
+  const db = getDatabase()
+  const rows = await db.select<{ metadata: string | null }>(
+    'SELECT metadata FROM chat_messages WHERE metadata IS NOT NULL'
+  )
+  return rows.flatMap((row) => {
+    try {
+      const sources = JSON.parse(row.metadata ?? '{}').sources
+      if (!Array.isArray(sources)) return []
+      return sources.flatMap((source): string[] => (
+        source && typeof source === 'object' && source.kind !== 'web' && typeof source.filePath === 'string'
+          ? [source.filePath]
+          : []
+      ))
+    } catch {
+      return []
+    }
+  })
+}
+
 /**
  * Load chunks for a document, including embeddings.
  */

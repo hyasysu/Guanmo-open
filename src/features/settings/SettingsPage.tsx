@@ -36,6 +36,9 @@ import { exportDataBackup, importDataBackup } from '@/services/dataBackup'
 import { useChatStore } from '@/stores/chatStore'
 import { SettingSlider } from '@/components/common/SettingSlider'
 import { contentHash, inferMemoryScope, normalizeMemoryScopeKey } from '@/services/memory/memoryPolicy'
+import { getCurrentAppVersion } from '@/services/updateService'
+import { runManualUpdateCheck, type ManualUpdateCheckFeedback } from '@/services/updateNotifications'
+import { listAuthorizedApiOrigins, revokeApiOrigin, type AuthorizedApiOrigin } from '@/services/externalHttp'
 
 async function openUrl(url: string, external: boolean) {
   if (external) {
@@ -789,6 +792,8 @@ function AiSettings() {
         </SettingField>
       )}
 
+      {isTauri() && <AuthorizedApiOrigins />}
+
       <Sep />
 
       <SectionTitle>知识库</SectionTitle>
@@ -801,6 +806,59 @@ function AiSettings() {
       )}
       <KnowledgeStats />
     </div>
+  )
+}
+
+function AuthorizedApiOrigins() {
+  const [origins, setOrigins] = useState<AuthorizedApiOrigin[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const refresh = useCallback(async () => {
+    try {
+      setOrigins(await listAuthorizedApiOrigins())
+    } catch (error) {
+      toast.error((error as Error).message || '读取 API 地址授权失败')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { void refresh() }, [refresh])
+
+  const revoke = async (origin: string) => {
+    try {
+      await revokeApiOrigin(origin)
+      setOrigins((current) => current.filter((item) => item.origin !== origin))
+      toast.success('API 地址授权已撤销')
+    } catch (error) {
+      toast.error((error as Error).message || '撤销 API 地址授权失败')
+    }
+  }
+
+  return (
+    <>
+      <Sep />
+      <SectionTitle>API 地址授权</SectionTitle>
+      {loading ? (
+        <p className="py-2 text-caption text-gm-text-tertiary">正在读取授权…</p>
+      ) : origins.length === 0 ? (
+        <p className="py-2 text-caption text-gm-text-tertiary">暂无自定义 API 地址授权；内置供应商无需授权。</p>
+      ) : (
+        <div className="space-y-2 py-1">
+          {origins.map((item) => (
+            <div key={item.origin} className="flex items-center justify-between gap-3 rounded-lg border border-gm-border bg-gm-surface-elevated px-3 py-2">
+              <div className="min-w-0">
+                <p className="break-all text-body text-gm-text">{item.origin}</p>
+                <p className="text-caption text-gm-text-tertiary">{item.persistence === 'permanent' ? '始终允许' : '仅本次'}</p>
+              </div>
+              <Button type="text" size="small" className="shrink-0 text-gm-error" onClick={() => void revoke(item.origin)}>
+                撤销
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   )
 }
 
@@ -891,16 +949,6 @@ function KnowledgeStats() {
 
   return (
     <div className="space-y-3 py-2">
-      {dbStatus === 'loading' && (
-        <div className="rounded-xl border border-gm-border bg-gm-surface-elevated px-3 py-2 text-caption text-gm-text-secondary flex items-center gap-2">
-          <span className="inline-block animate-spin">⏳</span> 数据库加载中，请等待……
-        </div>
-      )}
-      {dbStatus === 'error' && (
-        <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-caption text-red-600">
-          ❌ 数据库加载失败
-        </div>
-      )}
       <div className="grid grid-cols-4 gap-4">
         <StatItem label="文档" value={stats.documents} />
         <StatItem label="分块" value={stats.totalChunks} />
@@ -935,6 +983,16 @@ function KnowledgeStats() {
         </Button>
         {message && <span className="text-caption text-gm-text-secondary">{message}</span>}
       </div>
+      {dbStatus === 'loading' && (
+        <div className="rounded-xl border border-gm-border bg-gm-surface-elevated px-3 py-2 text-caption text-gm-text-secondary flex items-center gap-2">
+          <span className="inline-block animate-spin">⏳</span> 数据库加载中，请等待……
+        </div>
+      )}
+      {dbStatus === 'error' && (
+        <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-caption text-red-600">
+          ❌ 数据库加载失败
+        </div>
+      )}
     </div>
   )
 }
@@ -1046,6 +1104,37 @@ function ShortcutSettings() {
 function GeneralSettings() {
   const { appearance, updateAiConfig, updateEmbeddingConfig, updateEditorSettings, updateAppearanceSettings, updateWebSearchConfig } = useSettingsStore()
   const [busy, setBusy] = useState(false)
+  const [currentVersion, setCurrentVersion] = useState('—')
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [updateCheckFeedback, setUpdateCheckFeedback] = useState<ManualUpdateCheckFeedback | null>(null)
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    let active = true
+    if (!isTauri()) {
+      setCurrentVersion('网页版')
+      return () => { mountedRef.current = false }
+    }
+    void getCurrentAppVersion()
+      .then((version) => { if (active) setCurrentVersion(`v${version}`) })
+      .catch(() => { if (active) setCurrentVersion('未知') })
+    return () => {
+      active = false
+      mountedRef.current = false
+    }
+  }, [])
+
+  const handleCheckUpdate = async () => {
+    setCheckingUpdate(true)
+    setUpdateCheckFeedback(null)
+    try {
+      const feedback = await runManualUpdateCheck()
+      if (mountedRef.current) setUpdateCheckFeedback(feedback)
+    } finally {
+      if (mountedRef.current) setCheckingUpdate(false)
+    }
+  }
 
   const handleRestoreDefaults = () => {
     updateAiConfig({
@@ -1163,10 +1252,50 @@ function GeneralSettings() {
         <div className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center">
           <img src={appIcon} alt="观墨" className="w-full h-full object-cover" />
         </div>
-        <div>
-          <div className="text-body font-bold text-gm-text">观墨 v1.1.0</div>
+        <div className="min-w-0 flex-1">
+          <div className="text-body font-bold text-gm-text">观墨 {currentVersion}</div>
           <div className="text-caption text-gm-text-tertiary">AI 驱动的 Markdown 知识管理</div>
+          <div
+            role="status"
+            aria-live="polite"
+            className={`mt-1 flex min-h-4 items-center gap-1.5 text-micro ${
+              checkingUpdate
+                ? 'text-gm-text-secondary'
+                : updateCheckFeedback?.tone === 'success'
+                  ? 'text-gm-success'
+                  : updateCheckFeedback?.tone === 'error'
+                    ? 'text-gm-error'
+                    : 'text-gm-primary'
+            }`}
+          >
+            {(checkingUpdate || updateCheckFeedback) && (
+              <>
+                <span
+                  aria-hidden="true"
+                  className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${
+                    checkingUpdate
+                      ? 'bg-gm-text-tertiary'
+                      : updateCheckFeedback?.tone === 'success'
+                        ? 'bg-gm-success'
+                        : updateCheckFeedback?.tone === 'error'
+                          ? 'bg-gm-error'
+                          : 'bg-gm-primary'
+                  }`}
+                />
+                <span>{checkingUpdate ? '正在检查更新…' : updateCheckFeedback?.message}</span>
+              </>
+            )}
+          </div>
         </div>
+        <Button
+          type="default"
+          size="small"
+          loading={checkingUpdate}
+          disabled={!isTauri()}
+          onClick={() => void handleCheckUpdate()}
+        >
+          检查更新
+        </Button>
       </div>
       <div className="mt-3 space-y-2 rounded-xl border border-gm-border bg-gm-surface-elevated p-3 text-caption text-gm-text-secondary">
         <div>
@@ -1501,36 +1630,55 @@ function MemorySettings() {
         </div>
       )}
 
-      <div className="flex flex-wrap gap-1.5 mb-2">
-        {(['all', 'global', 'project'] as const).map((scope) => (
-          <button
-            key={scope}
-            onClick={() => setScopeFilter(scope)}
-            disabled={scope === 'project' && !workspacePath}
-            className={`px-2.5 py-1 rounded-full text-micro transition-colors ${
-              scopeFilter === scope
-                ? 'bg-gm-secondary text-white'
-                : 'bg-gm-surface-elevated text-gm-text-secondary hover:text-gm-text disabled:opacity-50'
-            }`}
-          >
-            {scope === 'all' ? '全部作用域' : scope === 'global' ? '全局' : '当前项目'}
-          </button>
-        ))}
-      </div>
-      <div className="flex flex-wrap gap-1.5 mb-3">
-        {categories.map((cat) => (
-          <button
-            key={cat}
-            onClick={() => setFilter(cat)}
-            className={`px-2.5 py-1 rounded-full text-micro transition-colors ${
-              filter === cat
-                ? 'bg-gm-primary text-gm-text-on-primary'
-                : 'bg-gm-surface-elevated text-gm-text-secondary hover:text-gm-text'
-            }`}
-          >
-            {cat === 'all' ? '全部' : MEMORY_CATEGORY_LABELS[cat] || cat}
-          </button>
-        ))}
+      <div className="mb-4 space-y-3 rounded-xl border border-gm-border bg-gm-surface-elevated p-3">
+        <div>
+          <div className="mb-2 flex items-baseline gap-2">
+            <span className="text-caption font-bold text-gm-text">作用域</span>
+            <span className="text-micro text-gm-text-tertiary">先选择记忆所属范围</span>
+          </div>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="按记忆作用域筛选">
+            {(['all', 'global', 'project'] as const).map((scope) => (
+              <button
+                type="button"
+                key={scope}
+                aria-pressed={scopeFilter === scope}
+                onClick={() => setScopeFilter(scope)}
+                disabled={scope === 'project' && !workspacePath}
+                className={`min-h-8 rounded-lg border px-3 py-1.5 text-caption font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                  scopeFilter === scope
+                    ? 'border-gm-primary bg-gm-primary/10 text-gm-primary'
+                    : 'border-gm-border-subtle bg-gm-surface text-gm-text-secondary hover:border-gm-primary/50 hover:text-gm-text'
+                }`}
+              >
+                {scope === 'all' ? '全部作用域' : scope === 'global' ? '全局' : '当前项目'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="border-t border-gm-border-subtle pt-3">
+          <div className="mb-2 flex items-baseline gap-2">
+            <span className="text-caption font-bold text-gm-text">记忆类型</span>
+            <span className="text-micro text-gm-text-tertiary">在当前作用域内继续筛选</span>
+          </div>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="按记忆类型筛选">
+            {categories.map((cat) => (
+              <button
+                type="button"
+                key={cat}
+                aria-pressed={filter === cat}
+                onClick={() => setFilter(cat)}
+                className={`min-h-8 rounded-lg border px-3 py-1.5 text-caption font-bold transition-colors ${
+                  filter === cat
+                    ? 'border-gm-primary bg-gm-primary/10 text-gm-primary'
+                    : 'border-gm-border-subtle bg-gm-surface text-gm-text-secondary hover:border-gm-primary/50 hover:text-gm-text'
+                }`}
+              >
+                {cat === 'all' ? '全部类型' : MEMORY_CATEGORY_LABELS[cat] || cat}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {filtered.length === 0 ? (

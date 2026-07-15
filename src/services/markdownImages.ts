@@ -1,4 +1,4 @@
-import { authorizeSelectedPath, dirnamePath, fileExists, joinPath, prepareMarkdownAssetsDir, readBinaryFile, writeBinaryFile } from '@/hooks/useTauri'
+import { dirnamePath, fileExists, joinPath, prepareMarkdownAssetsDir, readBinaryFile, writeBinaryFile } from '@/hooks/useTauri'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
 
@@ -12,7 +12,6 @@ export function isImageFile(file: File): boolean {
 }
 
 export async function saveExternalImageForMarkdown(markdownPath: string, imagePath: string): Promise<string> {
-  await authorizeSelectedPath(imagePath)
   const bytes = await readBinaryFile(imagePath)
   const ext = normalizeImageExtension(getExtension(imagePath) || 'png')
   return saveImageBytesForMarkdown(markdownPath, bytes, ext)

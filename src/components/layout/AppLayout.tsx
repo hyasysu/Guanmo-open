@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { lazy, Suspense, useState, useCallback, useRef, useEffect } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboard'
@@ -11,12 +11,13 @@ import { TitleBar } from './TitleBar'
 import { EditorArea, OPEN_EDITOR_SEARCH_EVENT } from '../editor/EditorArea'
 import { FullscreenControlBar } from '../editor/FullscreenControlBar'
 import { FullscreenFileDrawer } from './FullscreenFileDrawer'
-import { AiPanel } from '../ai/AiPanel'
 import { CommandPalette } from '../common/CommandPalette'
-import { SettingsPage } from '@/features/settings/SettingsPage'
 import { toast } from '@/services/toast'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useFullscreen } from '@/hooks/useFullscreen'
+
+const AiPanel = lazy(() => import('../ai/AiPanel').then((module) => ({ default: module.AiPanel })))
+const SettingsPage = lazy(() => import('@/features/settings/SettingsPage').then((module) => ({ default: module.SettingsPage })))
 
 export function AppLayout() {
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
@@ -279,7 +280,7 @@ export function AppLayout() {
               className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize z-10 hover:bg-gm-primary/30 transition-colors"
               onMouseDown={handleResizeStart}
             />
-            <AiPanel />
+            <Suspense fallback={null}><AiPanel /></Suspense>
           </div>
         )}
       </div>
@@ -313,14 +314,14 @@ export function AppLayout() {
           }}
         >
           <div className="min-h-0 min-w-0 flex-1">
-            <AiPanel
+            <Suspense fallback={null}><AiPanel
               fullscreenDragHandleProps={{
                 onPointerDown: handleFullscreenAiDragStart,
                 onPointerMove: handleFullscreenAiDragMove,
                 onPointerUp: handleFullscreenAiDragEnd,
                 onPointerCancel: handleFullscreenAiDragEnd,
               }}
-            />
+            /></Suspense>
           </div>
         </div>
       )}
@@ -347,7 +348,7 @@ export function AppLayout() {
         cursor={customCursorEnabled}
       >
         <div className={customCursorEnabled ? undefined : 'gm-system-cursor'} style={{ width: '100%', height: '560px', overflow: 'hidden', padding: '10px 14px', minHeight: 0 }}>
-          <SettingsPage />
+          <Suspense fallback={null}><SettingsPage /></Suspense>
         </div>
       </Modal>
 

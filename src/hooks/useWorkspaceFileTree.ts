@@ -3,6 +3,7 @@ import { joinPath } from '@/hooks/useTauri'
 import { listDirectory } from '@/services/fileSystem'
 import { isWorkspaceDisplayFile, shouldSkipWorkspaceDirectory, type FileNode } from '@/services/fileTree'
 import { toast } from '@/services/toast'
+import { recoverRememberedWorkspace } from '@/services/persistedFileAccess'
 import { useAppStore } from '@/stores/appStore'
 
 export function useWorkspaceFileTree() {
@@ -43,13 +44,19 @@ export function useWorkspaceFileTree() {
 
   const loadWorkspace = useCallback(async (dirPath: string) => {
     try {
-      const { nodes, hidden } = await readDirRecursive(dirPath, 0)
+      const { nodes, hidden } = await recoverRememberedWorkspace(
+        dirPath,
+        () => readDirRecursive(dirPath, 0)
+      )
       setWorkspaceHiddenCount(hidden)
       setWorkspaceFiles(nodes)
     } catch (err) {
       console.error('Load workspace failed:', err)
-      toast.error('???????')
-      setWorkspacePath(null)
+      const message = err instanceof Error ? err.message : String(err)
+      toast.error(message || '工作区加载失败')
+      if (!message.includes('重新授权已取消') && !message.includes('请选择原工作区')) {
+        setWorkspacePath(null)
+      }
       setWorkspaceFiles([])
       setWorkspaceHiddenCount(0)
     }

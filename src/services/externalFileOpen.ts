@@ -1,4 +1,4 @@
-import { authorizeSelectedPath, readFile } from '@/hooks/useTauri'
+import { readFile } from '@/hooks/useTauri'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
@@ -55,7 +55,6 @@ export async function openExternalFilePaths(
         continue
       }
 
-      await authorizeSelectedPath(path)
       const content = await readFile(path)
       const name = getFileName(path)
       useEditorStore.getState().addTab(path, name, content)

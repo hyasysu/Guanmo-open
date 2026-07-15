@@ -29,6 +29,7 @@ interface MarkdownPreviewProps {
   filePath?: string | null
   fontSize?: number
   lineHeight?: number
+  skipHtml?: boolean
   onTaskToggle?: (line: number, checked: boolean) => void
   onHeadingClick?: (line: number) => void
 }
@@ -51,6 +52,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   filePath,
   fontSize = 14,
   lineHeight = 1.65,
+  skipHtml = false,
   onTaskToggle,
   onHeadingClick,
 }: MarkdownPreviewProps) {
@@ -302,6 +304,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
           />
         ) : currentWorkerResult?.error ? (
           <ReactMarkdown
+            skipHtml={skipHtml}
             remarkPlugins={MARKDOWN_REMARK_PLUGINS}
             rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
             components={components}
@@ -313,6 +316,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
         )
       ) : (
         <ReactMarkdown
+          skipHtml={skipHtml}
           remarkPlugins={MARKDOWN_REMARK_PLUGINS}
           rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
           components={components}

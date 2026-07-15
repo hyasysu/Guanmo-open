@@ -1,4 +1,4 @@
-import type { AgentConfig, AgentStep, AgentResult } from './types'
+import type { AgentConfig, AgentStep, AgentResult, AgentRunRequest } from './types'
 import type { ChatMessage, ChatMessageSource } from '@/services/ai/types'
 import { getAiClient, isAiReady } from '@/services/ai/aiClient'
 import { getAllTools, getTool, getToolDescriptions, getToolsForLLM } from './toolRegistry'
@@ -529,24 +529,24 @@ export function validateSelectionContextReadLevel(completedLevel: 0 | 1 | 2, req
  * Run the agent with a user query.
  * Uses structured JSON tool calling with intent-based tool selection.
  */
-export async function runAgent(
-  query: string,
-  chatHistory: ChatMessage[] = [],
-  config: Partial<AgentConfig> = {},
-  rawQuery?: string,
+export async function runAgent({
+  query,
+  chatHistory = [],
+  config = {},
+  rawQuery,
   hasRecentEditContext = false,
   hasCurrentEditTarget = false,
   currentEditTargetCount = 0,
-  candidateToolNames?: readonly string[],
+  candidateToolNames,
   hasPrefetchedMemoryLookup = false,
-  signal?: AbortSignal,
-  temperature?: number,
-  onStep?: (step: AgentStep) => void,
-  requiredCapabilities?: readonly Capability[],
-  untrustedContext?: string,
-  customPreferencePrompt?: string,
-  streamEnabled = true
-): Promise<AgentResult> {
+  signal,
+  temperature,
+  onStep,
+  requiredCapabilities,
+  untrustedContext,
+  customPreferencePrompt,
+  streamEnabled = true,
+}: AgentRunRequest): Promise<AgentResult> {
   initAgent()
 
   if (!isAiReady()) {

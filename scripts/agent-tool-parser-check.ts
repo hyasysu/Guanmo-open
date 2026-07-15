@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { shouldUseAgent, validateSelectionContextReadLevel } from '../src/services/agent/executor'
 import { classifySelectionRequest, detectIntentScores, isDocumentRewriteIntent, isFileSummaryIntent, isLocalResearchIntent, shouldIncludeFullDocumentContext } from '../src/services/agent/intentDetector'
-import { prepareChatHistoryForModel } from '../src/services/aiChatMessages'
+import { buildMessagesForModel, prepareChatHistoryForModel, resolveAiAnswerMode } from '../src/services/aiChatMessages'
 import { setAgentScopeContext } from '../src/services/aiScope'
 import { useEditorStore } from '../src/stores/editorStore'
 import { useChatStore } from '../src/stores/chatStore'
@@ -226,6 +226,26 @@ const selectionContext = {
 assert.doesNotMatch(BASE_SYSTEM_PROMPT, /普通问答和简单解释/)
 assert.match(BASE_SYSTEM_PROMPT, /解释本轮 selection 内容时，回答深度应由选中内容决定/)
 assert.match(BASE_SYSTEM_PROMPT, /不得为了简短强行压缩为一句话，也不强制套用固定标题或章节/)
+const selectionExplanationHistory = [
+  { role: 'user' as const, content: 'Node 为什么不适合 CPU 密集' },
+  { role: 'assistant' as const, content: 'Node 的事件循环不适合长时间 CPU 计算。' },
+]
+const selectionExplanationMessages = buildMessagesForModel({
+  history: selectionExplanationHistory,
+  userMessage: {
+    role: 'user',
+    content: '请解释这段内容\n\n【当前文档上下文】\n\n[selection]\nsetTimeout',
+    displayContent: '请解释这段内容',
+  },
+  answerMode: resolveAiAnswerMode(classifySelectionRequest('请解释这段内容', selectionContext), false),
+})
+assert.equal(selectionExplanationMessages.some((message) => message.content.includes('Node 为什么不适合 CPU 密集')), true)
+const selectionDirectPrompt = selectionExplanationMessages.find((message) =>
+  message.role === 'system' && message.content.includes('selection 内容是本轮回答的唯一主要对象')
+)
+assert.ok(selectionDirectPrompt)
+assert.match(selectionDirectPrompt.content, /聊天历史只可用于术语消歧、识别大致领域和补充必要背景/)
+assert.match(selectionDirectPrompt.content, /不得把上一轮主题延续为本轮主线/)
 for (const query of ['总结这段', '请解释这段内容', '解释一下这个函数', '说明这里', '整理并提炼格式']) {
   assert.equal(classifySelectionRequest(query, selectionContext), 'fast', query)
   assert.deepEqual(detectIntentScores(query, selectionContext).candidates, [], query)

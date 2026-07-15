@@ -14,6 +14,7 @@ import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparat
 import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
 import { renameFileEntry, saveExistingFileAs, validateFileName } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
+import { readRememberedFile } from '@/services/persistedFileAccess'
 import { cleanupMissingWorkspaceDocuments, rebuildWorkspaceDocuments } from '@/services/workspaceIndex'
 import { TruncatedText } from '@/components/common/Tooltip'
 import { useWorkspaceFileTree } from '@/hooks/useWorkspaceFileTree'
@@ -135,9 +136,7 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
         state.setActiveTab(existing.id)
         return
       }
-      const { authorizeSelectedPath, readFile } = await import('@/hooks/useTauri')
-      await authorizeSelectedPath(file.path)
-      const content = await readFile(file.path)
+      const content = await readRememberedFile(file.path)
       state.addTab(file.path, file.name, content)
       scheduleMarkdownDocumentIndex(file.path, file.name, content)
     } catch (err) {
@@ -505,9 +504,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
       if (existing) {
         state.setActiveTab(existing.id)
       } else {
-        const { authorizeSelectedPath, readFile } = await import('@/hooks/useTauri')
-        await authorizeSelectedPath(file.path)
-        const content = await readFile(file.path)
+        const content = await readRememberedFile(file.path)
         state.addTab(file.path, file.name, content)
         scheduleMarkdownDocumentIndex(file.path, file.name, content)
       }

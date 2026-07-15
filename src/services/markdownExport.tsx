@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
-import { authorizeSelectedPath, dirnamePath, isTauri, joinPath, readBinaryFile, saveFileDialog, writeFile } from '@/hooks/useTauri'
+import { dirnamePath, isTauri, joinPath, readBinaryFile, saveFileDialog, writeFile } from '@/hooks/useTauri'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { normalizeLatexBlockDelimiters, remarkStandaloneDisplayMath } from '@/services/markdownMath'
 
@@ -236,7 +236,6 @@ async function buildExportHtml(markdown: string, title: string, sourcePath?: str
 
     try {
       const path = await resolveExportImagePath(src, sourceDir)
-      await authorizeSelectedPath(path)
       const bytes = await readBinaryFile(path)
       image.setAttribute('src', bytesToDataUrl(bytes, mimeTypeForImage(path)))
     } catch {

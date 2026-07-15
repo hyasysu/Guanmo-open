@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { authorizeSelectedPath, isTauri, readFile } from '@/hooks/useTauri'
+import { isTauri } from '@/hooks/useTauri'
 import { pickDirectory } from '@/services/fileSystem'
 import { isWorkspaceDisplayFile } from '@/services/fileTree'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
+import { readRememberedFile } from '@/services/persistedFileAccess'
 import { toast } from '@/services/toast'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
@@ -60,8 +61,7 @@ export function FullscreenFileDrawer({
   const openFileByPath = useCallback(async (path: string, fallbackName?: string) => {
     try {
       if (!isWorkspaceDisplayFile(path)) return
-      await authorizeSelectedPath(path)
-      const content = await readFile(path)
+      const content = await readRememberedFile(path)
       const name = fallbackName || path.split(/[/\\]/).pop() || 'untitled.md'
       const state = useEditorStore.getState()
       const existing = state.tabs.find((t) => isSameFilePath(t.filePath, path))

@@ -14,6 +14,8 @@ import { restorePersistedTabs } from './services/sessionRestore'
 import { useEditorStore } from './stores/editorStore'
 import { isTauri } from './hooks/useTauri'
 import { GlobalTooltip } from './components/common/Tooltip'
+import { migrateLegacyFileAccess } from './services/persistedFileAccess'
+import { UpdateManager } from './components/update/UpdateManager'
 
 type CursorPhase = 'entering' | 'active' | 'exiting'
 
@@ -30,20 +32,33 @@ function CustomCursorFrame({
 }) {
   const [mounted, setMounted] = useState(enabled)
   const [phase, setPhase] = useState<CursorPhase>(enabled ? 'active' : 'exiting')
-  const [cursorPosition, setCursorPosition] = useState({ x: -32, y: -32 })
   const [showGhost, setShowGhost] = useState(false)
+  const ghostRef = useRef<HTMLImageElement | null>(null)
+  const pointerRef = useRef({ x: -32, y: -32 })
+  const pointerFrameRef = useRef<number | null>(null)
   const exitTimer = useRef<number | null>(null)
   const enterTimer = useRef<number | null>(null)
 
   useEffect(() => {
     const handleMouseMove = (event: MouseEvent) => {
-      setCursorPosition({ x: event.clientX, y: event.clientY })
+      pointerRef.current = { x: event.clientX, y: event.clientY }
       const target = event.target as HTMLElement | null
-      setShowGhost(!target?.closest('input, textarea, [contenteditable="true"], .cm-editor, .gm-system-cursor'))
+      const nextShowGhost = !target?.closest('input, textarea, [contenteditable="true"], .cm-editor, .gm-system-cursor')
+      setShowGhost((current) => current === nextShowGhost ? current : nextShowGhost)
+      if (pointerFrameRef.current === null) {
+        pointerFrameRef.current = window.requestAnimationFrame(() => {
+          pointerFrameRef.current = null
+          const { x, y } = pointerRef.current
+          if (ghostRef.current) ghostRef.current.style.transform = `translate3d(${x}px, ${y}px, 0)`
+        })
+      }
     }
 
     window.addEventListener('mousemove', handleMouseMove, { passive: true })
-    return () => window.removeEventListener('mousemove', handleMouseMove)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      if (pointerFrameRef.current !== null) window.cancelAnimationFrame(pointerFrameRef.current)
+    }
   }, [])
 
   useEffect(() => {
@@ -95,13 +110,12 @@ function CustomCursorFrame({
       {children}
       {phase !== 'active' && showGhost && (
         <img
+          ref={ghostRef}
           className="gm-custom-cursor-ghost"
           src="/cursor-icon.png"
           alt=""
           aria-hidden="true"
-          style={{
-            transform: `translate3d(${cursorPosition.x}px, ${cursorPosition.y}px, 0)`,
-          }}
+          style={{ transform: 'translate3d(-32px, -32px, 0)' }}
         />
       )}
     </Cursor>
@@ -140,6 +154,14 @@ function App() {
         const databaseStartedAt = performance.now()
         await initDatabase()
         logDuration('database init', databaseStartedAt)
+
+        if (isTauri()) {
+          try {
+            await migrateLegacyFileAccess()
+          } catch (err) {
+            console.warn('[App] Legacy file access migration failed:', err)
+          }
+        }
 
         let openedFromFileAssociation = false
         if (isTauri()) {
@@ -214,6 +236,7 @@ function App() {
         <AppLayout />
       </CustomCursorFrame>
       <ToastContainer />
+      <UpdateManager />
       <GlobalTooltip />
     </>
   )

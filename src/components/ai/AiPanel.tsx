@@ -11,7 +11,7 @@ import mascotIdle from '@/assets/ai-mascot/mascot-idle.png'
 import mascotStreaming from '@/assets/ai-mascot/mascot-streaming.gif'
 import { PromptComposer } from '@/components/ai/PromptComposer'
 import type { ManualCapability } from '@/components/ai/ManualToolToggle'
-import { authorizeSelectedPath, readFile } from '@/hooks/useTauri'
+import { readRememberedFile } from '@/services/persistedFileAccess'
 import { useEditorStore } from '@/stores/editorStore'
 import { deleteChatSession } from '@/services/database/persistence'
 import { isSameFilePath } from '@/services/pathIdentity'
@@ -212,8 +212,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
       const existing = editorState.tabs.find((tab) => isSameFilePath(tab.filePath, source.filePath))
       let tabId = existing?.id
       if (!tabId) {
-        await authorizeSelectedPath(source.filePath)
-        const content = await readFile(source.filePath)
+        const content = await readRememberedFile(source.filePath)
         const name = source.filePath.split(/[/\\]/).pop() || source.filePath
         editorState.addTab(source.filePath, name, content)
         tabId = useEditorStore.getState().activeTabId || undefined

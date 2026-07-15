@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { EditorView } from '@codemirror/view'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
-import type { ViewMode, ViewModeUsageStat } from '@/stores/editorStore'
+import type { ViewMode } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useFileOperations } from '@/hooks/useFileOperations'
 import { useActiveHeading } from '@/hooks/useActiveHeading'
@@ -22,6 +22,17 @@ import { MarkdownPreview, MarkdownToc } from './MarkdownPreview'
 import { SearchOverlay } from './SearchOverlay'
 import { TabBar } from './TabBar'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
+import {
+  MODE_PREWARM_ACTIVITY_PAUSE,
+  MODE_PREWARM_IDLE_DELAY,
+  ReadingPositionSession,
+  ScrollSyncSession,
+  getNextPrewarmTarget,
+  scheduleIdlePrewarm,
+  type PrewarmTargetMode,
+  type PrewarmedModeKeys,
+  type ReadingPosition,
+} from '@/services/editorSession'
 
 export const OPEN_EDITOR_SEARCH_EVENT = 'guanmo:open-editor-search'
 
@@ -50,27 +61,13 @@ const PREVIEW_UPDATE_DELAY = 300
 const LARGE_PREVIEW_UPDATE_DELAY = 650
 const HUGE_PREVIEW_UPDATE_DELAY = 900
 const SCROLL_SYNC_TOP_OFFSET = 32
-const SCROLL_SYNC_LOCK_MS = 220
 const SCROLL_SYNC_INPUT_PAUSE_MS = 700
 const PREVIEW_SWITCH_MARK_PREFIX = 'guanmo:preview-switch'
-const MODE_PREWARM_IDLE_DELAY = 650
-const MODE_PREWARM_ACTIVITY_PAUSE = 1200
-const MODE_PREWARM_HUGE_DOC_LENGTH = 100000
-const MODE_PREWARM_DIFF_LINE_LIMIT = 900
-
-type PrewarmTargetMode = Exclude<ViewMode, 'edit'>
-type PrewarmedModeKeys = Partial<Record<PrewarmTargetMode, string>>
 
 interface ScheduledPreviewContent {
   content: string
   version: number
   pending: boolean
-}
-
-interface ReadingPosition {
-  editorScrollTop?: number
-  previewScrollTop?: number
-  topLine?: number
 }
 
 function getPreviewUpdateDelay(content: string) {
@@ -146,7 +143,7 @@ export function EditorArea() {
   const viewModeUsage = useEditorStore((s) => s.viewModeUsage)
   const isFullscreen = useAppStore((s) => s.isFullscreen)
   const editorViewRef = useRef<EditorView | null>(null)
-  const readingPositionsRef = useRef<Record<string, ReadingPosition>>({})
+  const readingPositionsRef = useRef(new ReadingPositionSession())
   const leftPreviewRef = useRef<HTMLDivElement>(null)
   const rightPreviewRef = useRef<HTMLDivElement>(null)
   const previewAnchorCacheRef = useRef<WeakMap<HTMLElement, PreviewAnchorCache>>(new WeakMap())
@@ -155,8 +152,7 @@ export function EditorArea() {
   const editorRestoreFrameRef = useRef<number | null>(null)
 
   const restoredPreviewKeysRef = useRef<{ left: string | null; right: string | null }>({ left: null, right: null })
-  const scrollSyncSourceRef = useRef<'editor' | 'preview' | null>(null)
-  const scrollSyncTimerRef = useRef<number | null>(null)
+  const scrollSyncSessionRef = useRef(new ScrollSyncSession())
   const editorScrollFrameRef = useRef<number | null>(null)
   const editorTocFrameRef = useRef<number | null>(null)
   const previewScrollFrameRef = useRef<number | null>(null)
@@ -372,20 +368,17 @@ export function EditorArea() {
 
   const getStoredPreviewTop = useCallback((tabId: string | null | undefined) => {
     if (!tabId) return 0
-    const position = readingPositionsRef.current[tabId]
+    const position = readingPositionsRef.current.get(tabId)
     return position?.previewScrollTop ?? 0
   }, [])
 
   const getStoredEditorTop = useCallback((tabId: string | null | undefined) => {
     if (!tabId) return 0
-    return readingPositionsRef.current[tabId]?.editorScrollTop ?? 0
+    return readingPositionsRef.current.get(tabId)?.editorScrollTop ?? 0
   }, [])
 
   const saveReadingPosition = useCallback((tabId: string, position: ReadingPosition) => {
-    readingPositionsRef.current[tabId] = {
-      ...readingPositionsRef.current[tabId],
-      ...position,
-    }
+    readingPositionsRef.current.save(tabId, position)
   }, [])
 
   const leftPreviewMasked = Boolean(
@@ -445,7 +438,7 @@ export function EditorArea() {
 
   const restoreEditorReadingPosition = useCallback((tabId: string) => {
     const view = editorViewRef.current
-    const position = readingPositionsRef.current[tabId]
+    const position = readingPositionsRef.current.get(tabId)
     if (!view || !position) return
 
     if (editorRestoreFrameRef.current !== null) {
@@ -471,7 +464,7 @@ export function EditorArea() {
     container: HTMLElement | null,
     pane: 'left' | 'right'
   ) => {
-    const position = readingPositionsRef.current[tabId]
+    const position = readingPositionsRef.current.get(tabId)
     if (!container) return
     const lineTop = position?.previewScrollTop === undefined && position?.topLine
       ? getPreviewTopForLine(container, position.topLine)
@@ -583,10 +576,7 @@ export function EditorArea() {
   useEffect(() => clearPreviewContextHighlight, [clearPreviewContextHighlight])
 
   useEffect(() => () => {
-    if (scrollSyncTimerRef.current !== null) {
-      window.clearTimeout(scrollSyncTimerRef.current)
-      scrollSyncTimerRef.current = null
-    }
+    scrollSyncSessionRef.current.dispose()
     if (restoreScrollFrameRef.current !== null) {
       window.cancelAnimationFrame(restoreScrollFrameRef.current)
       restoreScrollFrameRef.current = null
@@ -606,14 +596,7 @@ export function EditorArea() {
   )
 
   const setScrollSyncSource = useCallback((source: 'editor' | 'preview') => {
-    scrollSyncSourceRef.current = source
-    if (scrollSyncTimerRef.current !== null) {
-      window.clearTimeout(scrollSyncTimerRef.current)
-    }
-    scrollSyncTimerRef.current = window.setTimeout(() => {
-      scrollSyncSourceRef.current = null
-      scrollSyncTimerRef.current = null
-    }, SCROLL_SYNC_LOCK_MS)
+    scrollSyncSessionRef.current.lock(source)
   }, [])
 
   const syncPreviewToEditorLine = useCallback((line: number) => {
@@ -645,7 +628,7 @@ export function EditorArea() {
     if (!view || !preview) return
 
     const handleEditorScroll = () => {
-      if (scrollSyncSourceRef.current === 'preview') return
+      if (scrollSyncSessionRef.current.source === 'preview') return
       if (editorScrollFrameRef.current !== null) return
       editorScrollFrameRef.current = window.requestAnimationFrame(() => {
         editorScrollFrameRef.current = null
@@ -658,7 +641,7 @@ export function EditorArea() {
 
     const handlePreviewScroll = () => {
       if (isRestoringScrollRef.current) return
-      if (scrollSyncSourceRef.current === 'editor') return
+      if (scrollSyncSessionRef.current.source === 'editor') return
       if (Date.now() - lastEditorInputAtRef.current < SCROLL_SYNC_INPUT_PAUSE_MS) return
       if (previewScrollFrameRef.current !== null) return
       previewScrollFrameRef.current = window.requestAnimationFrame(() => {
@@ -1530,55 +1513,6 @@ function getPreviewLineAtTop(
   return previous.line
 }
 
-function getNextPrewarmTarget({
-  activeMode,
-  contentLength,
-  diffLineCount,
-  level,
-  resolveKey,
-  warmedKeys,
-  usage,
-}: {
-  activeMode: ViewMode
-  contentLength: number
-  diffLineCount: number
-  level: 'smart' | 'turbo'
-  resolveKey: (mode: PrewarmTargetMode) => string | null
-  warmedKeys: Set<string>
-  usage: Partial<Record<PrewarmTargetMode, ViewModeUsageStat>>
-}): PrewarmTargetMode | null {
-  const extraCount = level === 'smart' ? 1 : 2
-  const targets: PrewarmTargetMode[] = ['preview']
-
-  if (contentLength < MODE_PREWARM_HUGE_DOC_LENGTH) {
-    targets.push(...getFrequentPrewarmModes(usage).slice(0, extraCount))
-  }
-
-  for (const target of targets) {
-    if (target === activeMode) continue
-    if (target === 'diff-preview' && diffLineCount > MODE_PREWARM_DIFF_LINE_LIMIT) continue
-    const key = resolveKey(target)
-    if (key && !warmedKeys.has(key)) return target
-  }
-
-  return null
-}
-
-function getFrequentPrewarmModes(
-  usage: Partial<Record<PrewarmTargetMode, ViewModeUsageStat>>
-): PrewarmTargetMode[] {
-  const fallbackOrder: PrewarmTargetMode[] = ['edit-preview', 'dual-preview', 'diff-preview']
-  return fallbackOrder
-    .map((mode, index) => ({
-      mode,
-      index,
-      count: usage[mode]?.count ?? 0,
-      lastUsedAt: usage[mode]?.lastUsedAt ?? 0,
-    }))
-    .sort((a, b) => b.count - a.count || b.lastUsedAt - a.lastUsedAt || a.index - b.index)
-    .map((item) => item.mode)
-}
-
 function getContentSignature(content: string) {
   let hash = 2166136261
   for (let i = 0; i < content.length; i++) {
@@ -1595,17 +1529,6 @@ function countMarkdownLines(content: string) {
     if (content.charCodeAt(i) === 10) lines += 1
   }
   return lines
-}
-
-function scheduleIdlePrewarm(callback: () => void) {
-  const idleWindow = window as Window & {
-    requestIdleCallback?: (cb: IdleRequestCallback, options?: IdleRequestOptions) => number
-  }
-  if (idleWindow.requestIdleCallback) {
-    idleWindow.requestIdleCallback(callback, { timeout: 900 })
-    return
-  }
-  window.setTimeout(callback, 120)
 }
 
 function PaneHeader({ title, onClose }: { title: string; onClose?: () => void }) {

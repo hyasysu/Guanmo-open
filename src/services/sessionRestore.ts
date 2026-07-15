@@ -1,5 +1,5 @@
 import type { Tab } from '@/stores/editorStore'
-import { authorizeSelectedPath, readFile } from '@/hooks/useTauri'
+import { readRememberedFile } from '@/services/persistedFileAccess'
 
 /**
  * 恢复持久化标签页。
@@ -15,8 +15,7 @@ export async function restorePersistedTabs(tabs: Tab[]): Promise<Tab[]> {
     }
 
     try {
-      await authorizeSelectedPath(tab.filePath)
-      const diskContent = await readFile(tab.filePath)
+      const diskContent = await readRememberedFile(tab.filePath)
       if (tab.modified) {
         restored.push({
           ...tab,

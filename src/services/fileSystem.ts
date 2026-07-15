@@ -9,7 +9,6 @@ import {
   isTauri,
   readFile,
   writeFile,
-  authorizeSelectedPath,
   openFileDialog,
   saveFileDialog,
   readDir,
@@ -34,7 +33,6 @@ export async function openFile(): Promise<FileHandle | null> {
     if (!result) return null
     const path = Array.isArray(result) ? result[0] : result
     if (!isWorkspaceDisplayFile(path)) return null
-    await authorizeSelectedPath(path)
     const content = await readFile(path)
     const name = path.split(/[/\\]/).pop() || 'untitled.md'
     return { path, name, content }
