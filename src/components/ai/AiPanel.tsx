@@ -349,7 +349,6 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
                   isLast={i === visibleMessages.length - 1}
                   streaming={streaming}
                   sources={msg.sources}
-                  showNoSourceNotice={msg.role === 'assistant' && !msg.editConfirmation}
                   onOpenSource={handleOpenRagSource}
                 />
                 {msg.role === 'assistant' && msg.editConfirmation && (
@@ -523,7 +522,6 @@ const ChatBubble = memo(function ChatBubble({
   isLast,
   streaming,
   sources,
-  showNoSourceNotice,
   onOpenSource,
 }: {
   role: 'system' | 'user' | 'assistant'
@@ -531,13 +529,11 @@ const ChatBubble = memo(function ChatBubble({
   isLast: boolean
   streaming: boolean
   sources?: ChatMessageSource[]
-  showNoSourceNotice?: boolean
   onOpenSource?: (source: LocalChatMessageSource) => void
 }) {
   const isUser = role === 'user'
   const isEmpty = !content && isLast && streaming
   const isAssistantStreaming = !isUser && isLast && streaming
-  const shouldShowNoSourceNotice = !isUser && !isAssistantStreaming && !isEmpty && showNoSourceNotice && (!sources || sources.length === 0)
 
   return (
     <div className={`flex min-w-0 ${isUser ? 'justify-end' : 'justify-start'} animate-slideInUp`}>
@@ -568,9 +564,6 @@ const ChatBubble = memo(function ChatBubble({
         )}
         {!isUser && sources && sources.length > 0 && onOpenSource && (
           <MessageSources sources={sources} onOpenSource={onOpenSource} />
-        )}
-        {shouldShowNoSourceNotice && (
-          <NoSourceNotice />
         )}
       </div>
     </div>
@@ -664,13 +657,6 @@ function MessageSources({ sources, onOpenSource }: { sources: ChatMessageSource[
           ))}
         </div>
       )}
-    </div>
-  )
-}
-function NoSourceNotice() {
-  return (
-    <div className="mt-3 border-t border-gm-border-subtle pt-2 text-micro text-gm-text-tertiary">
-      本次回答未使用本地文档来源
     </div>
   )
 }

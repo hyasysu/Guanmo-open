@@ -8,6 +8,8 @@ import { toast } from '@/services/toast'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { isTauri } from '@/hooks/useTauri'
 
+const AUTO_SAVE_INDEX_DELAY = 5000
+
 export function useFileOperations() {
   const addTab = useEditorStore((s) => s.addTab)
   const tabs = useEditorStore((s) => s.tabs)
@@ -106,7 +108,7 @@ export function useFileOperations() {
 
         try {
           await saveFile(tab.filePath, content)
-          scheduleMarkdownDocumentIndex(tab.filePath, tab.title, content)
+          scheduleMarkdownDocumentIndex(tab.filePath, tab.title, content, AUTO_SAVE_INDEX_DELAY)
           autoSaveRetriesRef.current.delete(tab.id)
           useEditorStore.setState((s) => ({
             tabs: s.tabs.map((t) =>

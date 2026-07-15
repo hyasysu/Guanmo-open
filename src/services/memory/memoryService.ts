@@ -24,6 +24,7 @@ import {
 import type { MemoryCandidateInput, MemoryScopeType } from './memoryPolicy'
 
 export { classifyMemoryRetrievalIntent } from './memoryPolicy'
+export { isPersonalizedRewriteMemoryIntent } from './memoryPolicy'
 export type { MemoryRetrievalIntent } from './memoryPolicy'
 
 const AUTO_CATEGORIES = ['preference', 'project', 'learning', 'profile', 'instruction'] as const
@@ -69,6 +70,7 @@ export interface MemorySearchOptions {
   scopeType?: MemoryScopeType
   scopeKey?: string | null
   embeddingModel?: string
+  categories?: readonly string[]
 }
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -527,12 +529,13 @@ export async function searchMemories(
   const options: MemorySearchOptions = legacyTopKOnly
     ? { topK: topKOrOptions, threshold: 0 }
     : topKOrOptions
+  const allowedCategories = options.categories ? new Set(options.categories) : null
   const allMemories = filterInjectableMemories(
     await loadAllMemories(undefined, ['active'])
   ).filter((memory) => isMemoryVisibleInScope(
     memory,
     options.scopeType === 'project' ? options.scopeKey : null
-  ))
+  ) && (!allowedCategories || allowedCategories.has(memory.category)))
   if (allMemories.length === 0) return []
 
   const mode = options.mode || 'light'

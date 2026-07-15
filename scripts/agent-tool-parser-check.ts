@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { shouldUseAgent, validateSelectionContextReadLevel } from '../src/services/agent/executor'
-import { classifySelectionRequest, detectIntentScores, shouldIncludeFullDocumentContext } from '../src/services/agent/intentDetector'
+import { classifySelectionRequest, detectIntentScores, isDocumentRewriteIntent, isFileSummaryIntent, isLocalResearchIntent, shouldIncludeFullDocumentContext } from '../src/services/agent/intentDetector'
 import { prepareChatHistoryForModel } from '../src/services/aiChatMessages'
 import { setAgentScopeContext } from '../src/services/aiScope'
 import { useEditorStore } from '../src/stores/editorStore'
@@ -11,6 +11,7 @@ import { hideLikelyToolJsonPrefix, parseToolCall, stripToolCallJson } from '../s
 import { resolveAnchoredReplacementRange } from '../src/services/agent/editTarget'
 import { buildSelectionContextWindow, serializeSelectionContextWindow } from '../src/services/agent/selectionContext'
 import { parseSSEStream } from '../src/services/ai/stream'
+import { BASE_SYSTEM_PROMPT } from '../src/services/ai/systemPrompts'
 import { chunkMarkdown } from '../src/services/rag/chunker'
 import { buildSemanticDocumentChunks, estimateSemanticTokens } from '../src/services/rag/semanticChunker'
 
@@ -191,6 +192,16 @@ assert.equal(shouldUseAgent('你好', 0), false)
 assert.equal(shouldUseAgent('总结这个文件', 1), true)
 assert.equal(shouldUseAgent('总结这几个文件', 3), true)
 assert.equal(shouldUseAgent('搜索本地文档里的 RAG 配置', 0), true)
+assert.equal(isLocalResearchIntent('研究 Node.js 单线程'), true)
+assert.equal(isLocalResearchIntent('研究一下性能优化'), true)
+assert.equal(isDocumentRewriteIntent('研究一下性能优化'), false)
+assert.equal(detectIntentScores('研究一下性能优化').candidates.includes('file_write'), false)
+assert.equal(isDocumentRewriteIntent('优化这个文件'), true)
+assert.equal(isLocalResearchIntent('请调研一下 Markdown AST 的用途'), true)
+assert.equal(isLocalResearchIntent('归纳这个文件'), false)
+assert.equal(isFileSummaryIntent('归纳这个文件', { hasContextTags: false }), false)
+assert.equal(detectIntentScores('研究 Node.js 单线程').required.includes('knowledge'), true)
+assert.equal(detectIntentScores('Node.js 单线程是什么').candidates.length, 0)
 assert.equal(shouldUseAgent('记住我喜欢简洁回答', 0), true)
 assert.equal(shouldUseAgent('添加记忆 我偏好中文回答', 0), true)
 assert.equal(shouldUseAgent('保存记忆 我喜欢先看结论', 0), true)
@@ -212,7 +223,10 @@ const selectionContext = {
   hasSelection: true,
   hasContextTags: true,
 }
-for (const query of ['总结这段', '解释一下这个函数', '说明这里', '整理并提炼格式']) {
+assert.doesNotMatch(BASE_SYSTEM_PROMPT, /普通问答和简单解释/)
+assert.match(BASE_SYSTEM_PROMPT, /解释本轮 selection 内容时，回答深度应由选中内容决定/)
+assert.match(BASE_SYSTEM_PROMPT, /不得为了简短强行压缩为一句话，也不强制套用固定标题或章节/)
+for (const query of ['总结这段', '请解释这段内容', '解释一下这个函数', '说明这里', '整理并提炼格式']) {
   assert.equal(classifySelectionRequest(query, selectionContext), 'fast', query)
   assert.deepEqual(detectIntentScores(query, selectionContext).candidates, [], query)
 }

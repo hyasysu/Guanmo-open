@@ -10,6 +10,7 @@ import {
   findSimilarMemoryRecord,
   hasReusableEmbedding,
   inferMemoryScope,
+  isPersonalizedRewriteMemoryIntent,
   isMemoryVisibleInScope,
   normalizeMemoryCandidate,
   normalizeMemoryScopeKey,
@@ -27,6 +28,13 @@ assert.equal(classifyMemoryRetrievalIntent('还是按原来的格式'), 'weak')
 assert.equal(classifyMemoryRetrievalIntent('继续沿用之前的方案'), 'weak')
 assert.equal(classifyMemoryRetrievalIntent('像平时一样处理'), 'weak')
 assert.equal(classifyMemoryRetrievalIntent('按常用方式输出'), 'weak')
+assert.equal(isPersonalizedRewriteMemoryIntent('帮我按我的风格改写这段'), true)
+assert.equal(classifyMemoryRetrievalIntent('帮我按我的风格改写这段'), 'weak')
+assert.equal(classifyMemoryRetrievalIntent('把这段按上次的语气重写'), 'weak')
+assert.equal(classifyMemoryRetrievalIntent('照旧润色这段话'), 'weak')
+assert.equal(isPersonalizedRewriteMemoryIntent('帮我改写这段'), false)
+assert.equal(classifyMemoryRetrievalIntent('帮我改写这段'), 'none')
+assert.equal(classifyMemoryRetrievalIntent('把这段改写成简洁风格'), 'none')
 assert.equal(classifyMemoryRetrievalIntent('帮我总结这段文字'), 'none')
 assert.equal(classifyMemoryRetrievalIntent('总结上次会议'), 'none')
 assert.equal(classifyMemoryRetrievalIntent('解释之前的代码'), 'none')

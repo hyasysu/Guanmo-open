@@ -16,7 +16,7 @@ import { setAgentScopeContext, type AgentEditTarget } from '@/services/aiScope'
 import { searchScopedKnowledge, shouldTriggerScopedRag, streamFinalAnswer } from '@/services/aiChatFlow'
 import { buildChatMessageTags, buildMessagesForModel, buildSupplementalAiContext, countRagSourcesInContext, createContextMeta, createUserChatMessage, prepareChatHistoryForModel } from '@/services/aiChatMessages'
 import { stripToolCallJson } from '@/services/agent/toolCallParser'
-import { buildMemoryContext, classifyMemoryRetrievalIntent, processMemoryCandidateExtraction, searchMemories } from '@/services/memory/memoryService'
+import { buildMemoryContext, classifyMemoryRetrievalIntent, isPersonalizedRewriteMemoryIntent, processMemoryCandidateExtraction, searchMemories } from '@/services/memory/memoryService'
 import type { Memory } from '@/services/database/persistence'
 import type { ManualCapability } from '@/components/ai/ManualToolToggle'
 import { hydrateSettingsSecrets } from '@/services/settingsSecrets'
@@ -356,6 +356,7 @@ export function useAiChat() {
       let memoryContext = ''
       let memoryLookupAttempted = false
       const memoryIntent = classifyMemoryRetrievalIntent(content.trim())
+      const personalizedRewriteMemory = isPersonalizedRewriteMemoryIntent(content.trim())
       const shouldLookupMemory = memoryIntent !== 'none'
       const shouldLookupKnowledge = intentResult.candidates.includes('knowledge')
 
@@ -392,6 +393,7 @@ export function useAiChat() {
                 scopeType: workspacePath ? 'project' : 'global',
                 scopeKey: workspacePath,
                 embeddingModel: getEmbeddingConfig()?.embeddingModel,
+                categories: personalizedRewriteMemory ? ['preference', 'instruction'] : undefined,
                 signal: requestController.signal,
               })
               return { type: 'memory', result: memories }

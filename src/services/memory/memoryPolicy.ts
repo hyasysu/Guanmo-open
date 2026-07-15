@@ -43,9 +43,20 @@ export function normalizeMemoryScopeKey(scopeType: MemoryScopeType, scopeKey?: s
   return normalized || null
 }
 
+export function isPersonalizedRewriteMemoryIntent(query: string): boolean {
+  const normalized = query.trim().toLowerCase()
+  if (!/(?:翻译|改写|润色|重写)/.test(normalized)) return false
+  return [
+    /(?:按|按照|沿用|继续(?:使用|采用)?).{0,12}(?:我的|之前|上次|原来|原先|平时|常用).{0,8}(?:风格|语气|措辞|表达|格式|方式|习惯|偏好|约定)/,
+    /(?:照旧|老规矩|像平时一样)/,
+    /(?:用|采用).{0,8}我(?:平时|常用|惯用|喜欢|偏好).{0,8}(?:风格|语气|措辞|表达|格式|方式)/,
+  ].some((pattern) => pattern.test(normalized))
+}
+
 export function classifyMemoryRetrievalIntent(query: string): MemoryRetrievalIntent {
   const normalized = query.trim().toLowerCase()
   if (!normalized) return 'none'
+  if (isPersonalizedRewriteMemoryIntent(normalized)) return 'weak'
 
   const transformationTask = [
     /(?:帮我|请|把).{0,120}(?:翻译|改写|润色|重写)(?:成|为|一下)?/,
