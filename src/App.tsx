@@ -1,7 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AppLayout } from './components/layout/AppLayout'
 import { ToastContainer } from './components/common/ToastContainer'
-import { initDatabase } from './services/database/db'
+import {
+  getDatabaseRuntimeState,
+  initDatabase,
+  subscribeDatabaseRuntimeState,
+} from './services/database/db'
+import { loadAllMemories, loadChatSessions } from './services/database/persistence'
 import { vectorStore } from './services/rag/vectorStore'
 import { hydrateSettingsSecrets } from './services/settingsSecrets'
 import { initAiClient, initEmbeddingClient, isLocalApi, validateAiStatus } from './services/ai/aiClient'
@@ -16,11 +21,58 @@ import { isTauri } from './hooks/useTauri'
 import { GlobalTooltip } from './components/common/Tooltip'
 import { migrateLegacyFileAccess } from './services/persistedFileAccess'
 import { UpdateManager } from './components/update/UpdateManager'
-
+import { toast } from './services/toast'
+import { detectLegacyData, type LegacyDetectionResult } from './services/database/legacyDetector'
+import { LegacyDataNoticeModal } from './components/legacy/LegacyDataNoticeModal'
 type CursorPhase = 'entering' | 'active' | 'exiting'
 
 function logDuration(label: string, startedAt: number) {
   console.info(`[Perf] ${label}: ${Math.round(performance.now() - startedAt)}ms`)
+}
+
+let businessDataHydration: Promise<void> | null = null
+
+function hydrateBusinessData(): Promise<void> {
+  if (businessDataHydration) return businessDataHydration
+  businessDataHydration = (async () => {
+    console.log('[App] hydrateBusinessData started')
+    let openedFromFileAssociation = false
+    if (isTauri()) {
+      try {
+        openedFromFileAssociation = await invoke<boolean>('has_pending_open_files')
+      } catch (err) {
+        console.warn('[App] Pending open file check failed:', err)
+      }
+    }
+    if (openedFromFileAssociation) {
+      useEditorStore.setState({ tabs: [], activeTabId: null, rightPaneTabId: null, viewMode: 'edit' })
+    } else {
+      const restoreStartedAt = performance.now()
+      const state = useEditorStore.getState()
+      console.log('[App] Restoring tabs:', state.tabs.length, 'tabs')
+      const tabs = await restorePersistedTabs(state.tabs)
+      console.log('[App] Restored tabs:', tabs.map(t => ({ id: t.id, title: t.title, hasContent: !!t.content, contentLength: t.content?.length })))
+      const validIds = new Set(tabs.map((tab) => tab.id))
+      useEditorStore.setState({
+        tabs,
+        activeTabId: state.activeTabId && validIds.has(state.activeTabId) ? state.activeTabId : tabs[0]?.id ?? null,
+        rightPaneTabId: state.rightPaneTabId && validIds.has(state.rightPaneTabId) ? state.rightPaneTabId : null,
+      })
+      logDuration('session restore', restoreStartedAt)
+    }
+
+    const databaseHydrationStartedAt = performance.now()
+    await Promise.all([
+      loadChatSessions(0, 50),
+      loadAllMemories(),
+      vectorStore.loadFromDatabase(),
+    ])
+    logDuration('database business hydration', databaseHydrationStartedAt)
+  })().catch((error) => {
+    businessDataHydration = null
+    console.warn('[App] Database business hydration failed:', error)
+  })
+  return businessDataHydration
 }
 
 function CustomCursorFrame({
@@ -125,10 +177,27 @@ function CustomCursorFrame({
 function App() {
   const [dbError, setDbError] = useState<string | null>(null)
   const [appReady, setAppReady] = useState(false)
+  const [legacyDetection, setLegacyDetection] = useState<LegacyDetectionResult | null>(null)
   const customCursorEnabled = useSettingsStore((s) => s.appearance.customCursorEnabled)
   const theme = useSettingsStore((s) => s.appearance.theme)
   const lightPalette = useSettingsStore((s) => s.appearance.lightPalette)
   useExternalFileOpen(appReady)
+
+  // 调试用：控制台调用 __testLegacyModal() 唤起旧版数据检测弹窗
+  useEffect(() => {
+    ;(window as unknown as Record<string, unknown>).__testLegacyModal = () => {
+      setLegacyDetection({
+        legacyDetected: true,
+        userNoticed: false,
+        detectedAt: Date.now(),
+        noticedAt: null,
+        detectedCounts: { documents: 3, chat_sessions: 5, chat_messages: 42, memories: 12 },
+      })
+    }
+    return () => {
+      delete (window as unknown as Record<string, unknown>).__testLegacyModal
+    }
+  }, [])
 
   useLayoutEffect(() => {
     syncDocumentTheme(theme, lightPalette)
@@ -142,6 +211,11 @@ function App() {
   }, [])
   useEffect(() => {
     let cancelled = false
+    let bootstrapComplete = false
+    const unsubscribeDatabase = subscribeDatabaseRuntimeState((state) => {
+      if (!bootstrapComplete) return
+      if (state.status === 'ready') void hydrateBusinessData()
+    })
     async function init() {
       const appInitStartedAt = performance.now()
       try {
@@ -163,36 +237,8 @@ function App() {
           }
         }
 
-        let openedFromFileAssociation = false
-        if (isTauri()) {
-          try {
-            openedFromFileAssociation = await invoke<boolean>('has_pending_open_files')
-          } catch (err) {
-            console.warn('[App] Pending open file check failed:', err)
-          }
-        }
-
-        if (openedFromFileAssociation) {
-          useEditorStore.setState({ tabs: [], activeTabId: null, rightPaneTabId: null, viewMode: 'edit' })
-        } else {
-          const restoreStartedAt = performance.now()
-          const state = useEditorStore.getState()
-          const tabs = await restorePersistedTabs(state.tabs)
-          const validIds = new Set(tabs.map((tab) => tab.id))
-          const activeTabId = state.activeTabId && validIds.has(state.activeTabId)
-            ? state.activeTabId
-            : tabs[0]?.id ?? null
-          const rightPaneTabId = state.rightPaneTabId && validIds.has(state.rightPaneTabId)
-            ? state.rightPaneTabId
-            : null
-          useEditorStore.setState({ tabs, activeTabId, rightPaneTabId })
-          logDuration('session restore', restoreStartedAt)
-        }
-
-        const vectorStoreStartedAt = performance.now()
-        vectorStore.loadFromDatabase()
-          .then(() => logDuration('vector store hydration', vectorStoreStartedAt))
-          .catch((err) => console.warn('[App] Vector store hydration failed:', err))
+        bootstrapComplete = true
+        if (getDatabaseRuntimeState().status === 'ready') await hydrateBusinessData()
 
         // 初始化 AI 客户端（对话 + Embedding，本地 API 无需 apiKey）
         const { ai } = useSettingsStore.getState()
@@ -208,6 +254,18 @@ function App() {
           useAppStore.getState().setAiStatus(status)
         }).catch(() => {})
 
+        // 检测旧版 IndexedDB 数据（仅桌面端）
+        if (isTauri()) {
+          try {
+            const detection = await detectLegacyData()
+            if (!cancelled && detection.legacyDetected && !detection.userNoticed) {
+              setLegacyDetection(detection)
+            }
+          } catch (err) {
+            console.warn('[App] Legacy detection failed:', err)
+          }
+        }
+
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         console.error('[App] Database init failed:', msg)
@@ -222,7 +280,10 @@ function App() {
       }
     }
     init()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      unsubscribeDatabase()
+    }
   }, [])
 
   return (
@@ -238,6 +299,12 @@ function App() {
       <ToastContainer />
       <UpdateManager />
       <GlobalTooltip />
+      {legacyDetection && (
+        <LegacyDataNoticeModal
+          detection={legacyDetection}
+          onClose={() => setLegacyDetection(null)}
+        />
+      )}
     </>
   )
 }

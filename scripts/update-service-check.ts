@@ -1,6 +1,7 @@
 import {
   UPDATE_STORAGE_KEYS,
   checkForUpdates,
+  getCurrentVersionRelease,
 } from '../src/services/updateService'
 
 function assert(condition: boolean, message: string) {
@@ -44,10 +45,13 @@ values.set(UPDATE_STORAGE_KEYS.lastCheck, String(Date.now()))
 const cached = await checkForUpdates()
 assert(cached.status === 'skipped' && fetchCount === 0, '自动检查应遵守 24 小时缓存')
 
+const forcedAutomatic = await checkForUpdates({ force: true })
+assert(forcedAutomatic.status === 'available' && fetchCount === 1, '开发入口应能绕过 24 小时缓存执行自动检查')
+
 values.delete(UPDATE_STORAGE_KEYS.lastCheck)
 values.set(UPDATE_STORAGE_KEYS.ignoredVersion, '1.3.0')
 const ignored = await checkForUpdates()
-assert(ignored.status === 'ignored' && fetchCount === 1, '自动检查应忽略指定版本')
+assert(ignored.status === 'ignored' && fetchCount === 2, '自动检查应忽略指定版本')
 
 const requestHeaders = new Headers(lastRequestInit?.headers)
 assert(requestHeaders.get('User-Agent') === 'Guanmo-Update-Checker', '桌面请求应提供 GitHub User-Agent')
@@ -64,8 +68,37 @@ globalThis.fetch = async (_input, init) => {
   })
 }
 const manual = await checkForUpdates({ manual: true })
-assert(manual.status === 'available' && fetchCount === 2, '手动检查应绕过缓存与忽略版本')
+assert(manual.status === 'available' && fetchCount === 3, '手动检查应绕过缓存与忽略版本')
 assert(new Headers(lastRequestInit?.headers).get('If-None-Match') === null, '手动检查不应发送可能触发 304 的 If-None-Match')
+
+fetchCount = 0
+let currentReleaseUrl = ''
+globalThis.fetch = async (input) => {
+  fetchCount += 1
+  currentReleaseUrl = String(input)
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  return new Response(JSON.stringify({ ...release, tag_name: 'v1.2.1', name: 'v1.2.1' }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+const [currentReleaseFirst, currentReleaseSecond] = await Promise.all([
+  getCurrentVersionRelease(),
+  getCurrentVersionRelease(),
+])
+assert(currentReleaseUrl.endsWith('/releases/tags/v1.2.1'), '版本速览应请求当前安装版本对应的 tag')
+assert(currentReleaseFirst.mode === 'current' && currentReleaseFirst.releaseVersion === '1.2.1', '当前版本 Release 应解码为速览详情')
+assert(currentReleaseSecond.release.body === '# 更新说明', '并发版本速览应返回同一份 Release 内容')
+assert(fetchCount === 1, '并发版本速览只应发起一次网络请求')
+
+let currentReleaseRejected = false
+try {
+  globalThis.fetch = async () => new Response(null, { status: 404 })
+  await getCurrentVersionRelease()
+} catch {
+  currentReleaseRejected = true
+}
+assert(currentReleaseRejected, '当前版本 Release 请求失败时应拒绝且不返回空详情')
 
 fetchCount = 0
 globalThis.fetch = async (_input, init) => {

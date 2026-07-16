@@ -70,8 +70,6 @@ export async function persistDocument(
   if (!isDatabaseReady()) return
   await serializeDatabaseTransaction(async () => {
     const db = getDatabase()
-    await db.execute('BEGIN')
-    try {
     const [byPath, byId, existingChunks] = await Promise.all([
       db.select<{ id: string }>('SELECT id FROM documents WHERE file_path = $1', [doc.filePath]),
       db.select<{ id: string }>('SELECT id FROM documents WHERE id = $1', [doc.id]),
@@ -172,11 +170,6 @@ export async function persistDocument(
           [`job-${doc.id}`, doc.id, doc.filePath]
         )
       }
-    }
-      await db.execute('COMMIT')
-    } catch (error) {
-      await db.execute('ROLLBACK')
-      throw error
     }
   })
 }
@@ -600,8 +593,6 @@ export async function confirmMemoryCandidate(id: string): Promise<boolean> {
   if (!candidate) return false
   return serializeDatabaseTransaction(async () => {
     const db = getDatabase()
-    await db.execute('BEGIN')
-    try {
     if (candidate.supersedesId) {
       await db.execute(
         `UPDATE memories SET status = 'superseded', updated_at = unixepoch() * 1000
@@ -615,12 +606,7 @@ export async function confirmMemoryCandidate(id: string): Promise<boolean> {
        WHERE id = $1 AND status = 'candidate'`,
       [id]
     )
-    await db.execute('COMMIT')
-      return result.rowsAffected > 0
-    } catch (error) {
-      await db.execute('ROLLBACK')
-      throw error
-    }
+    return result.rowsAffected > 0
   })
 }
 

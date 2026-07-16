@@ -125,9 +125,10 @@ async function run() {
   assert.match(persistedAccess, /Promise\.all\(\[\s*persistence\.loadDocumentFilePaths\(\),\s*persistence\.loadChatSourceFilePaths\(\)/)
   const databaseInitIndex = app.indexOf('await initDatabase()')
   const migrationIndex = app.indexOf('await migrateLegacyFileAccess()')
-  const sessionRestoreIndex = app.indexOf('await restorePersistedTabs')
+  const businessHydrationIndex = app.indexOf('await hydrateBusinessData()')
   assert.ok(databaseInitIndex >= 0 && migrationIndex > databaseInitIndex)
-  assert.ok(sessionRestoreIndex >= 0 && migrationIndex < sessionRestoreIndex)
+  assert.match(app, /function hydrateBusinessData[\s\S]*await restorePersistedTabs/)
+  assert.ok(businessHydrationIndex >= 0 && migrationIndex < businessHydrationIndex)
 
   console.log('File access recovery checks passed')
 }

@@ -1,7 +1,7 @@
 /**
  * Database service for 观墨.
  * Tauri: uses tauri-plugin-sql (SQLite).
- * Web: falls back to IndexedDB.
+ * Web: no database (read-only document viewing).
  */
 
 import { isTauri } from '@/hooks/useTauri'
@@ -429,6 +429,45 @@ class IndexedDBAdapter implements DBAdapter {
 let db: DBAdapter | null = null
 let transactionTail: Promise<void> = Promise.resolve()
 
+// --- Runtime state ---
+
+type DatabaseStatus = 'idle' | 'initializing' | 'ready' | 'error'
+
+interface DatabaseRuntimeState {
+  status: DatabaseStatus
+  error?: string
+}
+
+let runtimeState: DatabaseRuntimeState = { status: 'idle' }
+const runtimeListeners = new Set<(state: DatabaseRuntimeState) => void>()
+
+function setRuntimeState(next: DatabaseRuntimeState) {
+  runtimeState = next
+  for (const listener of runtimeListeners) {
+    try { listener(runtimeState) } catch { /* swallow */ }
+  }
+}
+
+export function getDatabaseRuntimeState(): DatabaseRuntimeState {
+  return runtimeState
+}
+
+export function subscribeDatabaseRuntimeState(
+  listener: (state: DatabaseRuntimeState) => void,
+): () => void {
+  runtimeListeners.add(listener)
+  return () => { runtimeListeners.delete(listener) }
+}
+
+/**
+ * Get database adapter for maintenance tasks (legacy detection etc.).
+ * Returns the adapter if initialized, otherwise throws.
+ */
+export function getDatabaseForMaintenance(): DBAdapter {
+  if (!db) throw new Error('Database not initialized. Cannot perform maintenance.')
+  return db
+}
+
 export async function serializeDatabaseTransaction<T>(operation: () => Promise<T>): Promise<T> {
   const previous = transactionTail
   let release!: () => void
@@ -442,26 +481,33 @@ export async function serializeDatabaseTransaction<T>(operation: () => Promise<T
 }
 
 export async function initDatabase(): Promise<void> {
+  setRuntimeState({ status: 'initializing' })
+
   if (isTauri()) {
+    // 桌面端优先使用 SQLite
     try {
       const adapter = new TauriSQLiteAdapter()
       await adapter.init()
       db = adapter
       console.log('[DB] Tauri SQLite initialized')
+      setRuntimeState({ status: 'ready' })
       return
     } catch (err) {
       console.warn('[DB] Tauri SQLite failed, falling back to IndexedDB:', err)
     }
   }
 
-  // Web fallback: IndexedDB
+  // Web端回退到 IndexedDB
   try {
     const adapter = new IndexedDBAdapter()
     await adapter.init()
     db = adapter
     console.log('[DB] IndexedDB initialized')
+    setRuntimeState({ status: 'ready' })
   } catch (err) {
     console.error('[DB] IndexedDB failed:', err)
+    const message = err instanceof Error ? err.message : String(err)
+    setRuntimeState({ status: 'error', error: message })
     throw new Error('无法初始化数据库')
   }
 }

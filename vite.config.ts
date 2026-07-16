@@ -8,7 +8,7 @@ export default defineConfig(({ mode }) => ({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
-      '@app-entry': path.resolve(__dirname, mode === 'web' ? './src/WebApp.tsx' : './src/App.tsx'),
+      '@app-entry': path.resolve(__dirname, './src/App.tsx'),
       'animal-island-ui': path.resolve(__dirname, './src/vendor/animal-island-ui/index.ts'),
     },
   },

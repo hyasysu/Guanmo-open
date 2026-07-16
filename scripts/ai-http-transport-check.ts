@@ -24,10 +24,11 @@ globalThis.fetch = async () => { throw new TypeError('Failed to fetch') }
 const builtinOrigins = new Set([
   'https://ark.cn-beijing.volces.com:443',
   'https://api.tavily.com:443',
+  'https://api.github.com:443',
 ])
 const sessionOrigins = new Set<string>()
 const persistedOrigins = new Set<string>()
-const requests: Array<{ url: string; method: string; body?: number[] }> = []
+const requests: Array<{ url: string; method: string; headers: [string, string][]; body?: number[] }> = []
 
 function originOf(value: string) {
   const url = new URL(value)
@@ -92,7 +93,7 @@ runtime.__TAURI_INVOKE__ = async (command, args = {}) => {
   }
   if (command !== 'external_http_stream') throw new Error(`unexpected command: ${command}`)
 
-  const request = args.request as { url: string; method: string; body?: number[] }
+  const request = args.request as { url: string; method: string; headers: [string, string][]; body?: number[] }
   const channel = args.onEvent as { onmessage?: (event: unknown) => void }
   const origin = originOf(request.url)
   requests.push(request)
@@ -154,6 +155,27 @@ assert((await provider.listModels())[0] === 'glm-5.2', '模型列表应经过 Ru
 
 updateSearchConfig({ provider: 'tavily', apiKey: 'test', maxResults: 1 })
 assert((await webSearch('test')).results.length === 1, '联网搜索应经过 Rust 代理')
+
+const NativeRequest = globalThis.Request
+class ChromiumRequest extends NativeRequest {
+  constructor(input: RequestInfo | URL, init: RequestInit = {}) {
+    const headers = new Headers(init.headers)
+    headers.delete('user-agent')
+    super(input, { ...init, headers })
+  }
+}
+Object.defineProperty(globalThis, 'Request', { value: ChromiumRequest, configurable: true })
+try {
+  await externalFetch('https://api.github.com/repos/we-used-to-be/Guanmo-open/releases/latest', {
+    headers: { 'User-Agent': 'Guanmo-Update-Checker' },
+  })
+} finally {
+  Object.defineProperty(globalThis, 'Request', { value: NativeRequest, configurable: true })
+}
+assert(
+  requests.at(-1)?.headers.some(([name, value]) => name === 'user-agent' && value === 'Guanmo-Update-Checker'),
+  'Chromium 剥离 Request 的 User-Agent 后，Rust 请求仍应收到调用方显式请求头',
+)
 
 let promptCount = 0
 const restoreCancelPrompt = setOriginAuthorizationPrompt(async () => 'cancel')

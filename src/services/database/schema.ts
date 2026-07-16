@@ -105,6 +105,18 @@ CREATE TABLE IF NOT EXISTS settings (
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
+-- Lightweight legacy IndexedDB detection state.
+-- Stores whether old IndexedDB data was detected and whether user was notified.
+CREATE TABLE IF NOT EXISTS legacy_idb_detection (
+  id INTEGER PRIMARY KEY DEFAULT 1,
+  legacy_detected INTEGER NOT NULL DEFAULT 0,
+  user_noticed INTEGER NOT NULL DEFAULT 0,
+  detected_at INTEGER,
+  noticed_at INTEGER,
+  detected_counts TEXT,
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks(document_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_content_hash ON chunks(content_hash);
@@ -207,3 +219,13 @@ export const DB_MIGRATIONS = [
 ] as const
 
 export const DB_NAME = 'guanmo.db'
+
+export function splitDatabaseSchemaStatements(schema: string): string[] {
+  return schema
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('--'))
+    .join('\n')
+    .split(';')
+    .map((statement) => statement.trim())
+    .filter(Boolean)
+}

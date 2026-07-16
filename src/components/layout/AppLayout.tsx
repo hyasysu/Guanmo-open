@@ -15,6 +15,7 @@ import { CommandPalette } from '../common/CommandPalette'
 import { toast } from '@/services/toast'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useFullscreen } from '@/hooks/useFullscreen'
+import { OPEN_SETTINGS_SECTION_EVENT } from '@/services/settingsNavigation'
 
 const AiPanel = lazy(() => import('../ai/AiPanel').then((module) => ({ default: module.AiPanel })))
 const SettingsPage = lazy(() => import('@/features/settings/SettingsPage').then((module) => ({ default: module.SettingsPage })))
@@ -36,6 +37,7 @@ export function AppLayout() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [commandPaletteMode, setCommandPaletteMode] = useState<'commands' | 'files'>('commands')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsSection, setSettingsSection] = useState<string | null>(null)
   const [fullscreenFileDrawerOpen, setFullscreenFileDrawerOpen] = useState(false)
   const [fullscreenAiPosition, setFullscreenAiPosition] = useState(() => getDefaultFullscreenAiPosition())
   const fullscreenAiDragRef = useRef<{
@@ -182,7 +184,22 @@ export function AppLayout() {
   }, [exitFullscreen])
 
   const openSettings = useCallback(() => {
-    void runAfterNormalLayout(() => setSettingsOpen(true))
+    void runAfterNormalLayout(() => {
+      setSettingsSection(null)
+      setSettingsOpen(true)
+    })
+  }, [runAfterNormalLayout])
+
+  useEffect(() => {
+    const handleOpenSettingsSection = (event: Event) => {
+      const section = (event as CustomEvent<{ section?: string }>).detail?.section ?? null
+      void runAfterNormalLayout(() => {
+        setSettingsSection(section)
+        setSettingsOpen(true)
+      })
+    }
+    window.addEventListener(OPEN_SETTINGS_SECTION_EVENT, handleOpenSettingsSection)
+    return () => window.removeEventListener(OPEN_SETTINGS_SECTION_EVENT, handleOpenSettingsSection)
   }, [runAfterNormalLayout])
 
   const openCommandPalette = useCallback((mode: 'commands' | 'files') => {
@@ -259,7 +276,7 @@ export function AppLayout() {
           <Sidebar
             collapsed={sidebarCollapsed}
             width={sidebarWidth}
-            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSettings={openSettings}
             onOpenSearch={handleOpenSearch}
           />
         )}
@@ -348,7 +365,7 @@ export function AppLayout() {
         cursor={customCursorEnabled}
       >
         <div className={customCursorEnabled ? undefined : 'gm-system-cursor'} style={{ width: '100%', height: '560px', overflow: 'hidden', padding: '10px 14px', minHeight: 0 }}>
-          <Suspense fallback={null}><SettingsPage /></Suspense>
+          <Suspense fallback={null}><SettingsPage initialSection={settingsSection} /></Suspense>
         </div>
       </Modal>
 

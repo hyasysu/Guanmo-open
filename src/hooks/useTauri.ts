@@ -125,6 +125,13 @@ export async function fileExists(path: string): Promise<boolean> {
   return invoke<boolean>('path_exists', { path: nativePath })
 }
 
+export async function revealFileInFolder(path: string): Promise<void> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  const nativePath = toNativeFilePath(path)
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke<void>('reveal_file_in_folder', { path: nativePath })
+}
+
 export async function createDir(path: string): Promise<void> {
   if (!isTauri()) throw new Error('Not running in Tauri')
   const nativePath = toNativeFilePath(path)

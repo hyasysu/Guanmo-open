@@ -31,10 +31,10 @@ export async function restorePersistedTabs(tabs: Tab[]): Promise<Tab[]> {
           modified: false,
         })
       }
-    } catch {
-      if (tab.modified) {
-        restored.push(tab)
-      }
+    } catch (error) {
+      console.warn(`[SessionRestore] Failed to read file ${tab.filePath}:`, error)
+      // 文件读取失败时保留标签，使用持久化的内容
+      restored.push(tab)
     }
   }
 

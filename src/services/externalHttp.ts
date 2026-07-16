@@ -171,11 +171,15 @@ async function requestAuthorization(origin: string): Promise<OriginAuthorization
 
 async function createNativeRequest(input: string | URL | Request, init?: RequestInit): Promise<NativeHttpRequest> {
   const request = new Request(input, init)
+  const headers = new Headers(request.headers)
+  if (init?.headers) {
+    new Headers(init.headers).forEach((value, name) => headers.set(name, value))
+  }
   const body = request.method === 'GET' ? undefined : Array.from(new Uint8Array(await request.arrayBuffer()))
   return {
     url: request.url,
     method: request.method,
-    headers: Array.from(request.headers.entries()),
+    headers: Array.from(headers.entries()),
     body,
   }
 }

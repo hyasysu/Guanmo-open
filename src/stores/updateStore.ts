@@ -1,14 +1,14 @@
 import { create } from 'zustand'
-import type { AvailableUpdate } from '@/services/updateService'
+import type { ReleaseDetails } from '@/services/updateService'
 
 interface UpdateState {
-  selectedUpdate: AvailableUpdate | null
-  showDetails: (update: AvailableUpdate) => void
+  selectedRelease: ReleaseDetails | null
+  showDetails: (release: ReleaseDetails) => void
   closeDetails: () => void
 }
 
 export const useUpdateStore = create<UpdateState>((set) => ({
-  selectedUpdate: null,
-  showDetails: (selectedUpdate) => set({ selectedUpdate }),
-  closeDetails: () => set({ selectedUpdate: null }),
+  selectedRelease: null,
+  showDetails: (selectedRelease) => set({ selectedRelease }),
+  closeDetails: () => set({ selectedRelease: null }),
 }))

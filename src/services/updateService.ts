@@ -13,8 +13,12 @@ export const UPDATE_STORAGE_KEYS = {
   cachedRelease: 'guanmo:update:cached-release',
 } as const
 
-const LATEST_RELEASE_URL = 'https://api.github.com/repos/we-used-to-be/Guanmo-open/releases/latest'
+const RELEASES_API_URL = 'https://api.github.com/repos/we-used-to-be/Guanmo-open/releases'
+const LATEST_RELEASE_URL = `${RELEASES_API_URL}/latest`
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
+
+export const GITHUB_REPOSITORY_URL = 'https://github.com/we-used-to-be/Guanmo-open'
+export const LATEST_RELEASE_PAGE_URL = `${GITHUB_REPOSITORY_URL}/releases/latest`
 
 export interface GitHubRelease {
   tag_name: string
@@ -32,6 +36,13 @@ export interface AvailableUpdate {
   release: GitHubRelease
 }
 
+export interface ReleaseDetails {
+  mode: 'current' | 'update'
+  currentVersion: string
+  releaseVersion: string
+  release: GitHubRelease
+}
+
 export type UpdateCheckResult =
   | { status: 'available'; update: AvailableUpdate }
   | { status: 'up-to-date'; currentVersion: string; latestVersion: string }
@@ -40,6 +51,7 @@ export type UpdateCheckResult =
 
 interface CheckOptions {
   manual?: boolean
+  force?: boolean
 }
 
 type FetchedUpdateResult =
@@ -50,6 +62,7 @@ const activeRequests: Record<'automatic' | 'manual', Promise<FetchedUpdateResult
   automatic: null,
   manual: null,
 }
+let activeCurrentReleaseRequest: Promise<ReleaseDetails> | null = null
 
 function storage(): Storage | null {
   try {
@@ -82,6 +95,44 @@ function isGitHubRelease(value: unknown): value is GitHubRelease {
     && typeof release.prerelease === 'boolean'
 }
 
+function githubReleaseHeaders(): Record<string, string> {
+  return {
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'Guanmo-Update-Checker',
+    'X-GitHub-Api-Version': '2022-11-28',
+  }
+}
+
+async function decodeReleaseResponse(response: Response): Promise<GitHubRelease> {
+  if (!response.ok) throw new Error(`GitHub Releases 请求失败（${response.status}）`)
+  const release: unknown = await response.json()
+  if (!isGitHubRelease(release) || release.draft) throw new Error('GitHub Release 数据无效')
+  return release
+}
+
+async function requestCurrentVersionRelease(): Promise<ReleaseDetails> {
+  const currentVersion = await getCurrentAppVersion()
+  const response = await externalFetch(`${RELEASES_API_URL}/tags/v${encodeURIComponent(currentVersion)}`, {
+    headers: githubReleaseHeaders(),
+  })
+  const release = await decodeReleaseResponse(response)
+  return {
+    mode: 'current',
+    currentVersion,
+    releaseVersion: normalizeVersion(release.tag_name),
+    release,
+  }
+}
+
+export function getCurrentVersionRelease(): Promise<ReleaseDetails> {
+  if (!activeCurrentReleaseRequest) {
+    activeCurrentReleaseRequest = requestCurrentVersionRelease().finally(() => {
+      activeCurrentReleaseRequest = null
+    })
+  }
+  return activeCurrentReleaseRequest
+}
+
 async function requestLatestRelease(manual: boolean): Promise<FetchedUpdateResult> {
   storage()?.setItem(UPDATE_STORAGE_KEYS.lastCheck, String(Date.now()))
   const etag = manual ? null : storage()?.getItem(UPDATE_STORAGE_KEYS.releaseEtag)
@@ -89,9 +140,7 @@ async function requestLatestRelease(manual: boolean): Promise<FetchedUpdateResul
     getCurrentAppVersion(),
     externalFetch(LATEST_RELEASE_URL, {
       headers: {
-        Accept: 'application/vnd.github+json',
-        'User-Agent': 'Guanmo-Update-Checker',
-        'X-GitHub-Api-Version': '2022-11-28',
+        ...githubReleaseHeaders(),
         ...(etag ? { 'If-None-Match': etag } : {}),
       },
     }),
@@ -101,10 +150,7 @@ async function requestLatestRelease(manual: boolean): Promise<FetchedUpdateResul
     if (!release) throw new Error('GitHub Release 本地缓存无效')
     return createFetchedUpdateResult(currentVersion, release)
   }
-  if (!response.ok) throw new Error(`GitHub Releases 请求失败（${response.status}）`)
-
-  const release: unknown = await response.json()
-  if (!isGitHubRelease(release) || release.draft) throw new Error('GitHub Release 数据无效')
+  const release = await decodeReleaseResponse(response)
 
   cacheRelease(response, release)
   return createFetchedUpdateResult(currentVersion, release)
@@ -126,7 +172,7 @@ function createFetchedUpdateResult(
 
 export async function checkForUpdates(options: CheckOptions = {}): Promise<UpdateCheckResult> {
   const manual = Boolean(options.manual)
-  if (!manual && shouldUseCachedCheck()) return { status: 'skipped' }
+  if (!manual && !options.force && shouldUseCachedCheck()) return { status: 'skipped' }
   const requestKey = manual ? 'manual' : 'automatic'
   let request = activeRequests[requestKey]
   if (!request) {

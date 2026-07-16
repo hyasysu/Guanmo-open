@@ -801,6 +801,26 @@ body {
   100% { transform: scale(1); opacity: 1; }
 }
 
+@keyframes gmReleaseModalScrimIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes gmReleaseModalDialogIn {
+  from { transform: translateY(10px) scale(0.98); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+@keyframes gmReleaseModalScrimOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes gmReleaseModalDialogOut {
+  from { transform: translateY(0) scale(1); opacity: 1; }
+  to { transform: translateY(6px) scale(0.985); opacity: 0; }
+}
+
 @keyframes float {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-6px); }
@@ -857,8 +877,50 @@ body {
   animation: bounceIn 0.5s var(--gm-ease);
 }
 
+.gm-release-modal-scrim {
+  animation: gmReleaseModalScrimIn 180ms ease-out;
+}
+
+.gm-release-modal-dialog {
+  animation: gmReleaseModalDialogIn 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.gm-release-modal-scrim[data-closing='true'] {
+  animation: gmReleaseModalScrimOut 140ms ease-in forwards;
+}
+
+.gm-release-modal-scrim[data-closing='true'] .gm-release-modal-dialog {
+  animation: gmReleaseModalDialogOut 160ms ease-in forwards;
+}
+
+/* Legacy data notice modal */
+.gm-legacy-modal-scrim {
+  animation: gmReleaseModalScrimIn 180ms ease-out;
+}
+
+.gm-legacy-modal-dialog {
+  animation: gmReleaseModalDialogIn 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.gm-legacy-modal-scrim[data-closing='true'] {
+  animation: gmReleaseModalScrimOut 140ms ease-in forwards;
+}
+
+.gm-legacy-modal-scrim[data-closing='true'] .gm-legacy-modal-dialog {
+  animation: gmReleaseModalDialogOut 160ms ease-in forwards;
+}
+
 .animate-float {
   animation: float 3s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gm-release-modal-scrim,
+  .gm-release-modal-dialog,
+  .gm-legacy-modal-scrim,
+  .gm-legacy-modal-dialog {
+    animation: none;
+  }
 }
 
 .gm-streaming-bubble {

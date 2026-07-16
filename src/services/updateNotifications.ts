@@ -4,10 +4,17 @@ import {
   ignoreUpdateVersion,
   recordNotifiedVersion,
   type AvailableUpdate,
+  type UpdateCheckResult,
 } from '@/services/updateService'
 import { useUpdateStore } from '@/stores/updateStore'
 
 const notifiedVersions = new Set<string>()
+
+export async function runAutomaticUpdateCheck(force = false): Promise<UpdateCheckResult> {
+  const result = await checkForUpdates({ force })
+  if (result.status === 'available') showAvailableUpdate(result.update)
+  return result
+}
 
 export function showAvailableUpdate(update: AvailableUpdate): boolean {
   if (notifiedVersions.has(update.latestVersion)) return false
@@ -24,7 +31,12 @@ export function showAvailableUpdate(update: AvailableUpdate): boolean {
       {
         label: '查看',
         primary: true,
-        onClick: () => useUpdateStore.getState().showDetails(update),
+        onClick: () => useUpdateStore.getState().showDetails({
+          mode: 'update',
+          currentVersion: update.currentVersion,
+          releaseVersion: update.latestVersion,
+          release: update.release,
+        }),
       },
       {
         label: '忽略',
@@ -45,7 +57,12 @@ export async function runManualUpdateCheck(): Promise<ManualUpdateCheckFeedback>
     const result = await checkForUpdates({ manual: true })
     if (result.status === 'available') {
       if (!showAvailableUpdate(result.update)) {
-        useUpdateStore.getState().showDetails(result.update)
+        useUpdateStore.getState().showDetails({
+          mode: 'update',
+          currentVersion: result.update.currentVersion,
+          releaseVersion: result.update.latestVersion,
+          release: result.update.release,
+        })
       }
       return {
         tone: 'info',

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Collapse, Divider, Footer, Icon, Input, Select, Switch, Table, Tabs } from 'animal-island-ui'
+import { Button, Collapse, Divider, Footer, Icon, Input, Modal, Select, Switch, Table, Tabs } from 'animal-island-ui'
 import appIcon from '@/assets/icon.png'
 
 import { isTauri } from '@/hooks/useTauri'
@@ -36,9 +36,16 @@ import { exportDataBackup, importDataBackup } from '@/services/dataBackup'
 import { useChatStore } from '@/stores/chatStore'
 import { SettingSlider } from '@/components/common/SettingSlider'
 import { contentHash, inferMemoryScope, normalizeMemoryScopeKey } from '@/services/memory/memoryPolicy'
-import { getCurrentAppVersion } from '@/services/updateService'
+import {
+  GITHUB_REPOSITORY_URL,
+  getCurrentAppVersion,
+  getCurrentVersionRelease,
+  openReleaseInSystemBrowser,
+} from '@/services/updateService'
 import { runManualUpdateCheck, type ManualUpdateCheckFeedback } from '@/services/updateNotifications'
+import { useUpdateStore } from '@/stores/updateStore'
 import { listAuthorizedApiOrigins, revokeApiOrigin, type AuthorizedApiOrigin } from '@/services/externalHttp'
+import { LegacyMigrationEntry } from '@/components/legacy/LegacyMigrationEntry'
 
 async function openUrl(url: string, external: boolean) {
   if (external) {
@@ -61,7 +68,7 @@ const TABS_CONFIG = [
   { key: 'general', text: '通用', children: <GeneralSettings /> },
 ]
 
-export function SettingsPage() {
+export function SettingsPage({ initialSection = null }: { initialSection?: string | null }) {
   const [active, setActive] = useState('ai')
 
   const tabs = TABS_CONFIG.map((tab) => ({
@@ -872,7 +879,6 @@ function KnowledgeStats() {
   const [message, setMessage] = useState<string | null>(null)
   const [lastIndexedAt, setLastIndexedAt] = useState<number | null>(null)
   const [dbStatus, setDbStatus] = useState<'loading' | 'ready' | 'error'>('loading')
-
   const refreshStats = async () => {
     setDbStatus('loading')
     try {
@@ -1105,6 +1111,7 @@ function GeneralSettings() {
   const { appearance, updateAiConfig, updateEmbeddingConfig, updateEditorSettings, updateAppearanceSettings, updateWebSearchConfig } = useSettingsStore()
   const [busy, setBusy] = useState(false)
   const [currentVersion, setCurrentVersion] = useState('—')
+  const [loadingReleaseNotes, setLoadingReleaseNotes] = useState(false)
   const [checkingUpdate, setCheckingUpdate] = useState(false)
   const [updateCheckFeedback, setUpdateCheckFeedback] = useState<ManualUpdateCheckFeedback | null>(null)
   const mountedRef = useRef(true)
@@ -1134,6 +1141,24 @@ function GeneralSettings() {
     } finally {
       if (mountedRef.current) setCheckingUpdate(false)
     }
+  }
+
+  const handleVersionOverview = async () => {
+    setLoadingReleaseNotes(true)
+    try {
+      const details = await getCurrentVersionRelease()
+      if (mountedRef.current) useUpdateStore.getState().showDetails(details)
+    } catch {
+      if (mountedRef.current) toast.error('暂时无法获取当前版本说明，请稍后重试。')
+    } finally {
+      if (mountedRef.current) setLoadingReleaseNotes(false)
+    }
+  }
+
+  const handleStarRepository = () => {
+    void openReleaseInSystemBrowser(GITHUB_REPOSITORY_URL).catch((error) => {
+      toast.error(error instanceof Error ? error.message : '打开项目仓库失败')
+    })
   }
 
   const handleRestoreDefaults = () => {
@@ -1248,7 +1273,7 @@ function GeneralSettings() {
   return (
     <div className="w-full pb-6">
       <SectionTitle>关于</SectionTitle>
-      <div className="flex items-center gap-3 py-2">
+      <div className="flex flex-wrap items-center gap-3 py-2">
         <div className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center">
           <img src={appIcon} alt="观墨" className="w-full h-full object-cover" />
         </div>
@@ -1287,36 +1312,28 @@ function GeneralSettings() {
             )}
           </div>
         </div>
-        <Button
-          type="default"
-          size="small"
-          loading={checkingUpdate}
-          disabled={!isTauri()}
-          onClick={() => void handleCheckUpdate()}
-        >
-          检查更新
-        </Button>
-      </div>
-      <div className="mt-3 space-y-2 rounded-xl border border-gm-border bg-gm-surface-elevated p-3 text-caption text-gm-text-secondary">
-        <div>
-          项目仓库：
-          <a
-            href="https://github.com/we-used-to-be/Guanmo-open"
-            className="ml-1 font-bold text-gm-primary hover:underline cursor-pointer"
-            onClick={(e) => { e.preventDefault(); openUrl('https://github.com/we-used-to-be/Guanmo-open', e.ctrlKey || e.metaKey) }}
+        <div className="ml-auto flex flex-wrap justify-end gap-2">
+          <Button
+            type="default"
+            size="small"
+            loading={loadingReleaseNotes}
+            disabled={!isTauri()}
+            onClick={() => void handleVersionOverview()}
           >
-            we-used-to-be/Guanmo-open
-          </a>
-        </div>
-        <div>
-          组件库：
-          <a
-            href="https://github.com/guokaigdg/animal-island-ui"
-            className="ml-1 font-bold text-gm-primary hover:underline cursor-pointer"
-            onClick={(e) => { e.preventDefault(); openUrl('https://github.com/guokaigdg/animal-island-ui', e.ctrlKey || e.metaKey) }}
+            版本速览
+          </Button>
+          <Button type="default" size="small" onClick={handleStarRepository}>
+            点亮stars
+          </Button>
+          <Button
+            type="default"
+            size="small"
+            loading={checkingUpdate}
+            disabled={!isTauri()}
+            onClick={() => void handleCheckUpdate()}
           >
-            guokaigdg/animal-island-ui
-          </a>
+            检查更新
+          </Button>
         </div>
       </div>
 
@@ -1353,6 +1370,18 @@ function GeneralSettings() {
           <Button type="text" size="small" loading={busy} onClick={handleClearSessions}>清空已保存会话</Button>
         </div>
       </div>
+      <Sep />
+
+      <SectionTitle>旧版数据迁移</SectionTitle>
+      {isTauri() ? (
+        <LegacyMigrationEntry />
+      ) : (
+        <div className="rounded-xl border border-gm-border bg-gm-surface-elevated px-3 py-2">
+          <p className="text-caption text-gm-text-secondary">
+            网页版不支持数据库迁移，请使用桌面版。
+          </p>
+        </div>
+      )}
       <Sep />
 
       <Collapse
