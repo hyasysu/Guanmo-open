@@ -16,6 +16,7 @@ export const UPDATE_STORAGE_KEYS = {
 const RELEASES_API_URL = 'https://api.github.com/repos/we-used-to-be/Guanmo-open/releases'
 const LATEST_RELEASE_URL = `${RELEASES_API_URL}/latest`
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
+const UPDATE_CHECK_TIMEOUT_MS = 15_000
 
 export const GITHUB_REPOSITORY_URL = 'https://github.com/we-used-to-be/Guanmo-open'
 export const LATEST_RELEASE_PAGE_URL = `${GITHUB_REPOSITORY_URL}/releases/latest`
@@ -114,6 +115,7 @@ async function requestCurrentVersionRelease(): Promise<ReleaseDetails> {
   const currentVersion = await getCurrentAppVersion()
   const response = await externalFetch(`${RELEASES_API_URL}/tags/v${encodeURIComponent(currentVersion)}`, {
     headers: githubReleaseHeaders(),
+    timeoutMs: UPDATE_CHECK_TIMEOUT_MS,
   })
   const release = await decodeReleaseResponse(response)
   return {
@@ -143,6 +145,7 @@ async function requestLatestRelease(manual: boolean): Promise<FetchedUpdateResul
         ...githubReleaseHeaders(),
         ...(etag ? { 'If-None-Match': etag } : {}),
       },
+      timeoutMs: UPDATE_CHECK_TIMEOUT_MS,
     }),
   ])
   if (response.status === 304) {

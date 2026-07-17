@@ -169,7 +169,7 @@ async function requestAuthorization(origin: string): Promise<OriginAuthorization
   return pending
 }
 
-async function createNativeRequest(input: string | URL | Request, init?: RequestInit): Promise<NativeHttpRequest> {
+async function createNativeRequest(input: string | URL | Request, init?: RequestInit & { timeoutMs?: number }): Promise<NativeHttpRequest> {
   const request = new Request(input, init)
   const headers = new Headers(request.headers)
   if (init?.headers) {
@@ -181,6 +181,7 @@ async function createNativeRequest(input: string | URL | Request, init?: Request
     method: request.method,
     headers: Array.from(headers.entries()),
     body,
+    timeoutMs: init?.timeoutMs,
   }
 }
 
@@ -246,7 +247,7 @@ function invokeStream(request: NativeHttpRequest, signal?: AbortSignal): Promise
   })
 }
 
-export async function externalFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+export async function externalFetch(input: string | URL | Request, init?: RequestInit & { timeoutMs?: number }): Promise<Response> {
   if (!isTauri()) {
     throw new UnsupportedCapabilityError('外部 API 请求')
   }
