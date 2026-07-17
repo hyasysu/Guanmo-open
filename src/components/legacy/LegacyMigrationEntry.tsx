@@ -10,15 +10,14 @@ import {
   detectLegacyData,
   getSqliteDatabasePath,
   getLegacyIndexedDBPath,
-  generateMigrationPrompt,
   type LegacyDetectionResult,
 } from '@/services/database/legacyDetector'
-import { GITHUB_REPOSITORY_URL } from '@/services/updateService'
+
+const MIGRATION_TOOL_URL = 'https://github.com/we-used-to-be/Guanmo-open/releases/tag/v1.0.0-migration-tool'
 
 export function LegacyMigrationEntry() {
   const [detection, setDetection] = useState<LegacyDetectionResult | null>(null)
   const [loading, setLoading] = useState(false)
-  const [copying, setCopying] = useState(false)
 
   const handleDetect = async () => {
     setLoading(true)
@@ -32,29 +31,12 @@ export function LegacyMigrationEntry() {
     }
   }
 
-  const handleCopyPrompt = async () => {
-    setCopying(true)
-    try {
-      const prompt = generateMigrationPrompt(
-        { documents: 0, chat_sessions: 0, chat_messages: 0, memories: 0 },
-        detection?.detectedCounts || { documents: 0, chat_sessions: 0, chat_messages: 0, memories: 0 },
-      )
-      await navigator.clipboard.writeText(prompt)
-      toast.success('已复制到剪贴板')
-    } catch {
-      toast.error('复制失败，请手动复制')
-    } finally {
-      setTimeout(() => setCopying(false), 1000)
-    }
-  }
-
-  const handleOpenReleases = async () => {
-    const url = `${GITHUB_REPOSITORY_URL}/releases`
+  const handleOpenMigrationTool = async () => {
     try {
       const { open } = await import('@tauri-apps/plugin-shell')
-      await open(url)
+      await open(MIGRATION_TOOL_URL)
     } catch {
-      window.open(url, '_blank', 'noopener,noreferrer')
+      window.open(MIGRATION_TOOL_URL, '_blank', 'noopener,noreferrer')
     }
   }
 
@@ -66,7 +48,7 @@ export function LegacyMigrationEntry() {
           <div>
             <p className="text-body text-gm-text">旧版数据迁移</p>
             <p className="text-caption text-gm-text-tertiary mt-0.5">
-              此前采用「SQLite 为主、IndexedDB 兜底」双库方案，现为便于业务迭代已切换为仅 SQLite，旧数据需迁移
+              此前采用「SQLite 为主、IndexedDB 兜底」双库方案，现已切换为仅 SQLite。迁移工程量较大，请斟酌是否迁移
             </p>
           </div>
           <Button
@@ -88,7 +70,7 @@ export function LegacyMigrationEntry() {
           ) : (
             <div className="space-y-3">
               <p className="text-body text-gm-text leading-relaxed">
-                检测到旧版 IndexedDB 数据。推荐复制提示词交给 AI 操作（成功率更高），也可下载迁移脚本自行处理。感谢配合。
+                检测到旧版 IndexedDB 数据。迁移涉及数据库结构转换和数据校验，工程量较大，请斟酌是否迁移。如需迁移，请下载迁移工具按指引操作。感谢配合，如有疑问请反馈至 GitHub。
               </p>
 
               {/* Paths */}
@@ -112,23 +94,13 @@ export function LegacyMigrationEntry() {
               </div>
 
               {/* Actions */}
-              <div className="flex gap-2">
-                <Button
-                  type="default"
-                  size="small"
-                  loading={copying}
-                  onClick={handleCopyPrompt}
-                >
-                  复制 AI 提示词
-                </Button>
-                <Button
-                  type="primary"
-                  size="small"
-                  onClick={handleOpenReleases}
-                >
-                  下载迁移工具
-                </Button>
-              </div>
+              <Button
+                type="default"
+                size="small"
+                onClick={handleOpenMigrationTool}
+              >
+                下载迁移工具
+              </Button>
             </div>
           )}
         </div>

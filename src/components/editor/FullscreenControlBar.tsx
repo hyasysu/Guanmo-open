@@ -371,7 +371,7 @@ export function FullscreenControlBar({
           }`}
           >
             <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
-              <BubbleButton onClick={onToggleFileDrawer} active={fileDrawerOpen} title="标签 / 文件 Ctrl+B">
+              <BubbleButton onClick={onToggleFileDrawer} active={fileDrawerOpen} title="标签 / 文件 Ctrl+B" variant="text">
                 标签 / 文件
               </BubbleButton>
               <Separator />
@@ -388,7 +388,7 @@ export function FullscreenControlBar({
             </div>
             <div className="flex flex-shrink-0 items-center gap-1">
               <Separator />
-              <BubbleButton onClick={toggleAiPanel} active={aiPanelOpen} title="切换 AI 助手">
+              <BubbleButton onClick={toggleAiPanel} active={aiPanelOpen} title="切换 AI 助手" variant="text">
                 AI
               </BubbleButton>
               <div data-fullscreen-padding-control="true">
@@ -398,6 +398,7 @@ export function FullscreenControlBar({
                   title="调整正文左右边距"
                   ariaExpanded={paddingCardOpen}
                   ariaControls="fullscreen-padding-card"
+                  variant="text"
                 >
                   边距
                 </BubbleButton>

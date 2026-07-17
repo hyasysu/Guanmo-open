@@ -5,15 +5,14 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from 'animal-island-ui'
-import { toast } from '@/services/toast'
 import {
   markLegacyDetected,
   getSqliteDatabasePath,
   getLegacyIndexedDBPath,
-  generateMigrationPrompt,
   type LegacyDetectionResult,
 } from '@/services/database/legacyDetector'
-import { GITHUB_REPOSITORY_URL } from '@/services/updateService'
+
+const MIGRATION_TOOL_URL = 'https://github.com/we-used-to-be/Guanmo-open/releases/tag/v1.0.0-migration-tool'
 
 interface LegacyDataNoticeModalProps {
   detection: LegacyDetectionResult
@@ -24,7 +23,6 @@ export function LegacyDataNoticeModal({ detection, onClose }: LegacyDataNoticeMo
   const [closing, setClosing] = useState(false)
   const closingRef = useRef(false)
   const closeTimerRef = useRef<number>()
-  const [copying, setCopying] = useState(false)
 
   const requestClose = useCallback(async () => {
     if (closingRef.current) return
@@ -52,29 +50,12 @@ export function LegacyDataNoticeModal({ detection, onClose }: LegacyDataNoticeMo
     }
   }, [])
 
-  const handleCopyPrompt = async () => {
-    setCopying(true)
-    try {
-      const prompt = generateMigrationPrompt(
-        { documents: 0, chat_sessions: 0, chat_messages: 0, memories: 0 },
-        detection.detectedCounts || { documents: 0, chat_sessions: 0, chat_messages: 0, memories: 0 },
-      )
-      await navigator.clipboard.writeText(prompt)
-      toast.success('已复制到剪贴板')
-    } catch {
-      toast.error('复制失败，请手动复制')
-    } finally {
-      setTimeout(() => setCopying(false), 1000)
-    }
-  }
-
-  const handleOpenReleases = async () => {
-    const url = `${GITHUB_REPOSITORY_URL}/releases`
+  const handleOpenMigrationTool = async () => {
     try {
       const { open } = await import('@tauri-apps/plugin-shell')
-      await open(url)
+      await open(MIGRATION_TOOL_URL)
     } catch {
-      window.open(url, '_blank', 'noopener,noreferrer')
+      window.open(MIGRATION_TOOL_URL, '_blank', 'noopener,noreferrer')
     }
   }
 
@@ -97,9 +78,9 @@ export function LegacyDataNoticeModal({ detection, onClose }: LegacyDataNoticeMo
           <p className="mt-1.5 text-caption text-gm-text-secondary leading-relaxed">
             此前观墨采用「SQLite 为主、IndexedDB 兜底」的双库保障方案。为简化架构、便于后续业务迭代，现已切换为仅 SQLite。
             <br />
-            旧版 IndexedDB 中的数据需要迁移到新库，推荐复制下方提示词交给 AI 操作，成功率更高；也可下载迁移脚本自行处理。
+            旧版 IndexedDB 中的数据需要迁移到新库。迁移涉及数据库结构转换和数据校验，工程量较大，请斟酌是否迁移。
             <br />
-            感谢配合，如有疑问请反馈至 GitHub。
+            如需迁移，请下载迁移工具按指引操作。感谢配合，如有疑问请反馈至 GitHub。
           </p>
         </header>
 
@@ -127,19 +108,11 @@ export function LegacyDataNoticeModal({ detection, onClose }: LegacyDataNoticeMo
         </div>
 
         {/* Actions */}
-        <div className="flex gap-3 px-5 pb-5">
+        <div className="px-5 pb-5">
           <Button
             type="default"
             block
-            loading={copying}
-            onClick={handleCopyPrompt}
-          >
-            复制 AI 提示词
-          </Button>
-          <Button
-            type="primary"
-            block
-            onClick={handleOpenReleases}
+            onClick={handleOpenMigrationTool}
           >
             下载迁移工具
           </Button>
