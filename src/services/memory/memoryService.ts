@@ -3,6 +3,8 @@ import type { Memory } from '@/services/database/persistence'
 import {
   persistMemory,
   loadAllMemories,
+  loadMemories,
+  loadMemoryEmbeddings,
   removeMemory,
   removeOldestAutoMemories,
 } from '@/services/database/persistence'
@@ -529,17 +531,22 @@ export async function searchMemories(
   const options: MemorySearchOptions = legacyTopKOnly
     ? { topK: topKOrOptions, threshold: 0 }
     : topKOrOptions
-  const allowedCategories = options.categories ? new Set(options.categories) : null
+  const requestedScopeKey = normalizeMemoryScopeKey(options.scopeType || 'global', options.scopeKey)
   const allMemories = filterInjectableMemories(
-    await loadAllMemories(undefined, ['active'])
+    await loadMemories({
+      statuses: ['active'],
+      scopeType: options.scopeType === 'project' ? 'project' : 'global',
+      scopeKey: options.scopeType === 'project' ? requestedScopeKey : null,
+      categories: options.categories,
+      includeEmbedding: false,
+    })
   ).filter((memory) => isMemoryVisibleInScope(
     memory,
     options.scopeType === 'project' ? options.scopeKey : null
-  ) && (!allowedCategories || allowedCategories.has(memory.category)))
+  ))
   if (allMemories.length === 0) return []
 
   const mode = options.mode || 'light'
-  const requestedScopeKey = normalizeMemoryScopeKey(options.scopeType || 'global', options.scopeKey)
   const topK = options.topK ?? (mode === 'strong' ? STRONG_MEMORY_TOP_K : LIGHT_MEMORY_TOP_K)
   const threshold = options.threshold ?? (mode === 'strong' ? STRONG_MEMORY_THRESHOLD : LIGHT_MEMORY_THRESHOLD)
   let queryEmbedding: number[] | null = null
@@ -566,6 +573,14 @@ export async function searchMemories(
         : (mode === 'strong' ? sortMemoryScores([...lexicalScored], requestedScopeKey) : [])
     ).slice(0, mode === 'strong' ? STRONG_EMBEDDING_CANDIDATE_LIMIT : LIGHT_EMBEDDING_CANDIDATE_LIMIT)
     : lexicalScored
+
+  if (queryEmbedding && candidates.length > 0) {
+    const storedEmbeddings = await loadMemoryEmbeddings(candidates.map(({ memory }) => memory.id))
+    for (const { memory } of candidates) {
+      const stored = storedEmbeddings.get(memory.id)
+      if (stored) Object.assign(memory, stored)
+    }
+  }
 
   // 使用batchEmbedding批量获取embedding，减少HTTP请求
   if (queryEmbedding && options.batchEmbedding && candidates.length > 0) {

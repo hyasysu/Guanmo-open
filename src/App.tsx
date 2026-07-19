@@ -5,9 +5,7 @@ import { ToastContainer } from './components/common/ToastContainer'
 import {
   getDatabaseRuntimeState,
   initDatabase,
-  subscribeDatabaseRuntimeState,
 } from './services/database/db'
-import { loadAllMemories, loadChatSessions } from './services/database/persistence'
 import { hydrateSettingsSecrets } from './services/settingsSecrets'
 import { initAiClient, initEmbeddingClient, isLocalApi, validateAiStatus } from './services/ai/aiClient'
 import { syncDocumentTheme, useSettingsStore } from './stores/settingsStore'
@@ -15,7 +13,11 @@ import { useAppStore } from './stores/appStore'
 import { useExternalFileOpen } from './hooks/useExternalFileOpen'
 import { Cursor } from 'animal-island-ui'
 import { invoke } from '@tauri-apps/api/core'
-import { restorePersistedTabs } from './services/sessionRestore'
+import {
+  getRestorablePersistedTabs,
+  mergeBackgroundRestoredTab,
+  restorePersistedTabs,
+} from './services/sessionRestore'
 import { useEditorStore } from './stores/editorStore'
 import { isTauri } from './hooks/useTauri'
 import { GlobalTooltip } from './components/common/Tooltip'
@@ -32,8 +34,6 @@ type CursorPhase = 'entering' | 'active' | 'exiting'
 function logDuration(label: string, startedAt: number) {
   console.info(`[Perf] ${label}: ${Math.round(performance.now() - startedAt)}ms`)
 }
-
-let businessDataHydration: Promise<void> | null = null
 
 /**
  * 恢复标签页（立即执行）
@@ -56,15 +56,43 @@ async function restoreTabs(): Promise<void> {
   const restoreStartedAt = performance.now()
   const state = useEditorStore.getState()
   console.log('[App] Restoring tabs:', state.tabs.length, 'tabs')
-  const tabs = await restorePersistedTabs(state.tabs)
-  console.log('[App] Restored tabs:', tabs.map(t => ({ id: t.id, title: t.title, hasContent: !!t.content, contentLength: t.content?.length })))
-  const validIds = new Set(tabs.map((tab) => tab.id))
+  const restorableTabs = getRestorablePersistedTabs(state.tabs)
+  const validIds = new Set(restorableTabs.map((tab) => tab.id))
+  const activeTabId = state.activeTabId && validIds.has(state.activeTabId)
+    ? state.activeTabId
+    : restorableTabs[0]?.id ?? null
+  const activeTab = restorableTabs.find((tab) => tab.id === activeTabId)
+  const [restoredActiveTab] = activeTab
+    ? await restorePersistedTabs([activeTab])
+    : []
+  const initialTabs = restorableTabs.map((tab) =>
+    tab.id === activeTabId ? (restoredActiveTab ?? tab) : tab
+  )
   useEditorStore.setState({
-    tabs,
-    activeTabId: state.activeTabId && validIds.has(state.activeTabId) ? state.activeTabId : tabs[0]?.id ?? null,
+    tabs: initialTabs,
+    activeTabId,
     rightPaneTabId: state.rightPaneTabId && validIds.has(state.rightPaneTabId) ? state.rightPaneTabId : null,
   })
-  logDuration('session restore', restoreStartedAt)
+  logDuration('active tab restore', restoreStartedAt)
+
+  const backgroundTabs = restorableTabs.filter((tab) => tab.id !== activeTabId)
+  void restorePersistedTabs(backgroundTabs, {
+    concurrency: 3,
+    onTabRestored(restoredTab, index) {
+      const originalTab = backgroundTabs[index]
+      useEditorStore.setState((current) => ({
+        tabs: current.tabs.map((tab) =>
+          tab.id === originalTab.id
+            ? mergeBackgroundRestoredTab(tab, originalTab, restoredTab)
+            : tab
+        ),
+      }))
+    },
+  }).then(() => {
+    logDuration('background tab restore', restoreStartedAt)
+  }).catch((error) => {
+    console.warn('[App] Background tab restore failed:', error)
+  })
 }
 
 /**
@@ -107,33 +135,6 @@ function scheduleIdleWarmup(): void {
     },
     2,
     'Embedding 客户端初始化'
-  )
-
-  // 优先级 3: 聊天会话加载
-  scheduleIdleTask(
-    SINGLETON_IDS.CHAT_SESSIONS,
-    async () => {
-      const startTime = performance.now()
-      await loadChatSessions(0, 50)
-      logDuration('chat sessions load', startTime)
-    },
-    3,
-    '聊天会话加载'
-  )
-
-  // 优先级 4: 记忆加载
-  scheduleIdleTask(
-    SINGLETON_IDS.MEMORIES,
-    async () => {
-      await singletonManager.init(SINGLETON_IDS.MEMORIES, async () => {
-        const startTime = performance.now()
-        const memories = await loadAllMemories()
-        logDuration('memories load', startTime)
-        return memories
-      })
-    },
-    4,
-    '记忆加载'
   )
 
   // 向量库延迟加载：不在启动时预热，首次使用 RAG 时才加载
@@ -362,25 +363,6 @@ function App() {
         // ==================== 首屏后：注册闲时预热任务 ====================
         scheduleIdleWarmup()
 
-        // ==================== 监听数据库重新连接（如果需要） ====================
-        let bootstrapComplete = true
-        const unsubscribeDatabase = subscribeDatabaseRuntimeState((state) => {
-          if (!bootstrapComplete) return
-          if (state.status === 'ready') {
-            // 数据库重新连接时，重新加载数据
-            console.log('[App] Database reconnected, reloading data')
-            scheduleIdleTask('reload-data', async () => {
-              await loadChatSessions(0, 50)
-            }, 1, '重新加载会话数据')
-          }
-        })
-
-        // 清理函数
-        return () => {
-          bootstrapComplete = false
-          unsubscribeDatabase()
-        }
-
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         console.error('[App] Database init failed:', msg)
@@ -391,10 +373,9 @@ function App() {
       }
     }
 
-    const cleanupPromise = init()
+    void init()
     return () => {
       cancelled = true
-      cleanupPromise.then((cleanup) => cleanup?.())
     }
   }, [])
 

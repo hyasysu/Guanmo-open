@@ -5,7 +5,7 @@
  */
 
 import { isTauri } from '@/hooks/useTauri'
-import { DB_SCHEMA, DB_MIGRATIONS, DB_NAME } from './schema'
+import { DB_SCHEMA, DB_MIGRATIONS, DB_NAME, DB_POST_MIGRATION_STATEMENTS } from './schema'
 
 // --- Database abstraction ---
 
@@ -31,6 +31,9 @@ class TauriSQLiteAdapter implements DBAdapter {
       await this.db.execute(stmt)
     }
     await this.runMigrations()
+    for (const statement of DB_POST_MIGRATION_STATEMENTS) {
+      await this.db.execute(statement)
+    }
     await this.db.execute('CREATE INDEX IF NOT EXISTS idx_chat_messages_parent_id ON chat_messages(parent_id)')
   }
 

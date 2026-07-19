@@ -76,25 +76,34 @@ function getPreviewUpdateDelay(content: string) {
   return PREVIEW_UPDATE_DELAY
 }
 
-function useScheduledPreviewContent(content: string, documentKey: string | null | undefined) {
+function useScheduledPreviewContent(
+  content: string,
+  documentKey: string | null | undefined,
+  enabled = true
+) {
   const [preview, setPreview] = useState<ScheduledPreviewContent>({
     content,
     version: 0,
     pending: false,
   })
   const previousKeyRef = useRef(documentKey)
+  const previousEnabledRef = useRef(enabled)
   const versionRef = useRef(0)
   const switchedDocument = previousKeyRef.current !== documentKey
+  const becameEnabled = enabled && !previousEnabledRef.current
   let visiblePreview = preview
 
-  if (switchedDocument) {
+  if (switchedDocument || becameEnabled) {
     previousKeyRef.current = documentKey
+    previousEnabledRef.current = enabled
     versionRef.current += 1
     visiblePreview = { content, version: versionRef.current, pending: false }
   }
 
   useLayoutEffect(() => {
-    if (switchedDocument) {
+    previousEnabledRef.current = enabled
+    if (!enabled) return
+    if (switchedDocument || becameEnabled) {
       setPreview({ content, version: versionRef.current, pending: false })
       return
     }
@@ -103,12 +112,6 @@ function useScheduledPreviewContent(content: string, documentKey: string | null 
       return
     }
 
-    setPreview((current) => (
-      current.content === content
-        ? current
-        : { ...current, pending: true }
-    ))
-
     const version = versionRef.current + 1
     const timer = setTimeout(() => {
       versionRef.current = version
@@ -116,9 +119,11 @@ function useScheduledPreviewContent(content: string, documentKey: string | null 
     }, getPreviewUpdateDelay(content))
 
     return () => clearTimeout(timer)
-  }, [content, documentKey, preview.content, switchedDocument])
+  }, [becameEnabled, content, documentKey, enabled, preview.content, switchedDocument])
 
-  return visiblePreview
+  return enabled
+    ? { ...visiblePreview, pending: visiblePreview.content !== content }
+    : visiblePreview
 }
 
 export function EditorArea() {
@@ -205,34 +210,37 @@ export function EditorArea() {
   if (viewMode === 'dual-preview' || prewarmRightPreview) {
     rightPreviewMountedRef.current = true
   }
+  const leftPreviewWorkEnabled = viewMode !== 'edit' && (leftPreviewVisible || prewarmLeftPreview)
+  const rightPreviewWorkEnabled = viewMode !== 'edit' && (viewMode === 'dual-preview' || prewarmRightPreview)
   const activePreview = useScheduledPreviewContent(activeTab?.content || '', activeTab?.id)
-  const rightPreview = useScheduledPreviewContent(rightTab?.content || '', rightTab?.id)
+  const rightPreview = useScheduledPreviewContent(rightTab?.content || '', rightTab?.id, rightPreviewWorkEnabled)
   const leftPreviewRenderRef = useRef({
     content: activePreview.content,
     filePath: activeTab?.filePath,
   })
-  if (leftPreviewVisible || prewarmLeftPreview) {
+  if (leftPreviewWorkEnabled) {
     leftPreviewRenderRef.current = {
       content: activePreview.content,
       filePath: activeTab?.filePath,
     }
   }
-  const toc = useMemo(() => extractToc(activeTab?.content || ''), [activeTab?.content])
-  const rightToc = useMemo(() => extractToc(rightTab?.content || ''), [rightTab?.content])
+  const toc = useMemo(() => extractToc(activePreview.content), [activePreview.content])
+  const rightToc = useMemo(() => extractToc(rightPreview.content), [rightPreview.content])
+  const modeDerivationsEnabled = viewMode !== 'edit'
   const activeContentSignature = useMemo(
-    () => getContentSignature(activeTab?.content || ''),
-    [activeTab?.content]
+    () => modeDerivationsEnabled ? getContentSignature(activePreview.content) : 'edit',
+    [activePreview.content, modeDerivationsEnabled]
   )
   const activeOriginalSignature = useMemo(
-    () => getContentSignature(activeTab?.originalContent || ''),
-    [activeTab?.originalContent]
+    () => modeDerivationsEnabled ? getContentSignature(activeTab?.originalContent || '') : 'edit',
+    [activeTab?.originalContent, modeDerivationsEnabled]
   )
   const activeDiffLineCount = useMemo(
-    () => Math.max(
+    () => modeDerivationsEnabled ? Math.max(
       countMarkdownLines(activeTab?.originalContent || ''),
-      countMarkdownLines(activeTab?.content || '')
-    ),
-    [activeTab?.content, activeTab?.originalContent]
+      countMarkdownLines(activePreview.content)
+    ) : 1,
+    [activePreview.content, activeTab?.originalContent, modeDerivationsEnabled]
   )
 
   const getModeRenderKey = useCallback((mode: PrewarmTargetMode) => {
@@ -243,7 +251,7 @@ export function EditorArea() {
       : `${mode}:${base}`
   }, [activeContentSignature, activeOriginalSignature, activeTab?.id])
 
-  const warmScope = activeTab?.id
+  const warmScope = modeDerivationsEnabled && activeTab?.id
     ? `${activeTab.id}:${activeContentSignature}:${activeOriginalSignature}`
     : null
   if (warmScopeRef.current !== warmScope) {
@@ -314,9 +322,10 @@ export function EditorArea() {
   }, [modePrewarm])
 
   useEffect(() => {
+    if (viewMode === 'edit') return
     cancelModePrewarm()
     setPrewarmedModeKeys({})
-  }, [activeTab?.id, activeTab?.content, activeTab?.originalContent, cancelModePrewarm])
+  }, [activeTab?.id, activePreview.content, activeTab?.originalContent, cancelModePrewarm, viewMode])
 
   useEffect(() => {
     if (!activeTab?.id || modePrewarm === 'off' || viewMode === 'edit') return
@@ -671,25 +680,27 @@ export function EditorArea() {
   }, [activeTab?.id, activePreview.version, syncEditorToPreviewLine, syncPreviewToEditorLine, syncScroll, viewMode])
 
   const handleSave = useCallback(async () => {
-    if (!activeTab) return
+    const state = useEditorStore.getState()
+    const tab = state.tabs.find((item) => item.id === state.activeTabId)
+    if (!tab) return
     try {
-      if (activeTab.filePath) {
-        await saveFile(activeTab.filePath, activeTab.content)
-        scheduleMarkdownDocumentIndex(activeTab.filePath, activeTab.title, activeTab.content)
+      if (tab.filePath) {
+        await saveFile(tab.filePath, tab.content)
+        scheduleMarkdownDocumentIndex(tab.filePath, tab.title, tab.content)
         useEditorStore.setState((s) => ({
           tabs: s.tabs.map((t) =>
-            t.id === activeTab.id ? { ...t, savedContent: activeTab.content, modified: false } : t
+            t.id === tab.id ? { ...t, savedContent: tab.content, modified: false } : t
           ),
         }))
         toast.success('已保存')
       } else {
         const { saveFileAs } = await import('@/services/fileSystem')
-        const result = await saveFileAs(activeTab.content)
+        const result = await saveFileAs(tab.content)
         if (result) {
           scheduleMarkdownDocumentIndex(result.path, result.name, result.content)
           useEditorStore.setState((s) => ({
             tabs: s.tabs.map((t) =>
-              t.id === activeTab.id
+              t.id === tab.id
                 ? { ...t, filePath: result.path, title: result.name, savedContent: result.content, modified: false }
                 : t
             ),
@@ -701,7 +712,7 @@ export function EditorArea() {
       console.error('Save failed:', err)
       toast.error(describeFileOperationError(err, '保存失败'))
     }
-  }, [activeTab])
+  }, [])
 
   const persistTabContent = useCallback(async (tabId: string, nextContent: string) => {
     const targetTab = useEditorStore.getState().tabs.find((tab) => tab.id === tabId)

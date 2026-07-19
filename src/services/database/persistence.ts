@@ -6,6 +6,7 @@
 import { getDatabase, isDatabaseReady, serializeDatabaseTransaction } from './db'
 import type { Document, Chunk } from '@/services/rag/types'
 import { normalizeFilePath } from '@/services/pathIdentity'
+import { buildMemoryEmbeddingQuery, buildMemoryQuery, type MemoryQueryFilters } from './memoryQuery'
 
 interface DocumentRow {
   id: string
@@ -657,57 +658,83 @@ export async function persistMemory(memory: Memory): Promise<void> {
   )
 }
 
-export async function loadAllMemories(category?: string, statuses?: MemoryStatus[]): Promise<Memory[]> {
+export interface LoadMemoryOptions extends Omit<MemoryQueryFilters, 'statuses'> {
+  statuses?: readonly MemoryStatus[]
+}
+
+interface MemoryRow {
+  id: string
+  content: string
+  category: string
+  source: string
+  locked: number
+  status: string
+  created_at: number
+  updated_at: number
+  scope_type: string
+  scope_key: string | null
+  subject: string | null
+  fact_key: string | null
+  fact_value: string | null
+  confidence: number
+  evidence: string | null
+  supersedes_id: string | null
+  embedding?: string | null
+  embedding_model: string | null
+  content_hash: string | null
+}
+
+function mapMemoryRow(row: MemoryRow): Memory {
+  return {
+    id: row.id,
+    content: row.content,
+    category: row.category,
+    source: (row.source || 'auto_extracted') as MemorySource,
+    locked: row.locked === 1,
+    status: (row.status || 'active') as MemoryStatus,
+    scopeType: (row.scope_type === 'project' ? 'project' : 'global') as Memory['scopeType'],
+    scopeKey: row.scope_key || null,
+    subject: row.subject || null,
+    factKey: row.fact_key || null,
+    factValue: row.fact_value || null,
+    confidence: Number.isFinite(row.confidence) ? row.confidence : 1,
+    evidence: row.evidence || null,
+    supersedesId: row.supersedes_id || null,
+    embedding: row.embedding ? safeParseEmbedding(row.embedding) : null,
+    embeddingModel: row.embedding_model || null,
+    contentHash: row.content_hash || null,
+    createdAt: normalizeMemoryTimestamp(row.created_at),
+    updatedAt: normalizeMemoryTimestamp(row.updated_at),
+  }
+}
+
+export async function loadMemories(options: LoadMemoryOptions = {}): Promise<Memory[]> {
   if (!isDatabaseReady()) return []
   const db = getDatabase()
-  const sql = category
-    ? 'SELECT * FROM memories WHERE category = $1 ORDER BY updated_at DESC'
-    : 'SELECT * FROM memories ORDER BY updated_at DESC'
-  const params = category ? [category] : []
-  const rows = await db.select<{
+  const query = buildMemoryQuery(options)
+  const rows = await db.select<MemoryRow>(query.sql, query.params)
+  return rows.map(mapMemoryRow)
+}
+
+export async function loadAllMemories(category?: string, statuses?: MemoryStatus[]): Promise<Memory[]> {
+  return loadMemories({ category, statuses, includeEmbedding: true })
+}
+
+export async function loadMemoryEmbeddings(ids: readonly string[]): Promise<Map<string, Pick<Memory, 'embedding' | 'embeddingModel' | 'contentHash'>>> {
+  if (!isDatabaseReady()) return new Map()
+  const query = buildMemoryEmbeddingQuery(ids)
+  if (!query) return new Map()
+  const rows = await getDatabase().select<{
     id: string
-    content: string
-    category: string
-    source: string
-    locked: number
-    status: string
-    created_at: number
-    updated_at: number
-    scope_type: string
-    scope_key: string | null
-    subject: string | null
-    fact_key: string | null
-    fact_value: string | null
-    confidence: number
-    evidence: string | null
-    supersedes_id: string | null
     embedding: string | null
     embedding_model: string | null
     content_hash: string | null
-  }>(sql, params)
-  return rows
-    .map((row) => ({
-      id: row.id,
-      content: row.content,
-      category: row.category,
-      source: (row.source || 'auto_extracted') as MemorySource,
-      locked: row.locked === 1,
-      status: (row.status || 'active') as MemoryStatus,
-      scopeType: (row.scope_type === 'project' ? 'project' : 'global') as Memory['scopeType'],
-      scopeKey: row.scope_key || null,
-      subject: row.subject || null,
-      factKey: row.fact_key || null,
-      factValue: row.fact_value || null,
-      confidence: Number.isFinite(row.confidence) ? row.confidence : 1,
-      evidence: row.evidence || null,
-      supersedesId: row.supersedes_id || null,
-      embedding: row.embedding ? safeParseEmbedding(row.embedding) : null,
-      embeddingModel: row.embedding_model || null,
-      contentHash: row.content_hash || null,
-      createdAt: normalizeMemoryTimestamp(row.created_at),
-      updatedAt: normalizeMemoryTimestamp(row.updated_at),
-    }))
-    .filter((memory) => !statuses || statuses.includes(memory.status))
+  }>(query.sql, query.params)
+  return new Map(rows.map((row) => [row.id, {
+    embedding: row.embedding ? safeParseEmbedding(row.embedding) : null,
+    embeddingModel: row.embedding_model || null,
+    contentHash: row.content_hash || null,
+  }]))
 }
 
 export async function updateMemoryContent(id: string, content: string): Promise<void> {

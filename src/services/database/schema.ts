@@ -218,6 +218,11 @@ export const DB_MIGRATIONS = [
   },
 ] as const
 
+export const DB_POST_MIGRATION_STATEMENTS = [
+  `CREATE INDEX IF NOT EXISTS idx_memories_retrieval
+   ON memories(status, scope_type, scope_key, category, updated_at DESC)`,
+] as const
+
 export const DB_NAME = 'guanmo.db'
 
 export function splitDatabaseSchemaStatements(schema: string): string[] {

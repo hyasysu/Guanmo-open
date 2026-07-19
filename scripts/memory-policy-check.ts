@@ -18,7 +18,7 @@ import {
   shouldExtractMemoryCandidate,
   validateMemoryCandidate,
 } from '../src/services/memory/memoryPolicy'
-import { DB_MIGRATIONS, DB_SCHEMA } from '../src/services/database/schema'
+import { DB_MIGRATIONS, DB_POST_MIGRATION_STATEMENTS, DB_SCHEMA } from '../src/services/database/schema'
 
 assert.equal(classifyMemoryRetrievalIntent('你还记得我的偏好吗'), 'strong')
 assert.equal(classifyMemoryRetrievalIntent('查询一下我的长期记忆'), 'strong')
@@ -215,4 +215,5 @@ for (const column of requiredMemoryColumns) {
 }
 assert.match(DB_SCHEMA, /scope_type TEXT NOT NULL DEFAULT 'global'/)
 assert.match(DB_SCHEMA, /confidence REAL NOT NULL DEFAULT 1/)
+assert.equal(DB_POST_MIGRATION_STATEMENTS.some((sql) => sql.includes('idx_memories_retrieval')), true)
 console.log('memory policy checks passed')

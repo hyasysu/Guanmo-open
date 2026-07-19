@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useMemo } from 'react'
-import { EditorState } from '@codemirror/state'
+import { EditorState, type Text } from '@codemirror/state'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, indentWithTab, undoDepth, redoDepth } from '@codemirror/commands'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
@@ -12,6 +12,7 @@ import { useEditorStore } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { setActiveEditorView } from '@/services/editorViewRef'
 import { useEditorHistoryStore } from '@/stores/editorHistoryStore'
+import { DeferredContentEmitter } from '@/services/editorInputBuffer'
 
 interface CodeMirrorEditorProps {
   content: string
@@ -127,9 +128,8 @@ const markdownHighlightStyle = HighlightStyle.define([
 const saveKeymap = keymap.of([
   {
     key: 'Ctrl-s',
-    run: (view) => {
-      const event = new CustomEvent('cm-save', { detail: { content: view.state.doc.toString() } })
-      window.dispatchEvent(event)
+    run: () => {
+      window.dispatchEvent(new CustomEvent('cm-save'))
       return true
     },
   },
@@ -143,6 +143,7 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
   onChangeRef.current = onChange
   const lastEmittedContentRef = useRef(content)
   const previousDocumentKeyRef = useRef(documentKey)
+  const inputBufferRef = useRef<DeferredContentEmitter<Text> | null>(null)
 
   const onSaveRef = useRef(onSave)
   onSaveRef.current = onSave
@@ -161,9 +162,8 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
   )
 
   useEffect(() => {
-    const handleSave = (e: Event) => {
-      const customEvent = e as CustomEvent<{ content: string }>
-      onChangeRef.current(customEvent.detail.content)
+    const handleSave = () => {
+      inputBufferRef.current?.flush()
       onSaveRef.current?.()
     }
     window.addEventListener('cm-save', handleSave)
@@ -174,12 +174,23 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
   useLayoutEffect(() => {
     if (!containerRef.current) return
 
+    inputBufferRef.current?.flush()
+
     const documentChanged = previousDocumentKeyRef.current !== documentKey
     previousDocumentKeyRef.current = documentKey
     const currentDoc = documentChanged
       ? content
       : viewRef.current?.state.doc.toString() ?? content
     lastEmittedContentRef.current = currentDoc
+    inputBufferRef.current?.dispose()
+    const inputBuffer = new DeferredContentEmitter<Text>(
+      (doc) => doc.toString(),
+      (nextContent) => {
+        lastEmittedContentRef.current = nextContent
+        onChangeRef.current(nextContent)
+      }
+    )
+    inputBufferRef.current = inputBuffer
 
     // Destroy old editor
     if (viewRef.current) {
@@ -189,9 +200,7 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
 
     const updateListener = EditorView.updateListener.of((update) => {
       if (update.docChanged) {
-        const nextContent = update.state.doc.toString()
-        lastEmittedContentRef.current = nextContent
-        onChangeRef.current(nextContent)
+        inputBuffer.push(update.state.doc, update.state.doc.length)
       }
       // 更新 undo/redo 状态
       const { setCanUndo, setCanRedo } = useEditorHistoryStore.getState()
@@ -265,6 +274,9 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
     setCanRedo(false)
 
     return () => {
+      inputBuffer.flush()
+      inputBuffer.dispose()
+      if (inputBufferRef.current === inputBuffer) inputBufferRef.current = null
       view.destroy()
       viewRef.current = null
       setActiveEditorView(null)
@@ -278,6 +290,10 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
     const view = viewRef.current
     if (!view) return
     if (content === lastEmittedContentRef.current) return
+    if (inputBufferRef.current?.hasPending) {
+      inputBufferRef.current.flush()
+      return
+    }
     const currentContent = view.state.doc.toString()
     if (content !== currentContent) {
       view.dispatch({
