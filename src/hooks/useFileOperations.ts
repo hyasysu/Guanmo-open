@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useEditorStore } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { openFile, saveFile } from '@/services/fileSystem'
+import { openFile, saveFile, saveFileAs } from '@/services/fileSystem'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
@@ -50,25 +50,14 @@ export function useFileOperations() {
         await saveFile(tab.filePath, tab.content)
         scheduleMarkdownDocumentIndex(tab.filePath, tab.title, tab.content)
         // Clear modified flag
-        useEditorStore.setState((s) => ({
-          tabs: s.tabs.map((t) =>
-            t.id === tab.id ? { ...t, savedContent: tab.content, modified: false } : t
-          ),
-        }))
+        useEditorStore.getState().markTabSaved(tab.id, tab.content)
         toast.success('已保存')
       } else {
         // Save As
-        const { saveFileAs } = await import('@/services/fileSystem')
         const result = await saveFileAs(tab.content)
         if (result) {
           scheduleMarkdownDocumentIndex(result.path, result.name, result.content)
-          useEditorStore.setState((s) => ({
-            tabs: s.tabs.map((t) =>
-              t.id === tab.id
-                ? { ...t, filePath: result.path, title: result.name, savedContent: result.content, modified: false }
-                : t
-            ),
-          }))
+          useEditorStore.getState().saveTabAs(tab.id, result.path, result.name, result.content)
           toast.success('已保存')
         }
       }
@@ -110,13 +99,7 @@ export function useFileOperations() {
           await saveFile(tab.filePath, content)
           scheduleMarkdownDocumentIndex(tab.filePath, tab.title, content, AUTO_SAVE_INDEX_DELAY)
           autoSaveRetriesRef.current.delete(tab.id)
-          useEditorStore.setState((s) => ({
-            tabs: s.tabs.map((t) =>
-              t.id === tab.id && t.content === content
-                ? { ...t, savedContent: content, modified: false }
-                : t
-            ),
-          }))
+          useEditorStore.getState().markTabSaved(tab.id, content)
         } catch (err) {
           const nextRetries = retries + 1
           autoSaveRetriesRef.current.set(tab.id, nextRetries)

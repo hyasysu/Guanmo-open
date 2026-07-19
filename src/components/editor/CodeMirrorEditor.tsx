@@ -3,7 +3,6 @@ import { EditorState, type Text } from '@codemirror/state'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, indentWithTab, undoDepth, redoDepth } from '@codemirror/commands'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
-import { languages } from '@codemirror/language-data'
 import { highlightSelectionMatches } from '@codemirror/search'
 import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, indentUnit, HighlightStyle } from '@codemirror/language'
 import { autocompletion, completionKeymap } from '@codemirror/autocomplete'
@@ -13,6 +12,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { setActiveEditorView } from '@/services/editorViewRef'
 import { useEditorHistoryStore } from '@/stores/editorHistoryStore'
 import { DeferredContentEmitter } from '@/services/editorInputBuffer'
+import { editorCodeLanguages } from '@/services/editorCodeLanguages'
 
 interface CodeMirrorEditorProps {
   content: string
@@ -220,7 +220,7 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
         highlightSelectionMatches(),
         syntaxHighlighting(markdownHighlightStyle),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-        markdown({ base: markdownLanguage, codeLanguages: languages }),
+        markdown({ base: markdownLanguage, codeLanguages: editorCodeLanguages }),
         indentUnit.of(' '.repeat(editorSettings.tabSize)),
         guanmoTheme,
         saveKeymap,

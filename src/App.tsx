@@ -15,7 +15,6 @@ import { Cursor } from 'animal-island-ui'
 import { invoke } from '@tauri-apps/api/core'
 import {
   getRestorablePersistedTabs,
-  mergeBackgroundRestoredTab,
   restorePersistedTabs,
 } from './services/sessionRestore'
 import { useEditorStore } from './stores/editorStore'
@@ -49,7 +48,7 @@ async function restoreTabs(): Promise<void> {
   }
 
   if (openedFromFileAssociation) {
-    useEditorStore.setState({ tabs: [], activeTabId: null, rightPaneTabId: null, viewMode: 'edit' })
+    useEditorStore.getState().resetTabsForExternalOpen()
     return
   }
 
@@ -68,11 +67,11 @@ async function restoreTabs(): Promise<void> {
   const initialTabs = restorableTabs.map((tab) =>
     tab.id === activeTabId ? (restoredActiveTab ?? tab) : tab
   )
-  useEditorStore.setState({
-    tabs: initialTabs,
+  state.restoreTabs(
+    initialTabs,
     activeTabId,
-    rightPaneTabId: state.rightPaneTabId && validIds.has(state.rightPaneTabId) ? state.rightPaneTabId : null,
-  })
+    state.rightPaneTabId && validIds.has(state.rightPaneTabId) ? state.rightPaneTabId : null,
+  )
   logDuration('active tab restore', restoreStartedAt)
 
   const backgroundTabs = restorableTabs.filter((tab) => tab.id !== activeTabId)
@@ -80,13 +79,7 @@ async function restoreTabs(): Promise<void> {
     concurrency: 3,
     onTabRestored(restoredTab, index) {
       const originalTab = backgroundTabs[index]
-      useEditorStore.setState((current) => ({
-        tabs: current.tabs.map((tab) =>
-          tab.id === originalTab.id
-            ? mergeBackgroundRestoredTab(tab, originalTab, restoredTab)
-            : tab
-        ),
-      }))
+      useEditorStore.getState().mergeRestoredTab(originalTab, restoredTab)
     },
   }).then(() => {
     logDuration('background tab restore', restoreStartedAt)

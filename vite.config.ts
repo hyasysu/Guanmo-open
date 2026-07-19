@@ -46,7 +46,7 @@ export default defineConfig(({ mode }) => ({
               ],
               'codemirror-lang': [
                 '@codemirror/lang-markdown',
-                '@codemirror/language-data',
+                path.resolve(__dirname, './src/services/editorCodeLanguages.ts'),
               ],
             },
       },

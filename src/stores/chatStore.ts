@@ -3,7 +3,6 @@ import type { ChatMessage, ChatMessageContextMeta, ChatMessageSource, EditConfir
 import type { AgentStep } from '@/services/agent/types'
 import type { ContextTag } from '@/types/contextTag'
 import { MAX_CONTEXT_TAGS } from '@/types/contextTag'
-import { useEditorStore } from './editorStore'
 import {
   persistChatSession,
   persistChatMessage,
@@ -76,6 +75,8 @@ interface ChatState {
   setStreaming: (v: boolean) => void
   setError: (err: string | null) => void
   clearMessages: () => void
+  removeSessionMessages: (sessionId: string) => void
+  resetHistoryState: () => void
   setAgentMode: (v: boolean) => void
   addAgentStep: (step: AgentStep) => void
   clearAgentSteps: () => void
@@ -89,6 +90,7 @@ interface ChatState {
   removeContextTag: (id: string) => void
   clearContextTags: () => void
   setPendingEdit: (edit: PendingEdit | null) => void
+  completePendingEdit: (edit: PendingEdit) => void
   applyPendingEdit: (editId?: string) => void
   rejectPendingEdit: (editId?: string) => void
   createUndoPendingEdit: (editId: string) => void
@@ -179,6 +181,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
     hasMoreHistory: true,
   }),
 
+  removeSessionMessages: (sessionId) => set((s) => ({
+    messages: s.messages.filter((message) => message.sessionId !== sessionId),
+  })),
+
+  resetHistoryState: () => set({
+    messages: [],
+    currentSessionId: createSessionId(),
+    historyOffset: 0,
+    hasMoreHistory: false,
+    streaming: false,
+    error: null,
+    agentMode: false,
+    agentSteps: [],
+    ragStatus: 'idle',
+    ragSources: [],
+    timeline: [],
+    draftInput: '',
+    pendingEdit: null,
+    contextTags: [],
+  }),
+
   setAgentMode: (v) => set({ agentMode: v }),
   addAgentStep: (step) => set((s) => ({ agentSteps: [...s.agentSteps, step] })),
   clearAgentSteps: () => set({ agentSteps: [] }),
@@ -243,38 +266,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       : s.messages,
   })),
 
-  applyPendingEdit: (editId) => {
-    let applied = false
-
-    set((s) => {
-      const pendingEdit = editId
-        ? s.messages.find((msg) => msg.editConfirmation?.id === editId)?.editConfirmation
-        : s.pendingEdit
-      if (!pendingEdit || pendingEdit.status !== 'pending') return s
-
-      const { tabId, newText } = pendingEdit
-      const editorState = useEditorStore.getState()
-      const tab = editorState.tabs.find((current) => current.id === tabId)
-
-      if (tab) {
-        const { replaceFrom, replaceTo } = pendingEdit
-        const index = typeof replaceFrom === 'number' && typeof replaceTo === 'number'
-          ? (tab.content.slice(replaceFrom, replaceTo) === pendingEdit.oldText ? replaceFrom : -1)
-          : -1
-
-        if (index >= 0) {
-          const nextContent = `${tab.content.slice(0, index)}${newText}${tab.content.slice(index + pendingEdit.oldText.length)}`
-          editorState.updateTabContent(tabId, nextContent)
-          applied = true
-        }
-      }
-
-      if (!applied) {
-        return {
-          error: '修改未应用：目标文本已变化，请重新发起修改确认。',
-        }
-      }
-
+  completePendingEdit: (pendingEdit) => set((s) => {
+      const { newText } = pendingEdit
       const confirmMessage: ChatMessage = {
         role: 'user',
         content: [
@@ -306,13 +299,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         pendingEdit: nextPendingEdit,
         messages: nextMessages.length > MAX_MESSAGES ? nextMessages.slice(-MAX_MESSAGES) : nextMessages,
       }
-    })
+  }),
 
-    if (applied) {
-      void get().saveCurrentSession().catch((err) => {
-        console.warn('[Chat] save edit confirmation failed:', err)
-      })
-    }
+  applyPendingEdit: (editId) => {
+    void import('@/services/pendingEditCommand')
+      .then(({ applyPendingEditCommand }) => applyPendingEditCommand(editId))
+      .catch(() => set({ error: '修改未应用：无法启动修改命令。' }))
   },
 
   rejectPendingEdit: (editId) => {

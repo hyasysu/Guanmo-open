@@ -37,9 +37,11 @@ export function indexMarkdownDocument(
   content: string
 ): boolean {
   if (!filePath || !isMarkdownPath(filePath)) return false
-  performMarkdownDocumentIndex(filePath, title, content).catch((err) =>
-    console.warn('[RAG] document index failed, previous index preserved:', err)
-  )
+  performMarkdownDocumentIndex(filePath, title, content).catch((err) => {
+    console.warn('[RAG] document index failed, previous index preserved', {
+      errorType: err instanceof Error ? err.name : typeof err,
+    })
+  })
   return true
 }
 
@@ -59,7 +61,7 @@ async function performMarkdownDocumentIndex(
       await refreshNativeRagIndexDocument(document.filePath)
     }
     console.info(
-      `[RAG] index ${filePath}: total=${stats.total}, reused=${stats.reused}, added=${stats.added}, deleted=${stats.deleted}, reembedded=${stats.reembedded}`
+      `[RAG] index complete: total=${stats.total}, reused=${stats.reused}, added=${stats.added}, deleted=${stats.deleted}, reembedded=${stats.reembedded}`
     )
     return true
   })

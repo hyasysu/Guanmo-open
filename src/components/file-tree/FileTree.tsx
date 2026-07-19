@@ -5,10 +5,11 @@ import type { FileNode } from '@/services/fileTree'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
-import { renameFileEntry, saveExistingFileAs, validateFileName } from '@/services/fileEntryActions'
+import { saveExistingFileAs, validateFileName } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { toast } from '@/services/toast'
 import { Tooltip, TruncatedText } from '@/components/common/Tooltip'
+import { useFileRename } from '@/hooks/useFileRename'
 
 interface FileTreeProps {
   nodes: FileNode[]
@@ -164,10 +165,7 @@ function FileTreeNode({
 }) {
   const [expanded, setExpanded] = useState(depth === 0)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
-  const [renaming, setRenaming] = useState(false)
-  const [renameValue, setRenameValue] = useState(node.name)
-  const renameCancelledRef = useRef(false)
-  const renameSubmittingRef = useRef(false)
+  const rename = useFileRename()
   const activeTab = useEditorStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
   const isActive = isSameFilePath(activeTab?.filePath, node.path)
   const isFile = node.type !== 'directory'
@@ -205,31 +203,6 @@ function FileTreeNode({
       toast.error(describeFileOperationError(err, '另存为失败'))
     }
   }, [node])
-
-  const commitRename = useCallback(async () => {
-    if (renameCancelledRef.current) {
-      renameCancelledRef.current = false
-      return
-    }
-    if (renameSubmittingRef.current) return
-    const error = validateFileName(renameValue)
-    if (error) {
-      toast.error(error)
-      return
-    }
-    renameSubmittingRef.current = true
-    try {
-      await renameFileEntry(node.path, renameValue)
-      renameCancelledRef.current = true
-      setRenaming(false)
-      onRefreshWorkspace?.()
-      toast.success('已重命名')
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '重命名失败')
-    } finally {
-      renameSubmittingRef.current = false
-    }
-  }, [node.path, renameValue, onRefreshWorkspace])
 
   const handleDragStart = useCallback((e: React.DragEvent) => {
     const mime = isFile ? 'application/x-guanmo-file' : 'application/x-guanmo-folder'
@@ -269,20 +242,20 @@ function FileTreeNode({
         )}
 
         {/* Name */}
-        {renaming ? (
+        {rename.isRenaming(node.path) ? (
           <input
             autoFocus
-            value={renameValue}
+            value={rename.state.value}
+            disabled={rename.state.status === 'submitting'}
             onClick={(e) => e.stopPropagation()}
             onFocus={(e) => e.currentTarget.select()}
-            onChange={(e) => setRenameValue(e.target.value)}
-            onBlur={() => { if (!renameSubmittingRef.current) void commitRename() }}
+            onChange={(e) => rename.setRenameValue(e.target.value)}
+            onBlur={() => void rename.submitRename(node.path, node.path, onRefreshWorkspace)}
             onKeyDown={(e) => {
               e.stopPropagation()
-              if (e.key === 'Enter') { e.preventDefault(); void commitRename() }
+              if (e.key === 'Enter') { e.preventDefault(); void rename.submitRename(node.path, node.path, onRefreshWorkspace) }
               if (e.key === 'Escape') {
-                renameCancelledRef.current = true
-                setRenaming(false)
+                rename.cancelRename(node.path)
               }
             }}
             className="min-w-0 flex-1 rounded border border-gm-primary bg-gm-canvas px-1 py-0.5 text-caption outline-none"
@@ -296,7 +269,7 @@ function FileTreeNode({
       {contextMenu && (
         <ContextMenu position={contextMenu} onClose={() => setContextMenu(null)} minWidth={176} maxWidth={176}>
           <ContextMenuGroupTitle variant="strong">文件操作</ContextMenuGroupTitle>
-          <ContextMenuItem onClick={() => { renameCancelledRef.current = false; setRenaming(true); setRenameValue(node.name); setContextMenu(null) }}>重命名</ContextMenuItem>
+          <ContextMenuItem onClick={() => { rename.startRename(node.path, node.name); setContextMenu(null) }}>重命名</ContextMenuItem>
           <ContextMenuItem onClick={handleSaveAs}>另存为</ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuGroupTitle variant="strong">AI 助手</ContextMenuGroupTitle>
@@ -328,10 +301,7 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
   const addTab = useEditorStore((s) => s.addTab)
   const removeRecentFile = useEditorStore((s) => s.removeRecentFile)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; file: { name: string; path: string } } | null>(null)
-  const [renamingPath, setRenamingPath] = useState<string | null>(null)
-  const [renameValue, setRenameValue] = useState('')
-  const renameCancelledRef = useRef(false)
-  const renameSubmittingRef = useRef(false)
+  const rename = useFileRename()
 
   const handleOpen = useCallback(
     (file: { name: string; path: string }) => {
@@ -350,36 +320,9 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
   )
 
   const startRename = useCallback((file: { name: string; path: string }) => {
-    renameCancelledRef.current = false
-    setRenamingPath(file.path)
-    setRenameValue(file.name)
+    rename.startRename(file.path, file.name)
     setContextMenu(null)
-  }, [])
-
-  const commitRename = useCallback(async (file: { name: string; path: string }) => {
-    if (renameCancelledRef.current) {
-      renameCancelledRef.current = false
-      return
-    }
-    if (renameSubmittingRef.current) return
-    const error = validateFileName(renameValue)
-    if (error) {
-      toast.error(error)
-      return
-    }
-    renameSubmittingRef.current = true
-    try {
-      await renameFileEntry(file.path, renameValue)
-      renameCancelledRef.current = true
-      setRenamingPath(null)
-      onRefreshWorkspace?.()
-      toast.success('已重命名')
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '重命名失败')
-    } finally {
-      renameSubmittingRef.current = false
-    }
-  }, [renameValue, onRefreshWorkspace])
+  }, [rename])
 
   if (files.length === 0) {
     return (
@@ -407,20 +350,20 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
                 : 'text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover'
             }`}
           >
-            {renamingPath === file.path ? (
+            {rename.isRenaming(file.path) ? (
               <input
                 autoFocus
-                value={renameValue}
+                value={rename.state.value}
+                disabled={rename.state.status === 'submitting'}
                 onClick={(e) => e.stopPropagation()}
                 onFocus={(e) => e.currentTarget.select()}
-                onChange={(e) => setRenameValue(e.target.value)}
-                onBlur={() => { if (!renameSubmittingRef.current) void commitRename(file) }}
+                onChange={(e) => rename.setRenameValue(e.target.value)}
+                onBlur={() => void rename.submitRename(file.path, file.path, onRefreshWorkspace)}
                 onKeyDown={(e) => {
                   e.stopPropagation()
-                  if (e.key === 'Enter') { e.preventDefault(); void commitRename(file) }
+                  if (e.key === 'Enter') { e.preventDefault(); void rename.submitRename(file.path, file.path, onRefreshWorkspace) }
                   if (e.key === 'Escape') {
-                    renameCancelledRef.current = true
-                    setRenamingPath(null)
+                    rename.cancelRename(file.path)
                   }
                 }}
                 className="min-w-0 flex-1 rounded border border-gm-primary bg-gm-canvas px-1 py-0.5 outline-none"

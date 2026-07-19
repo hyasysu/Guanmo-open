@@ -2,16 +2,11 @@ import { Buffer } from 'node:buffer'
 import { build } from 'esbuild'
 
 const result = await build({
-  entryPoints: ['scripts/markdown-preview-check.ts'],
+  entryPoints: ['scripts/editor-languages-check.ts'],
   bundle: true,
   platform: 'node',
   format: 'esm',
-  define: {
-    'import.meta.url': JSON.stringify(new URL('../src/services/markdownPreviewParser.ts', import.meta.url).href),
-  },
-  banner: {
-    js: "import { createRequire } from 'node:module'; const require = createRequire(process.cwd() + '/scripts/markdown-preview-check.cjs');",
-  },
+  alias: { '@': './src' },
   write: false,
   logLevel: 'silent',
 })

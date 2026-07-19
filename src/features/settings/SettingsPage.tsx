@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Collapse, Divider, Footer, Icon, Input, Modal, Select, Switch, Table, Tabs } from 'animal-island-ui'
-import appIcon from '@/assets/icon.png'
+import appIcon from '@/assets/icon-settings.png'
 
 import { isTauri } from '@/hooks/useTauri'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -1232,23 +1232,7 @@ function GeneralSettings() {
     setBusy(true)
     try {
       await clearAllChatSessions()
-      const nextSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-      useChatStore.setState((state) => ({
-        messages: [],
-        currentSessionId: nextSessionId,
-        historyOffset: 0,
-        hasMoreHistory: false,
-        streaming: false,
-        error: null,
-        agentMode: false,
-        agentSteps: [],
-        ragStatus: 'idle',
-        ragSources: [],
-        timeline: [],
-        draftInput: '',
-        pendingEdit: null,
-        contextTags: [],
-      }))
+      useChatStore.getState().resetHistoryState()
       toast.success('所有已保存会话已清空')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '清空会话失败')

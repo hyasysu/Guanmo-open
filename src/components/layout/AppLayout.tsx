@@ -52,7 +52,7 @@ export function AppLayout() {
 
   useEffect(() => {
     if (isFullscreen) {
-      useAppStore.setState({ aiPanelOpen: false })
+      useAppStore.getState().closeAiPanel()
       setFullscreenAiPosition(getDefaultFullscreenAiPosition())
       setFullscreenFileDrawerOpen(false)
     } else {
@@ -142,7 +142,7 @@ export function AppLayout() {
     if (!isFullscreen || !aiPanelOpen) return
     const handlePointerDown = (e: PointerEvent) => {
       if (fullscreenAiPanelRef.current?.contains(e.target as Node)) return
-      useAppStore.setState({ aiPanelOpen: false })
+      useAppStore.getState().closeAiPanel()
     }
     document.addEventListener('pointerdown', handlePointerDown, true)
     return () => document.removeEventListener('pointerdown', handlePointerDown, true)

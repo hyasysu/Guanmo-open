@@ -10,7 +10,7 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '@/hooks/useTauri'
 import { createHeadingId, type TocItem } from '@/services/markdownToc'
 import { normalizeLatexBlockDelimiters, remarkStandaloneDisplayMath } from '@/services/markdownMath'
-import { parseMarkdownPreviewInWorker } from '@/services/markdownPreviewParser'
+import { MarkdownPreviewWorkerSession } from '@/services/markdownPreviewParser'
 import type { MarkdownPreviewBlock, MarkdownPreviewParseResult } from '@/services/markdownPreviewParserCore'
 import { useSettingsStore } from '@/stores/settingsStore'
 
@@ -66,23 +66,37 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     result?: MarkdownPreviewParseResult
     error?: string
   } | null>(null)
+  const workerSessionRef = useRef<MarkdownPreviewWorkerSession | null>(null)
   const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
 
   useEffect(() => {
-    if (!useWorkerPipeline) return
-    let active = true
-    void parseMarkdownPreviewInWorker(content).then(
+    const workerSession = new MarkdownPreviewWorkerSession()
+    workerSessionRef.current = workerSession
+    return () => {
+      workerSession.dispose()
+      if (workerSessionRef.current === workerSession) workerSessionRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    const workerSession = workerSessionRef.current
+    if (!workerSession) return
+    if (!useWorkerPipeline) {
+      workerSession.cancel()
+      return
+    }
+    void workerSession.parse(content).then(
       (result) => {
-        if (active) setWorkerResult({ content, result })
+        setWorkerResult({ content, result })
       },
       (error) => {
-        if (active) setWorkerResult({
+        if (error instanceof Error && error.name === 'AbortError') return
+        setWorkerResult({
           content,
           error: error instanceof Error ? error.message : String(error),
         })
       },
     )
-    return () => { active = false }
   }, [content, useWorkerPipeline])
 
   const components = useMemo<Partial<Components>>(() => {

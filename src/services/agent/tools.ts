@@ -378,24 +378,17 @@ export function registerBuiltinTools() {
         return '读取选区上下文失败：Level 2 没有新的可用语义块。'
       }
 
-      const contextSummary = contextWindow.chunks
-        .map((chunk, index) => {
-          const heading = chunk.headingPath.length > 0 ? ` [${chunk.headingPath.join(' > ')}]` : ''
-          return `#${index + 1} ${chunk.role}${heading}\n${chunk.content}`
+      if (import.meta.env?.DEV) {
+        console.debug('[read_selection_context] diagnostics', {
+          level,
+          direction,
+          selectionRange: [range.from, range.to],
+          chunkCount: contextWindow.chunks.length,
+          candidateCount: contextWindow.diagnostics.candidates.length,
+          selectedCandidateCount: contextWindow.diagnostics.candidates.filter((candidate) => candidate.selected).length,
+          totalTokens: contextWindow.diagnostics.totalTokens,
         })
-        .join('\n\n')
-      console.groupCollapsed(`[read_selection_context] Level ${level} 上下文原文汇总：${tag.filePath}`)
-      console.log(contextSummary)
-      console.log(`累计上下文约 ${contextWindow.diagnostics.totalTokens} tokens`)
-      console.table(contextWindow.diagnostics.candidates.map((candidate) => ({
-        role: candidate.role,
-        score: candidate.score,
-        distance: candidate.distance,
-        selected: candidate.selected,
-        reason: candidate.reason,
-        preview: candidate.content.slice(0, 120),
-      })))
-      console.groupEnd()
+      }
 
       const parsedWindow = JSON.parse(serializeSelectionContextWindow(contextWindow))
       return JSON.stringify({

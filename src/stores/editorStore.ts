@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist, type PersistStorage, type StorageValue } from 'zustand/middleware'
 import { isSameFilePath, normalizeFilePath } from '@/services/pathIdentity'
+import { mergeBackgroundRestoredTab } from '@/services/sessionRestorePolicy'
 
 export interface Tab {
   id: string
@@ -59,6 +60,11 @@ interface EditorState {
   setActiveTab: (id: string) => void
   clearPreviewSwitching: (tabId?: string) => void
   updateTabContent: (id: string, content: string) => void
+  markTabSaved: (id: string, content: string) => void
+  replaceTabContentWithSaved: (id: string, content: string) => void
+  resetTabsForExternalOpen: () => void
+  restoreTabs: (tabs: Tab[], activeTabId: string | null, rightPaneTabId: string | null) => void
+  mergeRestoredTab: (originalTab: Tab, restoredTab: Tab) => void
   togglePreview: () => void
   toggleDiffPreview: () => void
   reorderTabs: (sourceId: string, targetId: string) => void
@@ -328,6 +334,44 @@ export const useEditorStore = create<EditorState>()(
           ),
         }))
       },
+
+      markTabSaved: (id, content) => set((s) => ({
+        tabs: s.tabs.map((tab) => (
+          tab.id === id
+            ? { ...tab, savedContent: content, modified: tab.content !== content }
+            : tab
+        )),
+      })),
+
+      replaceTabContentWithSaved: (id, content) => set((s) => ({
+        tabs: s.tabs.map((tab) => (
+          tab.id === id
+            ? { ...tab, content, savedContent: content, modified: false }
+            : tab
+        )),
+      })),
+
+      resetTabsForExternalOpen: () => set({
+        tabs: [],
+        activeTabId: null,
+        rightPaneTabId: null,
+        viewMode: 'edit',
+        previewVisible: false,
+      }),
+
+      restoreTabs: (tabs, activeTabId, rightPaneTabId) => set({
+        tabs,
+        activeTabId,
+        rightPaneTabId,
+      }),
+
+      mergeRestoredTab: (originalTab, restoredTab) => set((s) => ({
+        tabs: s.tabs.map((tab) => (
+          tab.id === originalTab.id
+            ? mergeBackgroundRestoredTab(tab, originalTab, restoredTab)
+            : tab
+        )),
+      })),
 
       togglePreview: () => {
         const { viewMode } = get()

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Input } from 'animal-island-ui'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
-import { openFile, saveFile } from '@/services/fileSystem'
+import { openFile, saveFile, saveFileAs } from '@/services/fileSystem'
 import { exportMarkdownAsHtml } from '@/services/markdownExport'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { SHORTCUTS } from '@/services/shortcuts'
@@ -65,23 +65,12 @@ export function CommandPalette({ open, onClose, mode = 'commands' }: CommandPale
       if (tab.filePath) {
         await saveFile(tab.filePath, tab.content)
         scheduleMarkdownDocumentIndex(tab.filePath, tab.title, tab.content)
-        useEditorStore.setState((s) => ({
-          tabs: s.tabs.map((t) =>
-            t.id === tab.id ? { ...t, savedContent: tab.content, modified: false } : t
-          ),
-        }))
+        useEditorStore.getState().markTabSaved(tab.id, tab.content)
       } else {
-        const { saveFileAs } = await import('@/services/fileSystem')
         const result = await saveFileAs(tab.content)
         if (result) {
           scheduleMarkdownDocumentIndex(result.path, result.name, result.content)
-          useEditorStore.setState((s) => ({
-            tabs: s.tabs.map((t) =>
-              t.id === tab.id
-                ? { ...t, filePath: result.path, title: result.name, savedContent: result.content, modified: false }
-                : t
-            ),
-          }))
+          useEditorStore.getState().saveTabAs(tab.id, result.path, result.name, result.content)
         }
       }
       toast.success('已保存')

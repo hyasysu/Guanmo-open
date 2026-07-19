@@ -6,7 +6,7 @@ import type { ViewMode } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useFileOperations } from '@/hooks/useFileOperations'
 import { useActiveHeading } from '@/hooks/useActiveHeading'
-import { saveFile } from '@/services/fileSystem'
+import { saveFile, saveFileAs } from '@/services/fileSystem'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { extractToc, type TocItem } from '@/services/markdownToc'
 import { toggleMarkdownTaskAtLine } from '@/services/markdownTasks'
@@ -687,24 +687,13 @@ export function EditorArea() {
       if (tab.filePath) {
         await saveFile(tab.filePath, tab.content)
         scheduleMarkdownDocumentIndex(tab.filePath, tab.title, tab.content)
-        useEditorStore.setState((s) => ({
-          tabs: s.tabs.map((t) =>
-            t.id === tab.id ? { ...t, savedContent: tab.content, modified: false } : t
-          ),
-        }))
+        useEditorStore.getState().markTabSaved(tab.id, tab.content)
         toast.success('已保存')
       } else {
-        const { saveFileAs } = await import('@/services/fileSystem')
         const result = await saveFileAs(tab.content)
         if (result) {
           scheduleMarkdownDocumentIndex(result.path, result.name, result.content)
-          useEditorStore.setState((s) => ({
-            tabs: s.tabs.map((t) =>
-              t.id === tab.id
-                ? { ...t, filePath: result.path, title: result.name, savedContent: result.content, modified: false }
-                : t
-            ),
-          }))
+          useEditorStore.getState().saveTabAs(tab.id, result.path, result.name, result.content)
           toast.success('已保存')
         }
       }
@@ -725,13 +714,7 @@ export function EditorArea() {
     try {
       await saveFile(targetTab.filePath, nextContent)
       scheduleMarkdownDocumentIndex(targetTab.filePath, targetTab.title, nextContent)
-      useEditorStore.setState((state) => ({
-        tabs: state.tabs.map((tab) =>
-          tab.id === tabId
-            ? { ...tab, content: nextContent, savedContent: nextContent, modified: false }
-            : tab
-        ),
-      }))
+      useEditorStore.getState().replaceTabContentWithSaved(tabId, nextContent)
     } catch (err) {
       console.error('Auto-save markdown task failed:', err)
       toast.error(describeFileOperationError(err, '任务勾选保存失败'))

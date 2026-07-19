@@ -6,11 +6,12 @@ import { FULLSCREEN_CONTENT_PADDING, useSettingsStore } from '@/stores/settingsS
 import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
 import { indexMarkdownDocument } from '@/services/rag/indexer'
 import { isSameFilePath } from '@/services/pathIdentity'
-import { renameFileEntry, saveTabAsFile, validateFileName } from '@/services/fileEntryActions'
+import { saveTabAsFile } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { toast } from '@/services/toast'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { useFullscreen } from '@/hooks/useFullscreen'
+import { useFileRename } from '@/hooks/useFileRename'
 import { SettingSlider } from '@/components/common/SettingSlider'
 
 type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
@@ -56,13 +57,10 @@ export function FullscreenControlBar({
   const [renderedTabMode, setRenderedTabMode] = useState(false)
   const [contentVisible, setContentVisible] = useState(true)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null)
-  const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
-  const [renameValue, setRenameValue] = useState('')
+  const rename = useFileRename()
   const [paddingCardOpen, setPaddingCardOpen] = useState(false)
   const hideTimerRef = useRef<number | null>(null)
   const contentTimerRef = useRef<number | null>(null)
-  const renameCancelledRef = useRef(false)
-  const renameSubmittingRef = useRef(false)
   const shellRef = useRef<HTMLDivElement>(null)
   const widthBeforeRef = useRef<number>(0)
   const widthAnimatingRef = useRef(false)
@@ -172,7 +170,7 @@ export function FullscreenControlBar({
       if (useAppStore.getState().aiPanelOpen) {
         e.preventDefault()
         e.stopPropagation()
-        useAppStore.setState({ aiPanelOpen: false })
+        useAppStore.getState().closeAiPanel()
         return
       }
       e.preventDefault()
@@ -297,11 +295,9 @@ export function FullscreenControlBar({
         break
       case 'rename':
         if (contextTab?.filePath) {
-          renameCancelledRef.current = false
           setVisible(true)
           switchPanel(true)
-          setRenamingTabId(contextTab.id)
-          setRenameValue(contextTab.title)
+          rename.startRename(contextTab.id, contextTab.title)
         }
         break
       case 'saveAs':
@@ -315,34 +311,7 @@ export function FullscreenControlBar({
         }
         break
     }
-  }, [closeTab, contextMenu, contextTab, setRightPaneTabId, setViewMode, switchPanel, tabs, togglePinTab, viewMode])
-
-  const commitRename = useCallback(async (tab: Tab) => {
-    if (renameCancelledRef.current) {
-      renameCancelledRef.current = false
-      return
-    }
-    if (renameSubmittingRef.current || !tab.filePath) {
-      setRenamingTabId(null)
-      return
-    }
-    const error = validateFileName(renameValue)
-    if (error) {
-      toast.error(error)
-      return
-    }
-    renameSubmittingRef.current = true
-    try {
-      await renameFileEntry(tab.filePath, renameValue)
-      renameCancelledRef.current = true
-      setRenamingTabId(null)
-      toast.success('已重命名')
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '重命名失败')
-    } finally {
-      renameSubmittingRef.current = false
-    }
-  }, [renameValue])
+  }, [closeTab, contextMenu, contextTab, rename, setRightPaneTabId, setViewMode, switchPanel, tabs, togglePinTab, viewMode])
 
   const sortedTabs = [...tabs].sort((a, b) => {
     if (a.pinned && !b.pinned) return -1
@@ -442,19 +411,19 @@ export function FullscreenControlBar({
                     }`}
                     title={tab.title}
                   >
-                    <span className="truncate">{renamingTabId === tab.id ? (
+                    <span className="truncate">{rename.isRenaming(tab.id) ? (
                       <input
                         autoFocus
-                        value={renameValue}
+                        value={rename.state.value}
+                        disabled={rename.state.status === 'submitting'}
                         onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onBlur={() => void commitRename(tab)}
+                        onChange={(e) => rename.setRenameValue(e.target.value)}
+                        onBlur={() => { if (tab.filePath) void rename.submitRename(tab.id, tab.filePath) }}
                         onKeyDown={(e) => {
                           e.stopPropagation()
-                          if (e.key === 'Enter') void commitRename(tab)
+                          if (e.key === 'Enter' && tab.filePath) void rename.submitRename(tab.id, tab.filePath)
                           if (e.key === 'Escape') {
-                            renameCancelledRef.current = true
-                            setRenamingTabId(null)
+                            rename.cancelRename(tab.id)
                           }
                         }}
                         className="w-32 bg-transparent text-body font-semibold outline-none"

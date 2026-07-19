@@ -286,7 +286,7 @@ export async function processMemoryCandidateExtraction(
         console.info('[Memory] candidate rejected', {
           triggerReason,
           reason: validation.reason,
-          content: item.content,
+          contentLength: item.content.length,
         })
         continue
       }
@@ -311,7 +311,7 @@ export async function processMemoryCandidateExtraction(
           console.info('[Memory] candidate skipped', {
             triggerReason,
             reason: decision.reason,
-            content: item.content,
+            contentLength: item.content.length,
           })
           continue
         }
@@ -341,7 +341,7 @@ export async function processMemoryCandidateExtraction(
           if (!hasMaterialMemoryChange(mergeable, merged)) {
             console.info('[Memory] candidate skipped as unchanged', {
               triggerReason,
-              content: item.content,
+              contentLength: item.content.length,
             })
             continue
           }

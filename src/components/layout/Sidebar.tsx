@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
-import { isTauri } from '@/hooks/useTauri'
+import { isTauri, readFile } from '@/hooks/useTauri'
 import { openFile } from '@/services/fileSystem'
 import { pickDirectory } from '@/services/fileSystem'
 import { isWorkspaceDisplayFile } from '@/services/fileTree'
@@ -12,12 +12,13 @@ import { Button, Collapse, Divider } from 'animal-island-ui'
 import { FileTree, RecentFiles } from '@/components/file-tree/FileTree'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
-import { renameFileEntry, saveExistingFileAs, validateFileName } from '@/services/fileEntryActions'
+import { saveExistingFileAs } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { readRememberedFile } from '@/services/persistedFileAccess'
 import { cleanupMissingWorkspaceDocuments, rebuildWorkspaceDocuments } from '@/services/workspaceIndex'
 import { TruncatedText } from '@/components/common/Tooltip'
 import { useWorkspaceFileTree } from '@/hooks/useWorkspaceFileTree'
+import { useFileRename } from '@/hooks/useFileRename'
 
 interface SidebarProps {
   collapsed: boolean
@@ -104,7 +105,6 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
   const handleOpenFileFromTree = useCallback(async (path: string) => {
     try {
       if (!isWorkspaceDisplayFile(path)) return
-      const { readFile } = await import('@/hooks/useTauri')
       const content = await readFile(path)
       const name = path.split(/[/\\]/).pop() || 'untitled.md'
       const state = useEditorStore.getState()
@@ -455,47 +455,17 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
   const activeFilePath = tabs.find((t) => t.id === activeTabId)?.filePath
   const [showAll, setShowAll] = useState(false)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; file: { name: string; path: string } } | null>(null)
-  const [renamingPath, setRenamingPath] = useState<string | null>(null)
-  const [renameValue, setRenameValue] = useState('')
+  const rename = useFileRename()
   const [missingPaths, setMissingPaths] = useState<Set<string>>(new Set())
-  const renameCancelledRef = useRef(false)
-  const renameSubmittingRef = useRef(false)
 
   const INITIAL_SHOW = 20
   const visibleFiles = showAll ? files : files.slice(0, INITIAL_SHOW)
   const hasMore = files.length > INITIAL_SHOW
 
   const startRename = useCallback((file: { name: string; path: string }) => {
-    renameCancelledRef.current = false
-    setRenamingPath(file.path)
-    setRenameValue(file.name)
+    rename.startRename(file.path, file.name)
     setContextMenu(null)
-  }, [])
-
-  const commitRename = useCallback(async (file: { name: string; path: string }) => {
-    if (renameCancelledRef.current) {
-      renameCancelledRef.current = false
-      return
-    }
-    if (renameSubmittingRef.current) return
-    const error = validateFileName(renameValue)
-    if (error) {
-      toast.error(error)
-      return
-    }
-    renameSubmittingRef.current = true
-    try {
-      await renameFileEntry(file.path, renameValue)
-      renameCancelledRef.current = true
-      setRenamingPath(null)
-      onRefreshWorkspace?.()
-      toast.success('已重命名')
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '重命名失败')
-    } finally {
-      renameSubmittingRef.current = false
-    }
-  }, [renameValue, onRefreshWorkspace])
+  }, [rename])
 
   const handleOpenFavorite = useCallback(async (file: { name: string; path: string }) => {
     try {
@@ -558,20 +528,20 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
                   : 'text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover'
             }`}
           >
-            {renamingPath === file.path ? (
+            {rename.isRenaming(file.path) ? (
               <input
                 autoFocus
-                value={renameValue}
+                value={rename.state.value}
+                disabled={rename.state.status === 'submitting'}
                 onClick={(e) => e.stopPropagation()}
                 onFocus={(e) => e.currentTarget.select()}
-                onChange={(e) => setRenameValue(e.target.value)}
-                onBlur={() => void commitRename(file)}
+                onChange={(e) => rename.setRenameValue(e.target.value)}
+                onBlur={() => void rename.submitRename(file.path, file.path, onRefreshWorkspace)}
                 onKeyDown={(e) => {
                   e.stopPropagation()
-                  if (e.key === 'Enter') void commitRename(file)
+                  if (e.key === 'Enter') void rename.submitRename(file.path, file.path, onRefreshWorkspace)
                   if (e.key === 'Escape') {
-                    renameCancelledRef.current = true
-                    setRenamingPath(null)
+                    rename.cancelRename(file.path)
                   }
                 }}
                 className="min-w-0 flex-1 rounded border border-gm-primary bg-gm-canvas px-1 py-0.5 outline-none"

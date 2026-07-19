@@ -1,6 +1,7 @@
 import type { Tab } from '@/stores/editorStore'
 import { readRememberedFile } from '@/services/persistedFileAccess'
 import { isWorkspaceDisplayFile } from '@/services/fileTree'
+export { mergeBackgroundRestoredTab } from '@/services/sessionRestorePolicy'
 
 interface RestorePersistedTabsOptions {
   activeTabId?: string | null
@@ -11,22 +12,6 @@ interface RestorePersistedTabsOptions {
 
 export function getRestorablePersistedTabs(tabs: Tab[]): Tab[] {
   return tabs.filter((tab) => !tab.filePath || isWorkspaceDisplayFile(tab.filePath))
-}
-
-export function mergeBackgroundRestoredTab(current: Tab, original: Tab, restored: Tab): Tab {
-  if (current.id !== original.id || current.filePath !== original.filePath) return current
-  const unchangedSinceStartup =
-    current.content === original.content
-    && current.savedContent === original.savedContent
-    && current.originalContent === original.originalContent
-    && current.modified === original.modified
-  if (unchangedSinceStartup) return restored
-  if (!current.modified) return current
-  return {
-    ...current,
-    savedContent: restored.savedContent,
-    modified: current.content !== restored.savedContent,
-  }
 }
 
 async function restorePersistedTab(
@@ -58,7 +43,9 @@ async function restorePersistedTab(
       modified: false,
     }
   } catch (error) {
-    console.warn(`[SessionRestore] Failed to read file ${tab.filePath}:`, error)
+    console.warn('[SessionRestore] Failed to read persisted tab', {
+      errorType: error instanceof Error ? error.name : typeof error,
+    })
     return {
       ...tab,
       originalContent: tab.originalContent ?? tab.savedContent ?? tab.content,

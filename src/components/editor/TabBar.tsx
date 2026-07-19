@@ -6,9 +6,10 @@ import { isSameFilePath } from '@/services/pathIdentity'
 import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
 import { indexMarkdownDocument } from '@/services/rag/indexer'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
-import { renameFileEntry, saveTabAsFile, validateFileName } from '@/services/fileEntryActions'
+import { saveTabAsFile } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { toast } from '@/services/toast'
+import { useFileRename } from '@/hooks/useFileRename'
 
 interface TabBarProps {
   onOpenSettings?: () => void
@@ -33,10 +34,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
   const [dragState, setDragState] = useState<{ tabId: string; startX: number } | null>(null)
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null)
-  const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
-  const [renameValue, setRenameValue] = useState('')
-  const renameCancelledRef = useRef(false)
-  const renameSubmittingRef = useRef(false)
+  const rename = useFileRename()
   const exportButtonRef = useRef<HTMLButtonElement>(null)
   const draggedTabIdRef = useRef<string | null>(null)
 
@@ -173,9 +171,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
           break
         case 'rename':
           if (contextTab?.filePath) {
-            renameCancelledRef.current = false
-            setRenamingTabId(contextTab.id)
-            setRenameValue(contextTab.title)
+            rename.startRename(contextTab.id, contextTab.title)
           }
           break
         case 'saveAs':
@@ -190,36 +186,8 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
           break
       }
     },
-    [contextMenu, contextTab, tabs, closeTab, setRightPaneTabId, viewMode, setViewMode, togglePinTab]
+    [contextMenu, contextTab, tabs, closeTab, rename, setRightPaneTabId, viewMode, setViewMode, togglePinTab]
   )
-
-  const commitRename = useCallback(async (tab: Tab) => {
-    if (renameCancelledRef.current) {
-      renameCancelledRef.current = false
-      return
-    }
-    if (renameSubmittingRef.current) return
-    if (!tab.filePath) {
-      setRenamingTabId(null)
-      return
-    }
-    const error = validateFileName(renameValue)
-    if (error) {
-      toast.error(error)
-      return
-    }
-    renameSubmittingRef.current = true
-    try {
-      await renameFileEntry(tab.filePath, renameValue)
-      renameCancelledRef.current = true
-      setRenamingTabId(null)
-      toast.success('已重命名')
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '重命名失败')
-    } finally {
-      renameSubmittingRef.current = false
-    }
-  }, [renameValue])
 
   const handleModeChange = useCallback((mode: ViewMode) => {
     setViewMode(mode)
@@ -285,7 +253,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
                 key={tab.id}
                 role="button"
                 tabIndex={0}
-                draggable={renamingTabId !== tab.id}
+                draggable={!rename.isRenaming(tab.id)}
                 onClick={() => setActiveTab(tab.id)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
@@ -310,19 +278,19 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
                 }`}
                 style={activeTabId === tab.id ? { borderBottom: '2px solid var(--gm-active-indicator)' } : undefined}
               >
-                {renamingTabId === tab.id ? (
+                {rename.isRenaming(tab.id) ? (
                   <input
                     autoFocus
-                    value={renameValue}
+                    value={rename.state.value}
+                    disabled={rename.state.status === 'submitting'}
                     onClick={(e) => e.stopPropagation()}
-                    onChange={(e) => setRenameValue(e.target.value)}
-                    onBlur={() => void commitRename(tab)}
+                    onChange={(e) => rename.setRenameValue(e.target.value)}
+                    onBlur={() => { if (tab.filePath) void rename.submitRename(tab.id, tab.filePath) }}
                     onKeyDown={(e) => {
                       e.stopPropagation()
-                      if (e.key === 'Enter') void commitRename(tab)
+                      if (e.key === 'Enter' && tab.filePath) void rename.submitRename(tab.id, tab.filePath)
                       if (e.key === 'Escape') {
-                        renameCancelledRef.current = true
-                        setRenamingTabId(null)
+                        rename.cancelRename(tab.id)
                       }
                     }}
                     className="w-32 rounded border border-gm-primary bg-gm-canvas px-1 py-0.5 text-caption text-gm-text outline-none"

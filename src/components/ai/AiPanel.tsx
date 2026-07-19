@@ -18,6 +18,7 @@ import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
 import type { ChatMessageSource, LocalChatMessageSource } from '@/services/ai/types'
 import { AI_SHORTCUT_SUBMIT_EVENT } from '@/services/aiContext'
+import { applyPendingEditCommand } from '@/services/pendingEditCommand'
 
 type AiPanelProps = {
   fullscreenDragHandleProps?: {
@@ -243,9 +244,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     if (!confirmed) return
     try {
       await deleteChatSession(sessionId)
-      useChatStore.setState((state) => ({
-        messages: state.messages.filter((message) => message.sessionId !== sessionId),
-      }))
+      useChatStore.getState().removeSessionMessages(sessionId)
       toast.success('历史会话已删除')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除历史会话失败')
@@ -701,7 +700,6 @@ const AssistantMarkdown = memo(function AssistantMarkdown({ content }: { content
 })
 
 function PendingEditCard({ edit, actionable }: { edit: PendingEdit; actionable: boolean }) {
-  const applyPendingEdit = useChatStore((s) => s.applyPendingEdit)
   const rejectPendingEdit = useChatStore((s) => s.rejectPendingEdit)
   const createUndoPendingEdit = useChatStore((s) => s.createUndoPendingEdit)
 
@@ -751,7 +749,7 @@ function PendingEditCard({ edit, actionable }: { edit: PendingEdit; actionable: 
           </div>
         ) : actionable ? (
           <div className="flex gap-2">
-          <button onClick={() => applyPendingEdit(edit.id)}
+          <button onClick={() => applyPendingEditCommand(edit.id)}
             className="flex-1 px-3 py-1.5 rounded-lg bg-gm-primary text-white text-caption font-bold hover:opacity-90 transition-opacity">
             确认应用
           </button>
