@@ -4,6 +4,7 @@ import { shouldSkipWorkspaceDirectory } from '@/services/fileTree'
 import { ingestDocument, processEmbeddingQueue, runSerializedDocumentOperation } from './pipeline'
 import { vectorStore } from './vectorStore'
 import { isEmbeddingReady } from '@/services/ai/aiClient'
+import { refreshNativeRagIndexDocument } from './nativeIndex'
 
 const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown', 'mdx'])
 const DEFAULT_INDEX_DELAY = 1200
@@ -50,10 +51,12 @@ async function performMarkdownDocumentIndex(
   const indexed = await runSerializedDocumentOperation(filePath, async () => {
     const result = await ingestDocument(filePath, title || getName(filePath), content)
     if (!result) return false
-    const { document, stats, unchanged } = result
+    const { stats, unchanged } = result
     if (!unchanged) {
+      const { document } = result
       const needsEmbedding = document.chunks.some((chunk) => !chunk.embedding)
       await vectorStore.replaceDocument(document, needsEmbedding)
+      await refreshNativeRagIndexDocument(document.filePath)
     }
     console.info(
       `[RAG] index ${filePath}: total=${stats.total}, reused=${stats.reused}, added=${stats.added}, deleted=${stats.deleted}, reembedded=${stats.reembedded}`

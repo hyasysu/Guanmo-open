@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createExactContentHash } from '../src/services/rag/contentHash'
 import { EMBEDDING_PREPROCESS_VERSION, createEmbeddingInputHash } from '../src/services/rag/embeddingInput'
-import { canSkipDocumentIndex, reconcileDocumentChunks } from '../src/services/rag/reconciler'
+import { canSkipDocumentIndex, canSkipDocumentIndexMetadata, reconcileDocumentChunks } from '../src/services/rag/reconciler'
 import { runSerializedDocumentOperation } from '../src/services/rag/pipeline'
 import type { Chunk, Document } from '../src/services/rag/types'
 
@@ -52,6 +52,18 @@ assert.equal(exactA, await createExactContentHash('Alpha  Beta\n'))
 const existing = await indexedDocument()
 assert.equal(canSkipDocumentIndex(existing, existing.contentHash!, MODEL), true)
 assert.equal(canSkipDocumentIndex(existing, existing.contentHash!, 'embedding-model-b'), false)
+const metadata = {
+  id: existing.id,
+  filePath: existing.filePath,
+  contentHash: existing.contentHash,
+  totalChunks: 100,
+  embeddedChunks: 100,
+  compatibleChunks: 100,
+}
+assert.equal(canSkipDocumentIndexMetadata(metadata, existing.contentHash!, MODEL), true)
+assert.equal(canSkipDocumentIndexMetadata({ ...metadata, compatibleChunks: 99 }, existing.contentHash!, MODEL), false)
+assert.equal(canSkipDocumentIndexMetadata(metadata, existing.contentHash!, null), true)
+assert.equal(canSkipDocumentIndexMetadata(metadata, 'changed', MODEL), false)
 const nextBase = { ...existing, content: 'updated', contentHash: 'updated', lastModified: 2 }
 
 const oneChanged = existing.chunks.map((chunk, index) => parsedChunk(

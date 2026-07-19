@@ -15,8 +15,11 @@ import { buildLinkedQaRows } from '@/services/chatHistory'
 const MAX_MESSAGES = 100
 const HISTORY_QA_GROUP_SIZE = 5
 
-export type RagStatus = 'idle' | 'searching' | 'found' | 'empty' | 'error'
+export type RagStatus = 'idle' | 'initializing' | 'searching' | 'fallback' | 'found' | 'empty' | 'error'
 export type TimelineType =
+  | 'index_initializing'
+  | 'index_ready'
+  | 'index_fallback'
   | 'local_search_start'
   | 'local_search_found'
   | 'local_search_empty'

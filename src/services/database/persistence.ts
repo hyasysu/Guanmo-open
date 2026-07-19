@@ -5,6 +5,7 @@
 
 import { getDatabase, isDatabaseReady, serializeDatabaseTransaction } from './db'
 import type { Document, Chunk } from '@/services/rag/types'
+import { normalizeFilePath } from '@/services/pathIdentity'
 
 interface DocumentRow {
   id: string
@@ -36,6 +37,23 @@ interface EmbeddingRow {
   embedding_model?: string | null
   preprocess_version?: string | null
   input_hash?: string | null
+}
+
+export interface DocumentIndexMetadata {
+  id: string
+  filePath: string
+  contentHash?: string
+  totalChunks: number
+  embeddedChunks: number
+  compatibleChunks: number
+}
+
+export interface KnowledgeDocumentSummary {
+  id: string
+  filePath: string
+  title: string
+  totalChunks: number
+  embeddedChunks: number
 }
 
 export type EmbeddingJobStatus = 'pending' | 'running' | 'done' | 'failed'
@@ -263,6 +281,144 @@ export async function loadAllDocumentsBulk(): Promise<Document[]> {
     lastModified: row.last_modified,
     chunks: chunksByDocumentId.get(row.id) || [],
   }))
+}
+
+async function findDocumentRowByFilePath(filePath: string): Promise<DocumentRow | undefined> {
+  if (!isDatabaseReady()) return undefined
+  const db = getDatabase()
+  const rows = await db.select<DocumentRow>(
+    'SELECT id, file_path, title, content_hash, last_modified FROM documents'
+  )
+  const normalizedPath = normalizeFilePath(filePath)
+  return rows.find((row) => normalizeFilePath(row.file_path) === normalizedPath)
+}
+
+/**
+ * Read only the fields required to decide whether a document needs re-indexing.
+ * Embedding JSON is deliberately excluded from this query.
+ */
+export async function loadDocumentIndexMetadata(
+  filePath: string,
+  embeddingModel: string | null,
+  embeddingPreprocessVersion: string,
+): Promise<DocumentIndexMetadata | undefined> {
+  const row = await findDocumentRowByFilePath(filePath)
+  if (!row) return undefined
+  const db = getDatabase()
+  const [counts] = await db.select<{
+    total_chunks: number
+    embedded_chunks: number
+    compatible_chunks: number
+  }>(
+    `SELECT
+       COUNT(c.id) AS total_chunks,
+       COUNT(e.chunk_id) AS embedded_chunks,
+       SUM(CASE
+         WHEN $2 IS NULL THEN 1
+         WHEN e.embedding_model = $2
+          AND e.preprocess_version = $3
+          AND e.input_hash IS NOT NULL
+          AND e.input_hash <> '' THEN 1
+         ELSE 0
+       END) AS compatible_chunks
+     FROM chunks c
+     LEFT JOIN embeddings e ON e.chunk_id = c.id
+     WHERE c.document_id = $1`,
+    [row.id, embeddingModel, embeddingPreprocessVersion]
+  )
+  return {
+    id: row.id,
+    filePath: row.file_path,
+    contentHash: row.content_hash || undefined,
+    totalChunks: counts?.total_chunks || 0,
+    embeddedChunks: counts?.embedded_chunks || 0,
+    compatibleChunks: counts?.compatible_chunks || 0,
+  }
+}
+
+/** Load one document and parse only its embeddings. */
+export async function loadDocumentByFilePath(filePath: string): Promise<Document | undefined> {
+  const row = await findDocumentRowByFilePath(filePath)
+  if (!row) return undefined
+  return loadDocumentById(row.id)
+}
+
+export async function loadDocumentById(documentId: string): Promise<Document | undefined> {
+  if (!isDatabaseReady()) return undefined
+  const db = getDatabase()
+  const [documents, chunkRows, embeddingRows] = await Promise.all([
+    db.select<DocumentRow>('SELECT * FROM documents WHERE id = $1', [documentId]),
+    db.select<ChunkRow>('SELECT * FROM chunks WHERE document_id = $1 ORDER BY chunk_index', [documentId]),
+    db.select<EmbeddingRow>(
+      `SELECT e.* FROM embeddings e
+       INNER JOIN chunks c ON c.id = e.chunk_id
+       WHERE c.document_id = $1`,
+      [documentId]
+    ),
+  ])
+  const row = documents[0]
+  if (!row) return undefined
+  const embeddingByChunkId = new Map(embeddingRows.map((embedding) => [embedding.chunk_id, embedding]))
+  return {
+    id: row.id,
+    filePath: row.file_path,
+    title: row.title,
+    content: row.content,
+    contentHash: row.content_hash || undefined,
+    lastModified: row.last_modified,
+    chunks: chunkRows.map((chunk) => mapChunkRow(chunk, embeddingByChunkId.get(chunk.id))),
+  }
+}
+
+export async function loadKnowledgeDocumentSummaries(): Promise<KnowledgeDocumentSummary[]> {
+  if (!isDatabaseReady()) return []
+  const db = getDatabase()
+  const rows = await db.select<{
+    id: string
+    file_path: string
+    title: string
+    total_chunks: number
+    embedded_chunks: number
+  }>(
+    `SELECT d.id, d.file_path, d.title,
+       COUNT(c.id) AS total_chunks,
+       COUNT(e.chunk_id) AS embedded_chunks
+     FROM documents d
+     LEFT JOIN chunks c ON c.document_id = d.id
+     LEFT JOIN embeddings e ON e.chunk_id = c.id
+     GROUP BY d.id, d.file_path, d.title`
+  )
+  return rows.map((row) => ({
+    id: row.id,
+    filePath: row.file_path,
+    title: row.title,
+    totalChunks: row.total_chunks || 0,
+    embeddedChunks: row.embedded_chunks || 0,
+  }))
+}
+
+export async function loadRagStatsAggregate(): Promise<{
+  documents: number
+  totalChunks: number
+  embeddedChunks: number
+}> {
+  if (!isDatabaseReady()) return { documents: 0, totalChunks: 0, embeddedChunks: 0 }
+  const db = getDatabase()
+  const [row] = await db.select<{
+    documents: number
+    total_chunks: number
+    embedded_chunks: number
+  }>(
+    `SELECT
+       (SELECT COUNT(*) FROM documents) AS documents,
+       (SELECT COUNT(*) FROM chunks) AS total_chunks,
+       (SELECT COUNT(*) FROM embeddings) AS embedded_chunks`
+  )
+  return {
+    documents: row?.documents || 0,
+    totalChunks: row?.total_chunks || 0,
+    embeddedChunks: row?.embedded_chunks || 0,
+  }
 }
 
 export async function loadDocumentFilePaths(): Promise<string[]> {

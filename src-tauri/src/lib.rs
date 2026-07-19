@@ -12,6 +12,7 @@ use tauri::{Emitter, Manager, State};
 use tauri_plugin_fs::FsExt;
 
 mod api_http;
+mod rag_index;
 use api_http::ApiOriginState;
 
 const SECRET_FILE: &str = "secrets.json";
@@ -1308,6 +1309,7 @@ pub fn run() {
     let mut builder = tauri::Builder::default()
         .manage(FsAccessState::default())
         .manage(ApiOriginState::default())
+        .manage(rag_index::RagIndexService::default())
         .manage(pending_open_files)
         .on_webview_event(|webview, event| {
             if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
@@ -1376,6 +1378,11 @@ pub fn run() {
             api_http::revoke_api_origin,
             api_http::external_http_request,
             api_http::external_http_stream,
+            rag_index::get_rag_index_state,
+            rag_index::initialize_rag_index,
+            rag_index::search_rag_index,
+            rag_index::refresh_rag_index_document,
+            rag_index::remove_rag_index_document,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

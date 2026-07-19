@@ -1,8 +1,9 @@
 import { fileExists } from '@/hooks/useTauri'
 import { normalizeFilePath } from '@/services/pathIdentity'
-import { listEmbeddingJobs, loadAllDocuments, loadDocumentFilePaths, removeEmbeddingJobByPath, removePersistedDocumentByPath } from '@/services/database/persistence'
+import { listEmbeddingJobs, loadDocumentFilePaths, removeEmbeddingJobByPath, removePersistedDocumentByPath } from '@/services/database/persistence'
 import { indexWorkspaceMarkdown, type WorkspaceIndexResult } from '@/services/rag/indexer'
 import { vectorStore } from '@/services/rag/vectorStore'
+import { removeNativeRagIndexDocument } from '@/services/rag/nativeIndex'
 
 export interface WorkspaceCleanupResult {
   removed: number
@@ -32,6 +33,7 @@ export async function cleanupMissingWorkspaceDocuments(workspacePath: string): P
     if (exists) continue
     vectorStore.removeByFilePath(filePath)
     await removePersistedDocumentByPath(filePath)
+    await removeNativeRagIndexDocument(filePath)
     await removeEmbeddingJobByPath(filePath)
     removedPaths.push(filePath)
   }
@@ -43,15 +45,16 @@ export async function cleanupMissingWorkspaceDocuments(workspacePath: string): P
 }
 
 export async function rebuildWorkspaceDocuments(workspacePath: string): Promise<WorkspaceRebuildResult> {
-  const documents = await loadAllDocuments()
+  const documentPaths = await loadDocumentFilePaths()
   const removedPaths: string[] = []
 
-  for (const doc of documents) {
-    if (!isInsideWorkspace(doc.filePath, workspacePath)) continue
-    vectorStore.removeByFilePath(doc.filePath)
-    await removePersistedDocumentByPath(doc.filePath)
-    await removeEmbeddingJobByPath(doc.filePath)
-    removedPaths.push(doc.filePath)
+  for (const filePath of documentPaths) {
+    if (!isInsideWorkspace(filePath, workspacePath)) continue
+    vectorStore.removeByFilePath(filePath)
+    await removePersistedDocumentByPath(filePath)
+    await removeNativeRagIndexDocument(filePath)
+    await removeEmbeddingJobByPath(filePath)
+    removedPaths.push(filePath)
   }
 
   const result = await indexWorkspaceMarkdown(workspacePath)

@@ -136,7 +136,7 @@ function scheduleIdleWarmup(): void {
   )
 
   // 向量库延迟加载：不在启动时预热，首次使用 RAG 时才加载
-  // 由 pipeline.ts 中的 hydrateVectorStoreFromDatabase() 按需加载
+  // RAG 全量向量仅在首次检索时由 Rust 后台索引服务按需加载
 
   // AI 状态校验：完全异步，不阻塞任何操作
   setTimeout(() => {

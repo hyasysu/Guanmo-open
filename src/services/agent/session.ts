@@ -1,12 +1,13 @@
 import type { EditConfirmation } from '@/services/ai/types'
-import type { AgentStep } from './types'
+import type { AgentProgressStage, AgentStep } from './types'
 
 type PendingEditPayload = Omit<EditConfirmation, 'id' | 'messageId' | 'status'>
 
 export type AgentSessionEvent =
   | { type: 'thought'; step: AgentStep }
   | { type: 'action'; step: AgentStep; toolName?: string }
-  | { type: 'observation'; step: AgentStep; pendingEdit?: PendingEditPayload }
+  | { type: 'observation'; step: AgentStep; toolName?: string; pendingEdit?: PendingEditPayload }
+  | { type: 'progress'; step: AgentStep; stage: AgentProgressStage }
 
 export interface AgentSessionState {
   steps: AgentStep[]
@@ -45,6 +46,13 @@ function decodePendingEdit(value: unknown): PendingEditPayload | undefined {
 }
 
 export function decodeAgentStepEvent(step: AgentStep): AgentSessionEvent {
+  if (step.type === 'progress') {
+    const stages: AgentProgressStage[] = ['rag_initializing', 'rag_ready', 'rag_searching', 'rag_fallback']
+    if (!step.progressStage || !stages.includes(step.progressStage)) {
+      throw new Error('Agent progress event is invalid')
+    }
+    return { type: 'progress', step, stage: step.progressStage }
+  }
   if (step.type === 'thought') return { type: 'thought', step }
   if (step.type === 'action') return { type: 'action', step, toolName: step.toolName }
 
@@ -54,7 +62,22 @@ export function decodeAgentStepEvent(step: AgentStep): AgentSessionEvent {
   } catch {
     pendingEdit = undefined
   }
-  return { type: 'observation', step, pendingEdit }
+  return { type: 'observation', step, toolName: step.toolName, pendingEdit }
+}
+
+export function decodeKnowledgeSearchOutcome(
+  event: AgentSessionEvent,
+): 'found' | 'empty' | 'error' | undefined {
+  if (event.type !== 'observation' || event.toolName !== 'search_knowledge') return undefined
+  try {
+    const parsed = JSON.parse(event.step.content)
+    if (!isRecord(parsed)) return 'error'
+    if (parsed.status === 'ok' && Array.isArray(parsed.results) && parsed.results.length > 0) return 'found'
+    if (parsed.status === 'empty' && Array.isArray(parsed.results) && parsed.results.length === 0) return 'empty'
+    return 'error'
+  } catch {
+    return 'error'
+  }
 }
 
 export function reduceAgentSession(state: AgentSessionState, event: AgentSessionEvent): AgentSessionState {

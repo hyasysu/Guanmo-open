@@ -9,7 +9,7 @@ import { initAgent, runAgent, shouldUseAgent } from '@/services/agent'
 import { classifySelectionRequest, detectIntentScores, shouldIncludeFullDocumentContext, shouldAllowMemoryWrite } from '@/services/agent/intentDetector'
 import { buildCandidateTools } from '@/services/agent/toolSelector'
 import type { AgentStep } from '@/services/agent/types'
-import { decodeAgentStepEvent } from '@/services/agent/session'
+import { decodeAgentStepEvent, decodeKnowledgeSearchOutcome } from '@/services/agent/session'
 import type { ContextTag } from '@/types/contextTag'
 import { buildContextFromTags } from '@/services/contextBuilder'
 import { readFile as readTauriFile } from '@/hooks/useTauri'
@@ -37,6 +37,14 @@ function isCancelLastAppliedEdit(content: string, history: ChatMessage[]): boole
 }
 
 function getAgentProgressText(step: AgentStep): string {
+  if (step.type === 'progress') {
+    return {
+      rag_initializing: '正在初始化索引库…',
+      rag_ready: '索引库已就绪，正在检索…',
+      rag_searching: '索引库已就绪，正在检索…',
+      rag_fallback: '索引库初始化失败，正在使用关键词检索…',
+    }[step.progressStage || 'rag_searching']
+  }
   if (step.type === 'thought') return 'AI 正在判断下一步处理方式...'
   if (step.type === 'observation') return '工具结果已返回，正在整理下一步...'
 
@@ -487,7 +495,30 @@ export function useAiChat() {
           addAgentStep(step)
           updateRequestMessage(getAgentProgressText(step))
           const event = decodeAgentStepEvent(step)
-          if (event.type === 'action' && event.toolName === 'search_knowledge') {
+          const knowledgeOutcome = decodeKnowledgeSearchOutcome(event)
+          if (event.type === 'progress') {
+            if (event.stage === 'rag_initializing') {
+              setRagStatus('initializing')
+              addTimelineItem({ type: 'index_initializing', label: '正在初始化索引库…' })
+            } else if (event.stage === 'rag_ready') {
+              setRagStatus('searching')
+              addTimelineItem({ type: 'index_ready', label: '索引库已就绪，正在检索…' })
+            } else if (event.stage === 'rag_fallback') {
+              setRagStatus('fallback')
+              addTimelineItem({ type: 'index_fallback', label: '索引库初始化失败，正在使用关键词检索…' })
+            } else {
+              setRagStatus('searching')
+            }
+          } else if (knowledgeOutcome) {
+            setRagStatus(knowledgeOutcome)
+            if (knowledgeOutcome === 'found') {
+              addTimelineItem({ type: 'local_search_found', label: '本地知识库检索完成' })
+            } else if (knowledgeOutcome === 'empty') {
+              addTimelineItem({ type: 'local_search_empty', label: '本地知识库没有命中' })
+            } else {
+              addTimelineItem({ type: 'error', label: '本地知识库检索失败' })
+            }
+          } else if (event.type === 'action' && event.toolName === 'search_knowledge') {
             addTimelineItem({ type: 'local_search_start', label: '检索本地知识库索引' })
           } else if (event.type === 'action' && event.toolName === 'read_selection_context') {
             addTimelineItem({ type: 'local_search_start', label: '正在阅读上下文' })
@@ -649,11 +680,32 @@ export function useAiChat() {
           toolArgs: { query: content.trim(), topK: 3 },
           timestamp: Date.now(),
         })
-        setRagStatus('searching')
         addTimelineItem({ type: 'local_search_start', label: '检索本地知识库', detail: content.trim() })
 
         try {
-          const scopedKnowledge = await searchScopedKnowledge(content.trim(), contextTags || [], requestController.signal)
+          const scopedKnowledge = await searchScopedKnowledge(
+            content.trim(),
+            contextTags || [],
+            requestController.signal,
+            (progress) => {
+              if (!isCurrentRequest()) return
+              if (progress === 'initializing') {
+                setRagStatus('initializing')
+                updateRequestMessage('正在初始化索引库…')
+                addTimelineItem({ type: 'index_initializing', label: '正在初始化索引库…' })
+              } else if (progress === 'ready') {
+                setRagStatus('searching')
+                updateRequestMessage('索引库已就绪，正在检索…')
+                addTimelineItem({ type: 'index_ready', label: '索引库已就绪，正在检索…' })
+              } else if (progress === 'fallback') {
+                setRagStatus('fallback')
+                updateRequestMessage('索引库初始化失败，正在使用关键词检索…')
+                addTimelineItem({ type: 'index_fallback', label: '索引库初始化失败，正在使用关键词检索…' })
+              } else {
+                setRagStatus('searching')
+              }
+            },
+          )
           if (!isCurrentRequest()) return
           if (scopedKnowledge.status === 'empty' && scopedKnowledge.emptyReason) {
             setRagStatus('empty')

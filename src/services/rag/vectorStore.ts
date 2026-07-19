@@ -7,6 +7,7 @@ import {
 } from '@/services/database/persistence'
 import { normalizeFilePath } from '@/services/pathIdentity'
 import { createContentHash } from './contentHash'
+import { isDatabaseReady } from '@/services/database/db'
 
 interface SearchRankingOptions {
   filePaths?: string[]
@@ -31,7 +32,7 @@ class VectorStore {
   private _persistenceEnabled = false
 
   get persistenceEnabled(): boolean {
-    return this._persistenceEnabled
+    return this._persistenceEnabled || isDatabaseReady()
   }
 
   private trackPersistence(promise: Promise<void>): void {
@@ -77,7 +78,7 @@ class VectorStore {
   addDocument(doc: Document): void {
     this.storeDocument(doc)
     // Persist in background (non-blocking)
-    if (this._persistenceEnabled) {
+    if (this.persistenceEnabled) {
       this.trackPersistence(
         persistDocument(doc).catch((err) =>
           console.warn('[VectorStore] persist failed:', err)
@@ -87,7 +88,7 @@ class VectorStore {
   }
 
   async replaceDocument(doc: Document, enqueueEmbeddingJob: boolean): Promise<void> {
-    if (this._persistenceEnabled) {
+    if (this.persistenceEnabled) {
       await persistDocument(doc, { enqueueEmbeddingJob })
     }
     this.storeDocument(doc)
@@ -115,7 +116,7 @@ class VectorStore {
         this.chunks.delete(chunk.id)
       }
       this.documents.delete(docId)
-      if (this._persistenceEnabled) {
+      if (this.persistenceEnabled) {
         this.trackPersistence(
           removePersistedDocument(docId).catch((err) =>
             console.warn('[VectorStore] remove persist failed:', err)
@@ -400,7 +401,7 @@ class VectorStore {
     if (chunk) {
       chunk.embedding = embedding
     }
-    if (chunk && this._persistenceEnabled) {
+    if (chunk && this.persistenceEnabled) {
       this.trackPersistence(
         persistEmbedding(chunk).catch((err) =>
           console.warn('[VectorStore] persist embedding failed:', err)

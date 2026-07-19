@@ -2,11 +2,15 @@ import type { Document, Chunk, SearchResult, RAGConfig } from './types'
 import { chunkMarkdown } from './chunker'
 import { createExactContentHash } from './contentHash'
 import { createEmbeddingInputHash, EMBEDDING_PREPROCESS_VERSION, getEmbeddingInput } from './embeddingInput'
-import { canSkipDocumentIndex, reconcileDocumentChunks, type IndexUpdateStats } from './reconciler'
+import { canSkipDocumentIndex, canSkipDocumentIndexMetadata, reconcileDocumentChunks, type IndexUpdateStats } from './reconciler'
 import { vectorStore } from './vectorStore'
 import { getEmbeddingClient, getEmbeddingConfig, isEmbeddingReady } from '@/services/ai/aiClient'
 import {
-  loadAllDocuments,
+  loadDocumentByFilePath,
+  loadDocumentById,
+  loadDocumentIndexMetadata,
+  loadKnowledgeDocumentSummaries,
+  loadRagStatsAggregate,
   listEmbeddingJobs,
   removeEmbeddingJobByPath,
   retryFailedEmbeddingJobsInDatabase,
@@ -14,6 +18,7 @@ import {
   upsertEmbeddingJob,
 } from '@/services/database/persistence'
 import { normalizeFilePath } from '@/services/pathIdentity'
+import { prepareNativeRagIndex, refreshNativeRagIndexDocument, searchNativeRagIndex, type RagSearchProgress } from './nativeIndex'
 
 export interface RAGStats {
   documents: number
@@ -58,14 +63,11 @@ const DEFAULT_CONFIG: RAGConfig = {
 let ragConfig: RAGConfig = { ...DEFAULT_CONFIG }
 let embeddingQueuePromise: Promise<EmbedResult> | null = null
 let embeddingQueueRerunRequested = false
-let hydratePromise: Promise<void> | null = null
 const documentOperations = new Map<string, Promise<void>>()
 
-export interface IngestDocumentResult {
-  document: Document
-  stats: IndexUpdateStats
-  unchanged: boolean
-}
+export type IngestDocumentResult =
+  | { unchanged: true; stats: IndexUpdateStats }
+  | { unchanged: false; document: Document; stats: IndexUpdateStats }
 
 export async function runSerializedDocumentOperation<T>(
   filePath: string,
@@ -112,15 +114,12 @@ export async function ingestDocument(
     return null
   }
 
-  if (!vectorStore.persistenceEnabled) await hydrateVectorStoreFromDatabase()
-  const existing = vectorStore.findByFilePath(filePath)
-  const docId = existing?.id || `doc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
   const contentHash = await createExactContentHash(content)
   const embeddingModel = getEmbeddingConfig()?.embeddingModel || null
+  let existing = vectorStore.findByFilePath(filePath)
 
   if (existing && canSkipDocumentIndex(existing, contentHash, embeddingModel)) {
     return {
-      document: existing,
       stats: {
         total: existing.chunks.length,
         reused: existing.chunks.filter((chunk) => Boolean(chunk.embedding)).length,
@@ -131,6 +130,29 @@ export async function ingestDocument(
       unchanged: true,
     }
   }
+
+  if (!existing) {
+    const metadata = await loadDocumentIndexMetadata(
+      filePath,
+      embeddingModel,
+      EMBEDDING_PREPROCESS_VERSION,
+    )
+    if (canSkipDocumentIndexMetadata(metadata, contentHash, embeddingModel)) {
+      return {
+        stats: {
+          total: metadata!.totalChunks,
+          reused: metadata!.embeddedChunks,
+          added: 0,
+          deleted: 0,
+          reembedded: 0,
+        },
+        unchanged: true,
+      }
+    }
+    existing = await loadDocumentByFilePath(filePath)
+  }
+
+  const docId = existing?.id || `doc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 
   const chunks = chunkMarkdown(content, docId, {
     chunkSize: ragConfig.chunkSize,
@@ -158,32 +180,10 @@ export async function enqueueEmbeddingJob(doc: Document): Promise<void> {
   await upsertEmbeddingJob(doc)
 }
 
-async function hydrateVectorStoreFromDatabase(): Promise<void> {
-  if (hydratePromise) return hydratePromise
-  hydratePromise = vectorStore.loadFromDatabase().finally(() => {
-    hydratePromise = null
-  })
-  return hydratePromise
-}
-
 async function getDocumentForJob(documentId: string, filePath: string): Promise<Document | undefined> {
   let doc = vectorStore.getDocument(documentId) || vectorStore.findByFilePath(filePath)
   if (doc) return doc
-
-  await hydrateVectorStoreFromDatabase()
-  doc = vectorStore.getDocument(documentId) || vectorStore.findByFilePath(filePath)
-  return doc
-}
-
-async function getRagDocuments(): Promise<Document[]> {
-  let docs = vectorStore.getAllDocuments()
-  if (docs.length > 0 || vectorStore.persistenceEnabled) return docs
-
-  await hydrateVectorStoreFromDatabase()
-  docs = vectorStore.getAllDocuments()
-  if (docs.length > 0) return docs
-
-  return loadAllDocuments()
+  return (await loadDocumentById(documentId)) || loadDocumentByFilePath(filePath)
 }
 
 /**
@@ -251,6 +251,7 @@ export async function embedDocument(doc: Document): Promise<EmbedResult> {
   const result = await embedChunks(doc.chunks)
   vectorStore.addDocument(doc)
   await vectorStore.flushPersistence()
+  await refreshNativeRagIndexDocument(doc.filePath)
   return result
 }
 
@@ -283,6 +284,7 @@ async function processEmbeddingQueueInternal(): Promise<EmbedResult> {
         total.errors.push(...result.errors)
         vectorStore.addDocument(doc)
         await vectorStore.flushPersistence()
+        await refreshNativeRagIndexDocument(doc.filePath)
         await updateEmbeddingJobStatus(
           job.id,
           result.failed > 0 ? 'failed' : 'done',
@@ -353,14 +355,13 @@ function deriveKnowledgeIndexState(
 }
 
 export async function getKnowledgeDocumentStates(): Promise<KnowledgeDocumentState[]> {
-  const docs = await getRagDocuments()
+  const docs = await loadKnowledgeDocumentSummaries()
   const jobs = await listEmbeddingJobs()
   const jobByPath = new Map(jobs.map((job) => [normalizeFilePath(job.filePath), job]))
   const docPathSet = new Set(docs.map((doc) => normalizeFilePath(doc.filePath)))
 
   const states: KnowledgeDocumentState[] = docs.map((doc) => {
-    const embeddedChunks = doc.chunks.filter((chunk) => chunk.embedding).length
-    const totalChunks = doc.chunks.length
+    const { embeddedChunks, totalChunks } = doc
     return {
       filePath: doc.filePath,
       title: doc.title,
@@ -412,10 +413,13 @@ export async function embedPendingChunks(): Promise<EmbedResult> {
     throw new Error('Embedding client not initialized. Configure embedding API first.')
   }
 
-  const docs = await getRagDocuments()
+  const summaries = await loadKnowledgeDocumentSummaries()
   const total: EmbedResult = { embedded: 0, failed: 0, errors: [] }
 
-  for (const doc of docs) {
+  for (const summary of summaries) {
+    if (summary.embeddedChunks >= summary.totalChunks) continue
+    const doc = await loadDocumentById(summary.id)
+    if (!doc) continue
     const pending = doc.chunks.filter((c) => !c.embedding)
     if (pending.length === 0) continue
 
@@ -425,6 +429,7 @@ export async function embedPendingChunks(): Promise<EmbedResult> {
     total.errors.push(...result.errors)
     vectorStore.addDocument(doc)
     await vectorStore.flushPersistence()
+    await refreshNativeRagIndexDocument(doc.filePath)
   }
 
   return total
@@ -436,7 +441,12 @@ export async function embedPendingChunks(): Promise<EmbedResult> {
  */
 export async function searchRelevant(
   query: string,
-  options?: Partial<RAGConfig> & { filePaths?: string[]; currentFilePath?: string; signal?: AbortSignal }
+  options?: Partial<RAGConfig> & {
+    filePaths?: string[]
+    currentFilePath?: string
+    signal?: AbortSignal
+    onProgress?: (progress: RagSearchProgress) => void
+  }
 ): Promise<SearchResult[]> {
   if (!query.trim()) return []
 
@@ -446,41 +456,42 @@ export async function searchRelevant(
   const keywordSearchEnabled = options?.keywordSearchEnabled ?? ragConfig.keywordSearchEnabled
   const preferCurrentFile = options?.preferCurrentFile ?? ragConfig.preferCurrentFile
   const preferRecentDocuments = options?.preferRecentDocuments ?? ragConfig.preferRecentDocuments
-
-  if (vectorStore.documentCount === 0) {
-    await hydrateVectorStoreFromDatabase()
-  }
-
-  let queryEmbedding: number[] | null = null
-  if (isEmbeddingReady()) {
+  const indexPromise = prepareNativeRagIndex(options?.onProgress, options?.signal)
+  const embeddingPromise = (async (): Promise<number[] | null> => {
+    if (!isEmbeddingReady()) return null
     try {
       const client = getEmbeddingClient()
       const response = await client.embedding(query, options?.signal)
-      queryEmbedding = response.embedding
+      return response.embedding
     } catch (err) {
       console.warn('Vector search failed, using keyword-only search:', err)
+      return null
     }
+  })()
+  const [indexMode, queryEmbedding] = await Promise.all([indexPromise, embeddingPromise])
+  if (indexMode === 'ready' && typeof requestAnimationFrame === 'function') {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
   }
 
-  return vectorStore.hybridSearch(query, queryEmbedding, topK, threshold, {
+  return searchNativeRagIndex({
+    queryText: query,
+    queryVector: queryEmbedding,
+    topK,
+    threshold,
     filePaths,
     keywordSearchEnabled,
     currentFilePath: options?.currentFilePath,
     preferCurrentFile,
     preferRecentDocuments,
-  })
+    keywordOnlyFallback: indexMode === 'fallback',
+  }, options?.onProgress, options?.signal)
 }
 
 export async function getRagStatsAsync(): Promise<RAGStats> {
-  const docs = await getRagDocuments()
-  const totalChunks = docs.reduce((count, doc) => count + doc.chunks.length, 0)
-  const embeddedChunks = docs.reduce(
-    (count, doc) => count + doc.chunks.filter((chunk) => chunk.embedding).length,
-    0
-  )
+  const { documents, totalChunks, embeddedChunks } = await loadRagStatsAggregate()
 
   return {
-    documents: docs.length,
+    documents,
     totalChunks,
     embeddedChunks,
     pendingEmbeddings: totalChunks - embeddedChunks,

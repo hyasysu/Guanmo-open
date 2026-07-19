@@ -2,7 +2,7 @@ import { memo, useState, useRef, useEffect, useCallback, useMemo, type PointerEv
 import { useAppStore } from '@/stores/appStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useSettingsStore } from '@/stores/settingsStore'
-import type { RagSource, RagStatus, TimelineItem, PendingEdit } from '@/stores/chatStore'
+import type { RagSource, TimelineItem, PendingEdit } from '@/stores/chatStore'
 import { useAiChat } from '@/hooks/useAiChat'
 import { Button, Icon } from 'animal-island-ui'
 import ReactMarkdown, { type Components } from 'react-markdown'
@@ -34,7 +34,7 @@ const STREAM_BOTTOM_GAP_PX = 96
 
 export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
-  const { messages, streaming, error, ragStatus, ragSources, timeline, sendMessage, cancelStream } = useAiChat()
+  const { messages, streaming, error, timeline, sendMessage, cancelStream } = useAiChat()
   const setDraftInput = useChatStore((s) => s.setDraftInput)
   const clearMessages = useChatStore((s) => s.clearMessages)
   const hasMoreHistory = useChatStore((s) => s.hasMoreHistory)
@@ -300,7 +300,6 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
       </div>
 
       <AgentTimeline timeline={timeline} />
-      <RagTrace status={ragStatus} sources={ragSources} onOpenSource={handleOpenRagSource} />
 
       {/* Chat Content - 可以滚动到控制栏下面 */}
       <div ref={chatContainerRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden min-w-0 pb-32 bg-gm-surface">
@@ -419,46 +418,6 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   )
 }
 
-function RagTrace({ status, sources, onOpenSource }: { status: RagStatus; sources: RagSource[]; onOpenSource: (source: RagSource) => void }) {
-  if (status === 'idle') return null
-
-  const statusText = {
-    searching: '正在检索本地知识库',
-    found: `已命中 ${sources.length} 个本地片段`,
-    empty: '本地资料不足，将直接回答',
-    error: '本地知识库检索失败，已降级回答',
-  }[status]
-
-  return (
-    <div className="border-b border-gm-border-subtle px-4 py-2 bg-gm-surface-elevated/50">
-      <div className="flex items-center gap-2 text-micro text-gm-text-secondary">
-        <span className={`w-1.5 h-1.5 rounded-full ${
-          status === 'found' ? 'bg-gm-success' :
-          status === 'error' ? 'bg-gm-error' :
-          status === 'searching' ? 'bg-gm-primary animate-pulse' :
-          'bg-gm-text-tertiary'
-        }`} />
-        <span>{statusText}</span>
-      </div>
-      {sources.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {sources.map((source, index) => (
-            <button
-              key={`${source.filePath}-${source.startLine}-${index}`}
-              type="button"
-              onClick={() => onOpenSource(source)}
-              className="max-w-full truncate rounded-md border border-gm-border bg-gm-surface px-2 py-0.5 text-micro text-gm-text-tertiary hover:border-gm-primary/40 hover:text-gm-primary"
-              title={`打开原文 ${source.filePath}:${source.startLine}-${source.endLine}（已按授权范围检索）`}
-            >
-              {index + 1}. {source.title}:{source.startLine}-{source.endLine} · scope
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
 function AgentTimeline({ timeline }: { timeline: TimelineItem[] }) {
   if (timeline.length === 0) return null
 
@@ -466,6 +425,9 @@ function AgentTimeline({ timeline }: { timeline: TimelineItem[] }) {
   const latest = timeline[timeline.length - 1]
 
   const tone = {
+    index_initializing: 'bg-gm-primary',
+    index_ready: 'bg-gm-success',
+    index_fallback: 'bg-[#f5c31c]',
     local_search_start: 'bg-gm-primary',
     local_search_found: 'bg-gm-success',
     local_search_empty: 'bg-gm-text-tertiary',

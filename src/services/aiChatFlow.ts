@@ -4,6 +4,7 @@ import type { SearchResult } from '@/services/rag/types'
 import type { ContextTag } from '@/types/contextTag'
 import { resolveScopeFilePaths } from '@/services/aiScope'
 import { hideLikelyToolJsonPrefix } from '@/services/agent/toolCallParser'
+import type { RagSearchProgress } from '@/services/rag/nativeIndex'
 
 function createStreamContentFlusher(
   onUpdate: (content: string) => void,
@@ -64,7 +65,8 @@ export interface ScopedKnowledgeResult {
 export async function searchScopedKnowledge(
   query: string,
   contextTags: ContextTag[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onProgress?: (progress: RagSearchProgress) => void,
 ): Promise<ScopedKnowledgeResult> {
   const scopeFilePaths = resolveScopeFilePaths(contextTags)
   if (scopeFilePaths.length === 0) {
@@ -83,6 +85,7 @@ export async function searchScopedKnowledge(
     filePaths: scopeFilePaths,
     currentFilePath: scopeFilePaths[0],
     signal,
+    onProgress,
   })
 
   if (results.length === 0) {

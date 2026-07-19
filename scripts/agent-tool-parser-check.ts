@@ -14,8 +14,23 @@ import { parseSSEStream } from '../src/services/ai/stream'
 import { BASE_SYSTEM_PROMPT } from '../src/services/ai/systemPrompts'
 import { chunkMarkdown } from '../src/services/rag/chunker'
 import { buildSemanticDocumentChunks, estimateSemanticTokens } from '../src/services/rag/semanticChunker'
+import { decodeAgentStepEvent } from '../src/services/agent/session'
 
 registerBuiltinTools()
+
+const ragProgressEvent = decodeAgentStepEvent({
+  type: 'progress',
+  content: 'rag_initializing',
+  progressStage: 'rag_initializing',
+  timestamp: 1,
+})
+assert.equal(ragProgressEvent.type, 'progress')
+assert.equal(ragProgressEvent.type === 'progress' ? ragProgressEvent.stage : '', 'rag_initializing')
+assert.throws(() => decodeAgentStepEvent({
+  type: 'progress',
+  content: 'invalid',
+  timestamp: 1,
+}), /progress event is invalid/)
 
 const eventA = `事故发生后，值班人员首先封锁现场并核对监控记录。${'调查记录确认设备温度异常，团队沿着告警时间线逐项复核传感器、控制器和供电链路。'.repeat(5)}最终确认风扇停转是本次故障的直接原因，并完成证据归档。`
 const eventB = `客户反馈导出文件缺少表头，支持人员复现后锁定模板版本。${'处理小组重新生成模板、校验字段映射并回归不同格式的导出结果，确认历史数据不受影响。'.repeat(5)}最终发布修复版本并通知客户重新导出。`

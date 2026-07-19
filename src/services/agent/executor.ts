@@ -1,4 +1,4 @@
-import type { AgentConfig, AgentStep, AgentResult, AgentRunRequest } from './types'
+import type { AgentConfig, AgentProgressStage, AgentStep, AgentResult, AgentRunRequest } from './types'
 import type { ChatMessage, ChatMessageSource } from '@/services/ai/types'
 import { getAiClient, isAiReady } from '@/services/ai/aiClient'
 import { getAllTools, getTool, getToolDescriptions, getToolsForLLM } from './toolRegistry'
@@ -358,7 +358,8 @@ async function executeTool(
   args: Record<string, unknown>,
   timeout: number,
   userIntent: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onProgress?: (stage: AgentProgressStage) => void,
 ): Promise<ToolExecutionResult> {
   const tool = getTool(name)
   if (!tool) {
@@ -402,7 +403,7 @@ async function executeTool(
       return { result, rawResult: result }
     }
     const result = await Promise.race([
-      tool.execute(args, { signal: controller.signal }),
+      tool.execute(args, { signal: controller.signal, onProgress }),
       new Promise<string>((_, reject) =>
         setTimeout(() => reject(new Error('工具执行超时')), timeout)
       ),
@@ -431,6 +432,7 @@ async function executeToolCalls(
   userIntent: string,
   signal?: AbortSignal,
   selectionContextReadLevels?: Map<string, 1 | 2>,
+  onProgress?: (stage: AgentProgressStage) => void,
 ): Promise<Array<{ name: string; result: string; rawResult?: string; executed?: boolean }>> {
   // 分离读取类和写入类工具
   const readCalls = toolCalls.filter(tc => isReadTool(tc.name))
@@ -445,7 +447,7 @@ async function executeToolCalls(
   if (regularReadCalls.length > 0) {
     const readResults = await Promise.allSettled(
       regularReadCalls.map(async tc => {
-        const executed = await executeTool(tc.name, tc.args, timeout, userIntent, signal)
+        const executed = await executeTool(tc.name, tc.args, timeout, userIntent, signal, onProgress)
         return {
           name: tc.name,
           result: executed.result,
@@ -479,7 +481,7 @@ async function executeToolCalls(
       continue
     }
 
-    const executed = await executeTool(call.name, call.args, timeout, userIntent, signal)
+    const executed = await executeTool(call.name, call.args, timeout, userIntent, signal, onProgress)
     let succeeded = false
     try {
       const parsed = JSON.parse(executed.rawResult || executed.result)
@@ -501,7 +503,7 @@ async function executeToolCalls(
   // 写入类工具本轮只允许执行第一个，避免多个确认卡片之间出现授权范围错配。
   const firstWriteCall = writeCalls[0]
   if (firstWriteCall) {
-    const executed = await executeTool(firstWriteCall.name, firstWriteCall.args, timeout, userIntent, signal)
+    const executed = await executeTool(firstWriteCall.name, firstWriteCall.args, timeout, userIntent, signal, onProgress)
     results.push({ name: firstWriteCall.name, result: executed.result, rawResult: executed.rawResult })
   }
   for (const tc of writeCalls.slice(1)) {
@@ -653,6 +655,12 @@ export async function runAgent({
     steps.push(step)
     onStep?.(step)
   }
+  const pushToolProgress = (progressStage: AgentProgressStage) => pushStep({
+    type: 'progress',
+    content: progressStage,
+    progressStage,
+    timestamp: Date.now(),
+  })
 
   const requestAgentCompletion = async () => {
     if (!streamEnabled) {
@@ -754,6 +762,7 @@ export async function runAgent({
       userIntent,
       signal,
       selectionContextReadLevels,
+      pushToolProgress,
     )
 
     for (const { name, result, rawResult } of repairResults) {
@@ -763,6 +772,7 @@ export async function runAgent({
       pushStep({
         type: 'observation',
         content: result,
+        toolName: name,
         timestamp: Date.now(),
       })
       messages.push({
@@ -938,6 +948,7 @@ export async function runAgent({
       userIntent,
       signal,
       selectionContextReadLevels,
+      pushToolProgress,
     )
 
     // 记录调用的工具
@@ -961,6 +972,7 @@ export async function runAgent({
       pushStep({
         type: 'observation',
         content: result,
+        toolName: name,
         timestamp: Date.now(),
       })
 

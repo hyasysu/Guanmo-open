@@ -1,5 +1,6 @@
 import type { Chunk, Document } from './types'
 import { createEmbeddingInputHash, EMBEDDING_PREPROCESS_VERSION } from './embeddingInput'
+import type { DocumentIndexMetadata } from '@/services/database/persistence'
 
 export interface IndexUpdateStats {
   total: number
@@ -26,6 +27,15 @@ export function canSkipDocumentIndex(
     && chunk.embeddingPreprocessVersion === EMBEDDING_PREPROCESS_VERSION
     && Boolean(chunk.embeddingInputHash)
   ))
+}
+
+export function canSkipDocumentIndexMetadata(
+  metadata: DocumentIndexMetadata | undefined,
+  contentHash: string,
+  embeddingModel: string | null,
+): boolean {
+  if (!metadata || metadata.contentHash !== contentHash) return false
+  return embeddingModel === null || metadata.compatibleChunks === metadata.totalChunks
 }
 
 function allocateChunkId(documentId: string, usedIds: Set<string>, nextIndex: { value: number }): string {

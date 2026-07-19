@@ -12,15 +12,27 @@ export interface ToolDefinition {
   name: string
   description: string
   parameters: ToolParameter[]
-  execute: (args: Record<string, unknown>, context?: { signal?: AbortSignal }) => Promise<string>
+  execute: (args: Record<string, unknown>, context?: ToolExecutionContext) => Promise<string>
+}
+
+export type AgentProgressStage =
+  | 'rag_initializing'
+  | 'rag_ready'
+  | 'rag_searching'
+  | 'rag_fallback'
+
+export interface ToolExecutionContext {
+  signal?: AbortSignal
+  onProgress?: (stage: AgentProgressStage) => void
 }
 
 export interface AgentStep {
-  type: 'thought' | 'action' | 'observation'
+  type: 'thought' | 'action' | 'observation' | 'progress'
   content: string
   toolName?: string
   toolArgs?: Record<string, unknown>
   timestamp: number
+  progressStage?: AgentProgressStage
 }
 
 export type AgentResultReason = 'completed' | 'max_steps' | 'error'
