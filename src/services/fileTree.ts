@@ -6,19 +6,7 @@ export interface FileNode {
   extension?: string
 }
 
-const WORKSPACE_FILE_EXTENSIONS = new Set([
-  'md',
-  'markdown',
-  'mdx',
-  'txt',
-  'json',
-  'html',
-  'css',
-  'js',
-  'ts',
-  'jsx',
-  'tsx',
-])
+const WORKSPACE_FILE_EXTENSIONS = new Set(['md'])
 
 const IGNORED_WORKSPACE_DIRECTORIES = new Set([
   '.git',
@@ -77,14 +65,6 @@ function getFileIcon(name: string, type: 'file' | 'directory'): string {
   const ext = getExtension(name)
   switch (ext) {
     case 'md': return 'markdown'
-    case 'txt': return 'text'
-    case 'json': return 'json'
-    case 'html': return 'html'
-    case 'css': return 'css'
-    case 'js':
-    case 'ts':
-    case 'jsx':
-    case 'tsx': return 'code'
     default: return 'file'
   }
 }

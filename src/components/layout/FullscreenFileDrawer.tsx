@@ -30,8 +30,8 @@ export function FullscreenFileDrawer({
   const { workspacePath, workspaceFiles, workspaceHiddenCount, loadWorkspace, refreshWorkspace, closeWorkspace } = useWorkspaceFileTree()
   const tabs = useEditorStore((s) => s.tabs)
   const activeTabId = useEditorStore((s) => s.activeTabId)
-  const recentFiles = useEditorStore((s) => s.recentFiles)
-  const favorites = useEditorStore((s) => s.favorites)
+  const recentFiles = useEditorStore((s) => s.recentFiles).filter((file) => isWorkspaceDisplayFile(file.path))
+  const favorites = useEditorStore((s) => s.favorites).filter(isWorkspaceDisplayFile)
   const activeFilePath = tabs.find((tab) => tab.id === activeTabId)?.filePath
   const favoriteFiles = favorites.map((path) => {
     const tab = tabs.find((t) => t.filePath === path)

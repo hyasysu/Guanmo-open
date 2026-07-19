@@ -42,7 +42,7 @@ export async function openFile(): Promise<FileHandle | null> {
   return new Promise((resolve) => {
     const input = document.createElement('input')
     input.type = 'file'
-    input.accept = '.md,.markdown,.mdx,.txt'
+    input.accept = '.md'
     input.onchange = async () => {
       const file = input.files?.[0]
       if (!file) {
@@ -80,6 +80,9 @@ export async function saveFileAs(content: string): Promise<FileHandle | null> {
   if (isTauri()) {
     const path = await saveFileDialog()
     if (!path) return null
+    if (!isWorkspaceDisplayFile(path)) {
+      throw new Error('仅支持保存为 .md 文件')
+    }
     await writeFile(path, content)
     const name = path.split(/[/\\]/).pop() || 'untitled.md'
     return { path, name, content }
@@ -88,6 +91,9 @@ export async function saveFileAs(content: string): Promise<FileHandle | null> {
   // Web fallback
   const name = prompt('文件名:', 'untitled.md')
   if (!name) return null
+  if (!isWorkspaceDisplayFile(name)) {
+    throw new Error('仅支持保存为 .md 文件')
+  }
   await saveFile(name, content)
   return { path: name, name, content }
 }
@@ -112,6 +118,9 @@ export async function pickDirectory(): Promise<string | null> {
 export async function createFile(dirPath: string, fileName: string): Promise<string> {
   if (!isTauri()) {
     throw new Error('浏览器模式下无法创建文件，请下载桌面版')
+  }
+  if (!isWorkspaceDisplayFile(fileName)) {
+    throw new Error('仅支持创建 .md 文件')
   }
   const { join } = await import('@tauri-apps/api/path')
   const fullPath = await join(dirPath, fileName)

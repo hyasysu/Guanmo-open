@@ -1,5 +1,6 @@
 import type { Tab } from '@/stores/editorStore'
 import { readRememberedFile } from '@/services/persistedFileAccess'
+import { isWorkspaceDisplayFile } from '@/services/fileTree'
 
 /**
  * 恢复持久化标签页。
@@ -13,6 +14,7 @@ export async function restorePersistedTabs(tabs: Tab[]): Promise<Tab[]> {
       restored.push(tab)
       continue
     }
+    if (!isWorkspaceDisplayFile(tab.filePath)) continue
 
     try {
       const diskContent = await readRememberedFile(tab.filePath)

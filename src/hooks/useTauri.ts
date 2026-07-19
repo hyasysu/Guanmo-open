@@ -179,10 +179,7 @@ export async function requestSelectedPathAccess(
   const selected = await open({
     multiple: false,
     defaultPath: toNativeFilePath(path),
-    filters: filters ?? [
-      { name: 'Markdown', extensions: ['md', 'markdown', 'mdx'] },
-      { name: 'Text and Code', extensions: ['txt', 'json', 'html', 'css', 'js', 'ts', 'jsx', 'tsx'] },
-    ],
+    filters: filters ?? [{ name: 'Markdown', extensions: ['md'] }],
   })
   if (typeof selected !== 'string') return false
   if (!isSameSelectedPath(path, selected)) {
@@ -215,10 +212,7 @@ export async function openFileDialog(
   const { open } = await import('@tauri-apps/plugin-dialog')
   const result = await open({
     multiple: false,
-    filters: filters ?? [
-      { name: 'Markdown', extensions: ['md', 'markdown', 'mdx'] },
-      { name: 'Text and Code', extensions: ['txt', 'json', 'html', 'css', 'js', 'ts', 'jsx', 'tsx'] },
-    ],
+    filters: filters ?? [{ name: 'Markdown', extensions: ['md'] }],
   })
   if (typeof result === 'string') {
     await authorizeSelectedPath(result)
@@ -234,10 +228,7 @@ export async function saveFileDialog(
   const { save } = await import('@tauri-apps/plugin-dialog')
   const result = await save({
     defaultPath,
-    filters: filters ?? [
-      { name: 'Markdown', extensions: ['md', 'markdown', 'mdx'] },
-      { name: 'Text', extensions: ['txt'] },
-    ],
+    filters: filters ?? [{ name: 'Markdown', extensions: ['md'] }],
   })
   if (result) await authorizeSelectedPath(result)
   return result

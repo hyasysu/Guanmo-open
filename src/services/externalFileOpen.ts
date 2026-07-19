@@ -1,5 +1,6 @@
 import { readFile } from '@/hooks/useTauri'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
+import { isWorkspaceDisplayFile } from '@/services/fileTree'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { useEditorStore } from '@/stores/editorStore'
@@ -13,7 +14,7 @@ export interface ExternalFileOpenResult {
 }
 
 export function isMarkdownPath(path: string): boolean {
-  return /\.(md|markdown|mdx)$/i.test(path)
+  return isWorkspaceDisplayFile(path)
 }
 
 export function isImagePath(path: string): boolean {

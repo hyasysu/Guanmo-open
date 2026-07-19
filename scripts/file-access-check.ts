@@ -5,8 +5,15 @@ import {
   isFileAccessAuthorizationError,
   recoverRememberedAccess,
 } from '@/services/persistedFileAccess'
+import { isWorkspaceDisplayFile } from '@/services/fileTree'
 
 async function run() {
+  assert.equal(isWorkspaceDisplayFile('D:\\notes\\draft.md'), true)
+  assert.equal(isWorkspaceDisplayFile('D:\\notes\\DRAFT.MD'), true)
+  assert.equal(isWorkspaceDisplayFile('D:\\notes\\draft.markdown'), false)
+  assert.equal(isWorkspaceDisplayFile('D:\\notes\\draft.mdx'), false)
+  assert.equal(isWorkspaceDisplayFile('D:\\notes\\draft.txt'), false)
+
   const legacyPaths = collectLegacyFileAccessPaths({
     workspacePath: 'D:\\workspace',
     recentFiles: [{ path: 'D:\\notes\\recent.md' }],
@@ -101,6 +108,8 @@ async function run() {
   assert.doesNotMatch(sessionRestore, /authorizeSelectedPath\(/)
   assert.match(sessionRestore, /readRememberedFile/)
   assert.doesNotMatch(externalOpen, /authorizeSelectedPath\(/)
+  assert.doesNotMatch(tauriAdapter, /Text and Code|extensions: \['md',/)
+  assert.match(tauriAdapter, /extensions: \['md'\]/)
   assert.match(workspaceTree, /recoverRememberedWorkspace/)
   assert.doesNotMatch(tauriAdapter, /export async function authorize(?:Selected|Workspace)Path/)
   assert.match(rustGateway, /file-access-grants\.json/)

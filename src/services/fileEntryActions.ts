@@ -5,6 +5,7 @@ import { basenamePath, dirnamePath, fileExists, joinPath, renameFile } from '@/h
 import { isSameFilePath } from '@/services/pathIdentity'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { readRememberedFile } from '@/services/persistedFileAccess'
+import { isWorkspaceDisplayFile } from '@/services/fileTree'
 
 export function validateFileName(fileName: string): string | null {
   const value = fileName.trim()
@@ -18,6 +19,7 @@ export async function renameFileEntry(path: string, nextName: string): Promise<s
   const name = nextName.trim()
   const validationError = validateFileName(name)
   if (validationError) throw new Error(validationError)
+  if (!isWorkspaceDisplayFile(name)) throw new Error('仅支持使用 .md 文件名')
   if (await basenamePath(path) === name) return path
 
   const nextPath = await joinPath(await dirnamePath(path), name)
