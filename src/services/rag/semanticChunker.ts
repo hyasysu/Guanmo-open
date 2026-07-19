@@ -144,6 +144,7 @@ function semanticBoundaryOffsets(text: string): number[] {
 }
 
 function splitAtSemanticBoundaries(chunk: SemanticChunk): SemanticChunk[] {
+  if (chunk.type === 'code' || chunk.type === 'math') return [chunk]
   const max = maxTokens(chunk.type)
   if (estimateSemanticTokens(chunk.content) <= max) return [chunk]
 

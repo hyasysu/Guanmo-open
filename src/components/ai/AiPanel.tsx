@@ -418,9 +418,9 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
 }
 
 function AgentTimeline({ timeline }: { timeline: TimelineItem[] }) {
+  const [collapsed, setCollapsed] = useState(true)
   if (timeline.length === 0) return null
 
-  const [collapsed, setCollapsed] = useState(true)
   const latest = timeline[timeline.length - 1]
 
   const tone = {
@@ -480,7 +480,7 @@ function AgentTimeline({ timeline }: { timeline: TimelineItem[] }) {
   )
 }
 
-const ChatBubble = memo(function ChatBubble({
+export const ChatBubble = memo(function ChatBubble({
   role,
   content,
   isLast,

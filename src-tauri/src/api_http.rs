@@ -367,13 +367,13 @@ async fn resolve_target(url: &Url) -> Result<Vec<SocketAddr>, ApiHttpError> {
 }
 
 fn validate_address_kinds(scheme: &str, kinds: &[AddressKind]) -> Result<(), ApiHttpError> {
-    if kinds.iter().any(|kind| *kind == AddressKind::Blocked) {
+    if kinds.contains(&AddressKind::Blocked) {
         return Err(ApiHttpError::new(
             "ADDRESS_NOT_ALLOWED",
             "目标地址属于永久禁止访问的网络范围",
         ));
     }
-    if scheme == "http" && kinds.iter().any(|kind| *kind == AddressKind::Public) {
+    if scheme == "http" && kinds.contains(&AddressKind::Public) {
         return Err(ApiHttpError::new(
             "PUBLIC_HTTP_NOT_ALLOWED",
             "公网 API 仅允许使用 HTTPS",
@@ -703,6 +703,50 @@ mod tests {
                 .code,
             "HEADER_NOT_ALLOWED"
         );
+    }
+
+    #[test]
+    fn rejects_invalid_protocol_credentials_and_public_http() {
+        assert_eq!(
+            normalize_origin("ftp://example.com/resource")
+                .unwrap_err()
+                .code,
+            "SCHEME_NOT_ALLOWED"
+        );
+        assert_eq!(
+            normalize_origin("https://anonymous:secret@example.com/v1")
+                .unwrap_err()
+                .code,
+            "URL_CREDENTIALS_NOT_ALLOWED"
+        );
+        assert_eq!(
+            validate_address_kinds("http", &[AddressKind::Public])
+                .unwrap_err()
+                .code,
+            "PUBLIC_HTTP_NOT_ALLOWED"
+        );
+    }
+
+    #[test]
+    fn blocks_sensitive_network_ranges_for_every_protocol() {
+        for address in [
+            "0.0.0.0",
+            "169.254.169.254",
+            "224.0.0.1",
+            "255.255.255.255",
+            "fe80::1",
+        ] {
+            let kind = classify_ip(address.parse().unwrap());
+            assert_eq!(
+                kind,
+                AddressKind::Blocked,
+                "address should be blocked: {address}"
+            );
+            assert_eq!(
+                validate_address_kinds("https", &[kind]).unwrap_err().code,
+                "ADDRESS_NOT_ALLOWED"
+            );
+        }
     }
 
     #[test]

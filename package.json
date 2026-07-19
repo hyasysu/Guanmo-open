@@ -20,12 +20,16 @@
         "ai"
     ],
     "engines": {
-        "node": ">=18"
+        "node": ">=22"
     },
     "type": "module",
     "scripts": {
         "dev": "vite --mode web",
         "dev:desktop": "vite --mode desktop",
+        "lint": "eslint src tests vite.config.ts vitest.config.ts",
+        "typecheck": "tsc -b --pretty false",
+        "test": "vitest run",
+        "test:watch": "vitest",
         "build": "tsc -b && vite build --mode web && node scripts/bundle-budget-check.mjs --mode web",
         "build:desktop": "tsc -b && vite build --mode desktop && node scripts/bundle-budget-check.mjs --mode desktop",
         "test:agent-parser": "node scripts/run-agent-parser-check.mjs",
@@ -55,7 +59,8 @@
         "check:bundle:web": "node scripts/bundle-budget-check.mjs --mode web",
         "check:bundle:desktop": "node scripts/bundle-budget-check.mjs --mode desktop",
         "check:push": "node scripts/pre-push-check.mjs",
-        "check:release": "node scripts/pre-push-check.mjs --release",
+        "check:publish": "node scripts/pre-push-check.mjs --release",
+        "check:release": "npm run lint && npm run typecheck && npm test && npm run build && cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features --jobs 1 -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml --all-targets --all-features --jobs 1 && cargo check --manifest-path src-tauri/Cargo.toml --all-targets --all-features --jobs 1",
         "preview": "vite preview",
         "tauri": "tauri"
     },
@@ -100,14 +105,26 @@
         "zustand": "^5.0.3"
     },
     "devDependencies": {
+        "@eslint/js": "^10.0.1",
         "@tauri-apps/cli": "^2.0.0",
+        "@testing-library/jest-dom": "^6.9.1",
+        "@testing-library/react": "^16.3.2",
+        "@testing-library/user-event": "^14.6.1",
+        "@types/node": "^26.1.1",
         "@types/react": "^18.3.18",
         "@types/react-dom": "^18.3.5",
         "@vitejs/plugin-react": "^4.3.4",
+        "@vitest/coverage-v8": "^4.1.10",
         "autoprefixer": "^10.4.20",
+        "eslint": "^10.7.0",
+        "eslint-plugin-react-hooks": "^7.1.1",
+        "globals": "^17.7.0",
+        "jsdom": "^29.1.1",
         "postcss": "^8.5.1",
         "tailwindcss": "^3.4.17",
         "typescript": "^5.7.3",
-        "vite": "^6.0.7"
+        "typescript-eslint": "^8.64.0",
+        "vite": "^6.0.7",
+        "vitest": "^4.1.10"
     }
 }
