@@ -2,11 +2,8 @@ import { useLayoutEffect, useRef } from 'react'
 import { EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
-import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
-import { bracketMatching, syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language'
-import { editorCodeLanguages } from '@/services/editorCodeLanguages'
 import type { MarkdownBlock } from '@/services/markdownBlocks'
-import { buildMarkdownEditorTheme, markdownHighlightStyle } from './CodeMirrorEditor'
+import { buildMarkdownEditorTheme } from './CodeMirrorEditor'
 
 interface InlineMarkdownBlockEditorProps {
   block: MarkdownBlock
@@ -54,10 +51,6 @@ export function InlineMarkdownBlockEditor({
       selection: { anchor: Math.max(0, Math.min(initialCursor, block.rawSource.length)) },
       extensions: [
         history(),
-        bracketMatching(),
-        syntaxHighlighting(markdownHighlightStyle),
-        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-        markdown({ base: markdownLanguage, codeLanguages: editorCodeLanguages }),
         buildMarkdownEditorTheme(fontSize, lineHeight, fontFamily),
         EditorView.theme({
           '&': { height: 'auto', minHeight: '44px' },
