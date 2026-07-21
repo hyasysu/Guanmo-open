@@ -146,6 +146,22 @@ describe('MarkdownPreview 预览内源码编辑', () => {
     expect(getComputedStyle(document.querySelector('.cm-scroller') as Element).maxHeight).toBe('480px')
   })
 
+  it.each([
+    ['图片', '![示例图片](image.png)', 'image'],
+    ['无序列表', '- 第一项\n- 第二项', 'list'],
+    ['Mermaid', '```mermaid\ngraph TD\nA-->B\n```', 'mermaid'],
+  ])('%s 的预览高度不会变成源码编辑区的最小高度', async (_label, content, blockType) => {
+    const { container } = renderPreview({ content })
+    const wrapper = container.querySelector<HTMLElement>(`[data-md-block-type="${blockType}"]`)
+    expect(wrapper).not.toBeNull()
+    vi.spyOn(wrapper as HTMLElement, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 640, 720))
+
+    altClick(wrapper as HTMLElement)
+
+    await screen.findByText('Markdown')
+    expect(getComputedStyle(document.querySelector('.cm-content') as Element).minHeight).toBe('44px')
+  })
+
   it('外部 pointerdown 提交后恢复预览，Esc 不再提交', async () => {
     const { onBlockCommit } = renderPreview()
     altClick(screen.getByText(/段落/))

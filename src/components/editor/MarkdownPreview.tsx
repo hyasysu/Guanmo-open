@@ -50,7 +50,6 @@ interface ActiveBlockEdit {
   documentVersion: number | string
   contentSnapshot: string
   initialCursor: number
-  initialHeight: number
   conflict: boolean
 }
 
@@ -251,10 +250,8 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     const requestedBlock = blocks[blockIndex]
     if (!requestedBlock) return
     const current = activeEditRef.current
-    const wrapper = target.closest<HTMLElement>('[data-md-block-index]')
     const lineElement = target.closest<HTMLElement>('[data-md-line]')
     const clickedLine = Number(lineElement?.dataset.mdLine)
-    const initialHeight = Math.max(44, wrapper?.getBoundingClientRect().height || wrapper?.offsetHeight || 0)
     if (current?.block.renderKey === requestedBlock.renderKey && current.documentKey === documentKey) return
 
     let contentSnapshot = displayedContent
@@ -283,7 +280,6 @@ export const MarkdownPreview = memo(function MarkdownPreview({
       documentVersion: documentVersionRef.current,
       contentSnapshot,
       initialCursor,
-      initialHeight,
       conflict: false,
     }
     draftRef.current = block.rawSource
@@ -366,7 +362,6 @@ export const MarkdownPreview = memo(function MarkdownPreview({
                 <InlineMarkdownBlockEditor
                   block={activeEdit.block}
                   initialCursor={activeEdit.initialCursor}
-                  initialHeight={activeEdit.initialHeight}
                   fontSize={fontSize}
                   lineHeight={lineHeight}
                   fontFamily={fontFamily}

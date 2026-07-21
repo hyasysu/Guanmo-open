@@ -11,7 +11,6 @@ import { buildMarkdownEditorTheme, markdownHighlightStyle } from './CodeMirrorEd
 interface InlineMarkdownBlockEditorProps {
   block: MarkdownBlock
   initialCursor: number
-  initialHeight: number
   fontSize: number
   lineHeight: number
   fontFamily: string
@@ -25,7 +24,6 @@ interface InlineMarkdownBlockEditorProps {
 export function InlineMarkdownBlockEditor({
   block,
   initialCursor,
-  initialHeight,
   fontSize,
   lineHeight,
   fontFamily,
@@ -62,9 +60,9 @@ export function InlineMarkdownBlockEditor({
         markdown({ base: markdownLanguage, codeLanguages: editorCodeLanguages }),
         buildMarkdownEditorTheme(fontSize, lineHeight, fontFamily),
         EditorView.theme({
-          '&': { height: 'auto', minHeight: `${Math.max(44, initialHeight)}px` },
+          '&': { height: 'auto', minHeight: '44px' },
           '.cm-scroller': { maxHeight: `${maxHeight}px`, overflow: 'auto' },
-          '.cm-content': { padding: '10px 12px', minHeight: `${Math.max(44, initialHeight - 2)}px` },
+          '.cm-content': { padding: '10px 12px', minHeight: '44px' },
           '.cm-gutters': { display: 'none' },
           '.cm-activeLine': { backgroundColor: 'transparent' },
         }),
