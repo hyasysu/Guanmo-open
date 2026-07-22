@@ -165,15 +165,22 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             )
           },
           ul: ({ children }) => (
-            <ul className="my-3 pl-6 space-y-1 list-disc">{children}</ul>
+            <ul className="my-3 pl-6 list-disc">{children}</ul>
           ),
           ol: ({ children }) => (
-            <ol className="my-3 pl-6 space-y-1 list-decimal">{children}</ol>
+            <ol className="my-3 pl-6 list-decimal">{children}</ol>
           ),
           li: ({ children, node, ...liProps }) => {
             const line = node?.position?.start?.line
             return (
-              <li data-md-line={typeof line === 'number' ? line : undefined} {...liProps}>
+              <li
+                data-md-line={typeof line === 'number' ? line : undefined}
+                {...liProps}
+                style={{
+                  ...(('style' in liProps && typeof liProps.style === 'object' && liProps.style) ? liProps.style : {}),
+                  whiteSpace: 'normal',
+                }}
+              >
                 {children}
               </li>
             )

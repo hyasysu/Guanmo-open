@@ -1378,10 +1378,13 @@ body {
   color: var(--gm-primary);
 }
 
-.gm-markdown-preview p,
-.gm-markdown-preview li {
+.gm-markdown-preview p {
   color: var(--gm-text);
   white-space: pre-wrap;
+}
+
+.gm-markdown-preview li {
+  color: var(--gm-text);
 }
 
 .gm-markdown-preview td {
