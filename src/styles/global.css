@@ -144,6 +144,15 @@ body {
   --gm-fullscreen-control-muted: #4b5563;
 }
 
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) {
+  --gm-fullscreen-control-bg: rgba(255, 255, 255, 0.94);
+  --gm-fullscreen-control-border: rgba(223, 226, 229, 0.92);
+  --gm-fullscreen-control-shadow: 0 14px 36px rgba(0, 0, 0, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  --gm-fullscreen-control-hover: rgba(65, 131, 196, 0.08);
+  --gm-fullscreen-control-text: #333333;
+  --gm-fullscreen-control-muted: #777777;
+}
+
 [data-theme='dark'] {
   --gm-fullscreen-control-bg: rgba(29, 26, 21, 0.9);
   --gm-fullscreen-control-border: rgba(224, 190, 132, 0.18);
@@ -548,8 +557,8 @@ body {
 
 .gm-light-palette-segmented {
   display: inline-grid;
-  grid-template-columns: repeat(2, minmax(68px, 1fr));
-  width: min(100%, 168px);
+  grid-template-columns: repeat(3, minmax(68px, 1fr));
+  width: min(100%, 252px);
   padding: 3px;
   gap: 2px;
   border: 1px solid var(--gm-border);
@@ -1393,6 +1402,160 @@ body {
 
 .gm-markdown-preview blockquote {
   background: var(--gm-markdown-quote-bg);
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview {
+  max-width: 860px;
+  margin: 0 auto;
+  padding-bottom: 100px;
+  color: #333333;
+  font-family: var(--gm-font-family);
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview > ul:first-child,
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview > ol:first-child {
+  margin-top: 30px;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h1,
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h2,
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h3,
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h4,
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h5,
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h6 {
+  position: relative;
+  margin-top: 1rem;
+  margin-bottom: 1rem;
+  font-weight: 700;
+  line-height: 1.4;
+  color: #333333;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h1 {
+  padding-bottom: .3em;
+  font-size: 2.25em !important;
+  line-height: 1.2;
+  border-bottom: 1px solid #eeeeee;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h2 {
+  padding-bottom: .3em;
+  font-size: 1.75em !important;
+  line-height: 1.225;
+  border-bottom: 1px solid #eeeeee;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h3 {
+  font-size: 1.5em !important;
+  line-height: 1.43;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h4 {
+  font-size: 1.25em !important;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h5 {
+  font-size: 1em;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h6 {
+  font-size: 1em;
+  color: #777777;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview p,
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview blockquote,
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview ul,
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview ol,
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview dl,
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview .gm-markdown-table-wrap {
+  margin: 0.8em 0;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview ul,
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview ol {
+  padding-left: 30px;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview li > ol,
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview li > ul {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview blockquote {
+  padding: 0 15px;
+  border-left: 4px solid #dfe2e5;
+  border-radius: 0;
+  background: transparent;
+  color: #777777;
+  font-style: normal;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview hr {
+  height: 2px;
+  margin: 16px 0;
+  background-color: #e7e7e7;
+  border: 0 none;
+  overflow: hidden;
+  box-sizing: content-box;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview .gm-markdown-table-wrap {
+  border: 0;
+  border-radius: 0;
+  overflow-x: auto;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  word-break: initial;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview thead,
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview tr:nth-child(2n) {
+  background-color: #f8f8f8;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview th,
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview td {
+  margin: 0;
+  padding: 6px 13px;
+  border: 1px solid #dfe2e5;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview th {
+  font-weight: 700;
+  border-bottom: 0;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview tr {
+  border-top: 1px solid #dfe2e5;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview :not(pre) > code,
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview li code,
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview p code {
+  border: 1px solid #e7eaed;
+  background-color: #f3f4f4;
+  border-radius: 3px;
+  padding: 0 2px;
+  color: #333333;
+  font-family: 'DMMono Nerd Font', 'Microsoft YaHei', 'Segoe UI', 'Arial', sans-serif;
+  font-size: 0.9em;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-code-block {
+  border: 1px solid #e7eaed;
+  border-radius: 3px;
+  box-shadow: none;
+}
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-code-block pre {
+  margin: 0;
+  padding-top: 8px;
+  padding-bottom: 6px;
 }
 
 .gm-code-block {

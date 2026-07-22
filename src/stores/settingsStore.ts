@@ -35,7 +35,7 @@ interface AppearanceSettings {
   customCursorEnabled: boolean
   aiMascotAvatarEnabled: boolean
   theme: 'light' | 'dark'
-  lightPalette: 'warm' | 'plain'
+  lightPalette: 'warm' | 'plain' | 'github-dmmono'
 }
 
 type AppearanceTheme = AppearanceSettings['theme']

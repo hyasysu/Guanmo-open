@@ -187,7 +187,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
           },
           hr: ({ node }) => <hr className="my-6 border-gm-border" data-md-line={getNodeStartLine(node)} />,
           table: ({ children, node }) => (
-            <div className="my-4 overflow-x-auto rounded-xl border border-gm-border" data-md-line={getNodeStartLine(node)}>
+            <div className="gm-markdown-table-wrap my-4 overflow-x-auto rounded-xl border border-gm-border" data-md-line={getNodeStartLine(node)}>
               <table className="w-full border-collapse">
                 {children}
               </table>

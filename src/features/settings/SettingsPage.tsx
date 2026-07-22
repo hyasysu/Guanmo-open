@@ -270,6 +270,7 @@ const MODE_PREWARM_FILL_WIDTHS = ['var(--gm-mode-prewarm-thumb-size)', 'calc(50%
 const LIGHT_PALETTE_OPTIONS = [
   { key: 'warm', label: '暖色' },
   { key: 'plain', label: '浅色' },
+  { key: 'github-dmmono', label: 'GitHub' },
 ] as const
 
 type FontPresetOption = {
@@ -279,6 +280,7 @@ type FontPresetOption = {
 }
 
 const EDITOR_FONT_OPTIONS: readonly FontPresetOption[] = [
+  { key: 'dmmono', label: 'DMMono Nerd Font', value: "'DMMono Nerd Font', 'JetBrains Mono', 'Cascadia Code', monospace" },
   { key: 'jetbrains-mono', label: 'JetBrains Mono', value: "'JetBrains Mono', 'Cascadia Code', monospace" },
   { key: 'cascadia', label: 'Cascadia Code', value: "'Cascadia Code', 'Consolas', monospace" },
   { key: 'fira-code', label: 'Fira Code', value: "'Fira Code', 'Cascadia Code', monospace" },
@@ -286,6 +288,7 @@ const EDITOR_FONT_OPTIONS: readonly FontPresetOption[] = [
 ] as const
 
 const PREVIEW_FONT_OPTIONS: readonly FontPresetOption[] = [
+  { key: 'dmmono-ui', label: 'DMMono / GitHub', value: "'DMMono Nerd Font', 'Microsoft YaHei', 'Open Sans', 'Clear Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif" },
   { key: 'ui-default', label: '跟随界面字体', value: 'var(--gm-font-family)' },
   { key: 'sans', label: '清晰无衬线', value: "'Noto Sans SC', 'HarmonyOS Sans SC', 'MiSans', 'PingFang SC', 'Microsoft YaHei', sans-serif" },
   { key: 'serif', label: '书卷衬线', value: "'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', serif" },
