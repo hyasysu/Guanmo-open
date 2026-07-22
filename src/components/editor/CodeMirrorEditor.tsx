@@ -25,6 +25,97 @@ interface CodeMirrorEditorProps {
   initialScrollTop?: number
 }
 
+const GENERIC_FONT_FAMILIES = new Set([
+  'serif',
+  'sans-serif',
+  'monospace',
+  'cursive',
+  'fantasy',
+  'system-ui',
+  'ui-serif',
+  'ui-sans-serif',
+  'ui-monospace',
+  'emoji',
+  'math',
+  'fangsong',
+])
+
+function splitFontFamilyList(value: string): string[] {
+  const tokens: string[] = []
+  let current = ''
+  let quote: string | null = null
+  let depth = 0
+
+  for (const char of value) {
+    if (quote) {
+      current += char
+      if (char === quote) quote = null
+      continue
+    }
+    if (char === '\'' || char === '"') {
+      quote = char
+      current += char
+      continue
+    }
+    if (char === '(') {
+      depth += 1
+      current += char
+      continue
+    }
+    if (char === ')') {
+      depth = Math.max(0, depth - 1)
+      current += char
+      continue
+    }
+    if (char === ',' && depth === 0) {
+      const token = current.trim()
+      if (token) tokens.push(token)
+      current = ''
+      continue
+    }
+    current += char
+  }
+
+  const token = current.trim()
+  if (token) tokens.push(token)
+  return tokens
+}
+
+function normalizeFontToken(token: string): string {
+  const trimmed = token.trim()
+  const unquoted = trimmed.replace(/^['"]|['"]$/g, '')
+  return unquoted.toLowerCase()
+}
+
+function isGenericFontFamily(token: string): boolean {
+  return GENERIC_FONT_FAMILIES.has(normalizeFontToken(token))
+}
+
+function composeEditorFontFamily(fontFamily: string, previewFontFamily: string): string {
+  const editorTokens = splitFontFamilyList(fontFamily)
+  if (editorTokens.length === 0) return previewFontFamily
+
+  const seen = new Set(editorTokens.map(normalizeFontToken))
+  const previewTokens = splitFontFamilyList(previewFontFamily).filter((token) => {
+    const normalized = normalizeFontToken(token)
+    if (!normalized || seen.has(normalized)) return false
+    seen.add(normalized)
+    return true
+  })
+  if (previewTokens.length === 0) return fontFamily
+
+  const genericIndex = editorTokens.findIndex(isGenericFontFamily)
+  if (genericIndex < 0) {
+    return [...editorTokens, ...previewTokens].join(', ')
+  }
+
+  return [
+    ...editorTokens.slice(0, genericIndex),
+    ...previewTokens,
+    ...editorTokens.slice(genericIndex),
+  ].join(', ')
+}
+
 function buildTheme(fontSize: number, lineHeight: number, fontFamily: string) {
   return EditorView.theme({
     '&': {
@@ -112,6 +203,19 @@ function buildTheme(fontSize: number, lineHeight: number, fontFamily: string) {
   })
 }
 
+function applyEditorTypography(view: EditorView, fontSize: number, lineHeight: number, fontFamily: string) {
+  view.dom.style.fontSize = `${fontSize}px`
+  view.dom.style.fontFamily = fontFamily
+  view.contentDOM.style.fontFamily = fontFamily
+  view.contentDOM.style.lineHeight = String(lineHeight)
+
+  const gutters = view.dom.querySelector<HTMLElement>('.cm-gutters')
+  if (gutters) {
+    gutters.style.fontFamily = fontFamily
+    gutters.style.fontSize = `${fontSize}px`
+  }
+}
+
 const markdownHighlightStyle = HighlightStyle.define([
   { tag: tags.heading, color: 'var(--gm-editor-heading)', fontWeight: '700' },
   { tag: tags.quote, color: 'var(--gm-editor-quote)', fontStyle: 'italic' },
@@ -152,13 +256,17 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
 
   // Read editor settings from store
   const editorSettings = useSettingsStore((s) => s.editor)
+  const effectiveFontFamily = useMemo(
+    () => composeEditorFontFamily(editorSettings.fontFamily, editorSettings.previewFontFamily),
+    [editorSettings.fontFamily, editorSettings.previewFontFamily]
+  )
   const pendingReveal = useEditorStore((s) => s.pendingReveal)
   const clearPendingReveal = useEditorStore((s) => s.clearPendingReveal)
-  const settingsKey = `${editorSettings.fontSize}-${editorSettings.lineHeight}-${editorSettings.fontFamily}-${editorSettings.wordWrap}-${editorSettings.lineNumbers}-${editorSettings.tabSize}`
+  const settingsKey = `${editorSettings.fontSize}-${editorSettings.lineHeight}-${effectiveFontFamily}-${editorSettings.wordWrap}-${editorSettings.lineNumbers}-${editorSettings.tabSize}`
 
   const guanmoTheme = useMemo(
-    () => buildTheme(editorSettings.fontSize, editorSettings.lineHeight, editorSettings.fontFamily),
-    [editorSettings.fontSize, editorSettings.lineHeight, editorSettings.fontFamily]
+    () => buildTheme(editorSettings.fontSize, editorSettings.lineHeight, effectiveFontFamily),
+    [editorSettings.fontSize, editorSettings.lineHeight, effectiveFontFamily]
   )
 
   useEffect(() => {
@@ -263,6 +371,8 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
       state,
       parent: containerRef.current,
     })
+
+    applyEditorTypography(view, editorSettings.fontSize, editorSettings.lineHeight, effectiveFontFamily)
 
     viewRef.current = view
     if (typeof initialScrollTop === 'number') {

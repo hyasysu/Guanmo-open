@@ -49,6 +49,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
 }: MarkdownPreviewProps) {
   const normalizedContent = useMemo(() => getNormalizedMarkdown(content), [content])
   const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
+  const previewFontFamily = useSettingsStore((state) => state.editor.previewFontFamily)
 
   const components = useMemo<Partial<Components>>(() => {
     const headingIds = new Map<string, number>()
@@ -254,7 +255,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   return (
     <div
       className="prose gm-markdown-preview max-w-none min-w-0 text-gm-text"
-      style={{ fontSize: `${fontSize}px`, lineHeight }}
+      style={{ fontSize: `${fontSize}px`, lineHeight, fontFamily: previewFontFamily }}
     >
       <ReactMarkdown
         skipHtml={skipHtml}
