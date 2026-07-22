@@ -18,7 +18,7 @@ function extractFileName(path: string): string {
 /** 打开 AI 面板 */
 function ensureAiPanelOpen() {
   const app = useAppStore.getState()
-  if (!app.aiPanelOpen) app.toggleAiPanel()
+  app.openAiPanel()
 }
 
 /**

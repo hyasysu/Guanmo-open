@@ -19,6 +19,8 @@ export function StatusBar() {
   const tabs = useEditorStore((s) => s.tabs)
   const activeTabId = useEditorStore((s) => s.activeTabId)
   const aiStatus = useAppStore((s) => s.aiStatus)
+  const aiPanelOpen = useAppStore((s) => s.aiPanelOpen)
+  const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
 
@@ -61,10 +63,16 @@ export function StatusBar() {
         </>
       )}
 
-      <StatusItem className="gap-1.5">
+      <button
+        type="button"
+        className="flex items-center gap-1.5 select-none transition-colors hover:text-gm-text"
+        onClick={toggleAiPanel}
+        aria-pressed={aiPanelOpen}
+        title={aiPanelOpen ? '关闭 AI 侧边栏' : '打开 AI 侧边栏'}
+      >
         <div className={`w-2 h-2 rounded-full ${STATUS_MAP[aiStatus]?.color ?? STATUS_MAP.unchecked.color}`} />
         <span>{STATUS_MAP[aiStatus]?.label ?? STATUS_MAP.unchecked.label}</span>
-      </StatusItem>
+      </button>
     </div>
   )
 }
