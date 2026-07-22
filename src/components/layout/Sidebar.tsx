@@ -45,6 +45,8 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
   const [indexingWorkspace, setIndexingWorkspace] = useState(false)
   const [workspaceCleanupSummary, setWorkspaceCleanupSummary] = useState<string | null>(null)
   const [indexMenuOpen, setIndexMenuOpen] = useState(false)
+  const [collapseAllSignal, setCollapseAllSignal] = useState(0)
+  const [expandAllSignal, setExpandAllSignal] = useState(0)
   const indexMenuRef = useRef<HTMLDivElement>(null)
 
   // 点击外部关闭索引下拉菜单
@@ -157,6 +159,14 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
   const handleRefreshWorkspace = useCallback(async () => {
     await refreshWorkspace()
   }, [refreshWorkspace])
+
+  const handleCollapseWorkspaceFolders = useCallback(() => {
+    setCollapseAllSignal((current) => current + 1)
+  }, [])
+
+  const handleExpandWorkspaceFolders = useCallback(() => {
+    setExpandAllSignal((current) => current + 1)
+  }, [])
 
   const handleIndexWorkspace = useCallback(async () => {
     if (!workspacePath || indexingWorkspace) return
@@ -316,22 +326,51 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
                   <span className="text-micro text-gm-text-tertiary truncate flex-1" title={workspacePath}>
                     {workspacePath.split(/[/\\]/).pop()}
                   </span>
-                  <button
-                    onClick={async () => {
-                      await handleRefreshWorkspace()
-                      toast.success('工作区已刷新')
-                    }}
-                    className="text-micro text-gm-text-tertiary hover:text-gm-text ml-2"
-                    title="重新读取工作区文件列表"
-                  >
-                    刷新
-                  </button>
-                  <button
-                    onClick={handleCloseWorkspace}
-                    className="text-micro text-gm-text-tertiary hover:text-gm-text ml-2"
-                  >
-                    关闭
-                  </button>
+                  <div className="ml-2 flex items-center gap-1">
+                    <button
+                      onClick={async () => {
+                        await handleRefreshWorkspace()
+                        toast.success('工作区已刷新')
+                      }}
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-md text-gm-text-tertiary hover:bg-gm-surface-hover hover:text-gm-text"
+                      title="重新读取工作区文件列表"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 2v6h-6" />
+                        <path d="M3 12a9 9 0 0 1 15.55-6.36L21 8" />
+                        <path d="M3 22v-6h6" />
+                        <path d="M21 12a9 9 0 0 1-15.55 6.36L3 16" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={handleExpandWorkspaceFolders}
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-md text-gm-text-tertiary hover:bg-gm-surface-hover hover:text-gm-text"
+                      title="展开工作区中的所有文件夹"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 5v14" />
+                        <path d="M5 12h14" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={handleCollapseWorkspaceFolders}
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-md text-gm-text-tertiary hover:bg-gm-surface-hover hover:text-gm-text"
+                      title="折叠工作区中的所有文件夹"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M5 12h14" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={handleCloseWorkspace}
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-md text-gm-text-tertiary hover:bg-gm-surface-hover hover:text-gm-text"
+                      title="关闭工作区"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M18 6L6 18M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
                 {/* 索引操作栏 */}
                 <div className="relative inline-flex items-center gap-0.5 mb-1" ref={indexMenuRef}>
@@ -386,6 +425,8 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
                   workspacePath={workspacePath}
                   onRefreshWorkspace={handleRefreshWorkspace}
                   onCloseWorkspace={handleCloseWorkspace}
+                  collapseAllSignal={collapseAllSignal}
+                  expandAllSignal={expandAllSignal}
                 />
               </div>
             ) : (
