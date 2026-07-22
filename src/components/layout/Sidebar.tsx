@@ -20,6 +20,10 @@ import { TruncatedText } from '@/components/common/Tooltip'
 import { useWorkspaceFileTree } from '@/hooks/useWorkspaceFileTree'
 import { useFileRename } from '@/hooks/useFileRename'
 
+const SIDEBAR_MIN_WIDTH = 220
+const SIDEBAR_MAX_WIDTH = 520
+const SIDEBAR_EDITOR_MIN_WIDTH = 360
+
 interface SidebarProps {
   collapsed: boolean
   width: number
@@ -29,6 +33,9 @@ interface SidebarProps {
 
 export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: SidebarProps) {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
+  const setSidebarWidth = useAppStore((s) => s.setSidebarWidth)
+  const aiPanelOpen = useAppStore((s) => s.aiPanelOpen)
+  const aiPanelWidth = useAppStore((s) => s.aiPanelWidth)
   const setWorkspacePath = useAppStore((s) => s.setWorkspacePath)
   const recentFiles = useEditorStore((s) => s.recentFiles).filter((file) => isWorkspaceDisplayFile(file.path))
   const favorites = useEditorStore((s) => s.favorites).filter(isWorkspaceDisplayFile)
@@ -48,6 +55,7 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
   const [collapseAllSignal, setCollapseAllSignal] = useState(0)
   const [expandAllSignal, setExpandAllSignal] = useState(0)
   const indexMenuRef = useRef<HTMLDivElement>(null)
+  const isResizing = useRef(false)
 
   // 点击外部关闭索引下拉菜单
   useEffect(() => {
@@ -60,6 +68,40 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [indexMenuOpen])
+
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    isResizing.current = true
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }, [])
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing.current) return
+      const reservedRight = aiPanelOpen ? aiPanelWidth : 0
+      const maxWidth = Math.max(
+        SIDEBAR_MIN_WIDTH,
+        Math.min(SIDEBAR_MAX_WIDTH, window.innerWidth - reservedRight - SIDEBAR_EDITOR_MIN_WIDTH)
+      )
+      const clamped = Math.max(SIDEBAR_MIN_WIDTH, Math.min(maxWidth, e.clientX))
+      setSidebarWidth(clamped)
+    }
+
+    const handleMouseUp = () => {
+      if (!isResizing.current) return
+      isResizing.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [aiPanelOpen, aiPanelWidth, setSidebarWidth])
 
   // Build favorites list with file names
   const favoriteFiles = favorites.map((path) => {
@@ -259,6 +301,11 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
       className="animal-cursor gm-instant-color relative flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col overflow-hidden"
       style={{ width }}
     >
+      <div
+        className="absolute right-0 top-0 bottom-0 z-10 w-1 cursor-col-resize hover:bg-gm-primary/30 transition-colors"
+        onMouseDown={handleResizeStart}
+      />
+
       {/* Header */}
       <div className="h-11 flex items-center px-4 border-b border-gm-border-subtle">
         <span className="text-body font-bold text-gm-text tracking-wide">
