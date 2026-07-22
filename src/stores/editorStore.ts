@@ -62,6 +62,7 @@ interface EditorState {
   updateTabContent: (id: string, content: string) => void
   markTabSaved: (id: string, content: string) => void
   replaceTabContentWithSaved: (id: string, content: string) => void
+  reloadTabFromDisk: (id: string, content: string) => void
   resetTabsForExternalOpen: () => void
   restoreTabs: (tabs: Tab[], activeTabId: string | null, rightPaneTabId: string | null) => void
   mergeRestoredTab: (originalTab: Tab, restoredTab: Tab) => void
@@ -347,6 +348,14 @@ export const useEditorStore = create<EditorState>()(
         tabs: s.tabs.map((tab) => (
           tab.id === id
             ? { ...tab, content, savedContent: content, modified: false }
+            : tab
+        )),
+      })),
+
+      reloadTabFromDisk: (id, content) => set((s) => ({
+        tabs: s.tabs.map((tab) => (
+          tab.id === id
+            ? { ...tab, content, savedContent: content, originalContent: content, modified: false }
             : tab
         )),
       })),

@@ -6,13 +6,14 @@ import { FULLSCREEN_CONTENT_PADDING, useSettingsStore } from '@/stores/settingsS
 import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
 import { indexMarkdownDocument } from '@/services/rag/indexer'
 import { isSameFilePath } from '@/services/pathIdentity'
-import { saveTabAsFile } from '@/services/fileEntryActions'
+import { reloadOpenedTabFromDisk, saveTabAsFile } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { toast } from '@/services/toast'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { useFullscreen } from '@/hooks/useFullscreen'
 import { useFileRename } from '@/hooks/useFileRename'
 import { SettingSlider } from '@/components/common/SettingSlider'
+import { isTauri } from '@/hooks/useTauri'
 
 type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
 
@@ -65,6 +66,8 @@ export function FullscreenControlBar({
   const widthBeforeRef = useRef<number>(0)
   const widthAnimatingRef = useRef(false)
   const renderedTabModeRef = useRef(false)
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null
+  const canReloadActiveTab = Boolean(activeTab?.filePath) && isTauri()
 
   const clearHideTimer = useCallback(() => {
     if (hideTimerRef.current !== null) {
@@ -232,6 +235,21 @@ export function FullscreenControlBar({
     useSettingsStore.getState().updateAppearanceSettings({ theme: theme === 'dark' ? 'light' : 'dark' })
   }, [theme])
 
+  const handleReloadFromDisk = useCallback(async () => {
+    const state = useEditorStore.getState()
+    const tab = state.tabs.find((item) => item.id === state.activeTabId)
+    if (!tab) return
+
+    try {
+      if (await reloadOpenedTabFromDisk(tab)) {
+        toast.success('已重新读取文件')
+      }
+    } catch (err) {
+      console.error('Reload file failed:', err)
+      toast.error(describeFileOperationError(err, '重新读取文件失败'))
+    }
+  }, [])
+
   const togglePaddingCard = useCallback(() => {
     clearHideTimer()
     setVisible(true)
@@ -357,6 +375,14 @@ export function FullscreenControlBar({
             </div>
             <div className="flex flex-shrink-0 items-center gap-1">
               <Separator />
+              <BubbleButton
+                onClick={() => void handleReloadFromDisk()}
+                title={canReloadActiveTab ? '重新读取当前文件' : '当前文件无法重新读取'}
+                variant="text"
+                disabled={!canReloadActiveTab}
+              >
+                刷新
+              </BubbleButton>
               <BubbleButton onClick={toggleAiPanel} active={aiPanelOpen} title="切换 AI 助手" variant="text">
                 AI
               </BubbleButton>
@@ -556,6 +582,7 @@ function BubbleButton({
   variant,
   ariaExpanded,
   ariaControls,
+  disabled = false,
 }: {
   children: React.ReactNode
   active?: boolean
@@ -564,6 +591,7 @@ function BubbleButton({
   variant?: 'pill' | 'text'
   ariaExpanded?: boolean
   ariaControls?: string
+  disabled?: boolean
 }) {
   return (
     <button
@@ -572,9 +600,12 @@ function BubbleButton({
       title={title}
       aria-expanded={ariaExpanded}
       aria-controls={ariaControls}
+      disabled={disabled}
       data-active={active ? 'true' : 'false'}
       className={`gm-fullscreen-bubble h-8 flex-shrink-0 whitespace-nowrap rounded-full px-3 text-body font-bold transition-colors ${
-        active
+        disabled
+          ? 'cursor-not-allowed text-gm-text-tertiary opacity-50'
+          : active
           ? variant === 'text'
             ? 'text-gm-primary'
             : 'bg-gm-primary text-gm-text-on-primary shadow-sm'

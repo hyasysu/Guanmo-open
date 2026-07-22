@@ -1,7 +1,7 @@
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { saveFileAs } from '@/services/fileSystem'
-import { basenamePath, dirnamePath, fileExists, joinPath, renameFile } from '@/hooks/useTauri'
+import { basenamePath, dirnamePath, fileExists, isTauri, joinPath, renameFile } from '@/hooks/useTauri'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { readRememberedFile } from '@/services/persistedFileAccess'
@@ -53,4 +53,18 @@ export async function saveExistingFileAs(path: string): Promise<void> {
   if (!result) return
   state.addTab(result.path, result.name, result.content)
   scheduleMarkdownDocumentIndex(result.path, result.name, result.content)
+}
+
+export async function reloadOpenedTabFromDisk(tab: Tab): Promise<boolean> {
+  if (!tab.filePath || !isTauri()) return false
+
+  const hasUnsavedChanges = tab.modified || tab.content !== tab.savedContent
+  if (hasUnsavedChanges && !window.confirm('当前文件有未保存修改，重新读取将丢失这些修改。是否继续？')) {
+    return false
+  }
+
+  const content = await readRememberedFile(tab.filePath)
+  useEditorStore.getState().reloadTabFromDisk(tab.id, content)
+  scheduleMarkdownDocumentIndex(tab.filePath, tab.title, content)
+  return true
 }
