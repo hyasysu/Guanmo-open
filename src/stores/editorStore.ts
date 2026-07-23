@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist, type PersistStorage, type StorageValue } from 'zustand/middleware'
 import { isSameFilePath, normalizeFilePath } from '@/services/pathIdentity'
 import { mergeBackgroundRestoredTab } from '@/services/sessionRestorePolicy'
+import { eventMarker } from '@/services/eventMarker'
 
 export interface Tab {
   id: string
@@ -177,6 +178,7 @@ function markPreviewSwitchStart(tabId: string, viewMode: ViewMode) {
   const markName = `guanmo:preview-switch:${tabId}:start`
   performance.clearMarks(markName)
   performance.mark(markName)
+  eventMarker.mark('preview-render-start', { mode: viewMode })
 }
 
 function isPrewarmableViewMode(mode: ViewMode): mode is PrewarmableViewMode {
@@ -278,6 +280,7 @@ export const useEditorStore = create<EditorState>()(
       },
 
       closeTab: (id) => {
+        const closedTab = get().tabs.find((t) => t.id === id)
         set((s) => {
           const tabs = s.tabs.filter((t) => t.id !== id)
           let activeTabId = s.activeTabId
@@ -303,6 +306,9 @@ export const useEditorStore = create<EditorState>()(
               : null,
           }
         })
+        if (closedTab) {
+          eventMarker.mark('close-file', { modified: closedTab.modified })
+        }
       },
 
       setActiveTab: (id) => set((s) => {
@@ -375,6 +381,8 @@ export const useEditorStore = create<EditorState>()(
 
       togglePreview: () => {
         const { viewMode } = get()
+        const nextMode: ViewMode = viewMode === 'edit-preview' || viewMode === 'preview' ? 'edit' : 'edit-preview'
+        eventMarker.start('switch-mode-start', { from: viewMode, to: nextMode })
         if (viewMode === 'edit-preview' || viewMode === 'preview') {
           set({ viewMode: 'edit', previewVisible: false })
         } else {
@@ -388,6 +396,8 @@ export const useEditorStore = create<EditorState>()(
 
       toggleDiffPreview: () => {
         const { viewMode } = get()
+        const nextMode: ViewMode = viewMode === 'diff-preview' ? 'edit' : 'diff-preview'
+        eventMarker.start('switch-mode-start', { from: viewMode, to: nextMode })
         if (viewMode === 'diff-preview') {
           set({ viewMode: 'edit', previewVisible: false })
         } else {
@@ -412,6 +422,10 @@ export const useEditorStore = create<EditorState>()(
       },
 
       setViewMode: (mode) => {
+        const previousMode = get().viewMode
+        if (mode === previousMode) return
+        eventMarker.start('switch-mode-start', { from: previousMode, to: mode })
+        if (shouldMaskPreviewSwitch(mode)) eventMarker.mark('preview-render-start', { mode })
         if (mode === 'edit') {
           set({ viewMode: 'edit', previewVisible: false })
         } else if (mode === 'preview') {

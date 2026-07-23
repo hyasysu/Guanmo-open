@@ -13,6 +13,7 @@ import { setActiveEditorView } from '@/services/editorViewRef'
 import { useEditorHistoryStore } from '@/stores/editorHistoryStore'
 import { DeferredContentEmitter } from '@/services/editorInputBuffer'
 import { editorCodeLanguages } from '@/services/editorCodeLanguages'
+import { eventMarker } from '@/services/eventMarker'
 
 interface CodeMirrorEditorProps {
   content: string
@@ -195,6 +196,8 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
     // Destroy old editor
     if (viewRef.current) {
       viewRef.current.destroy()
+      eventMarker.mark('model-dispose', { editor: 'codemirror', reason: 'recreate' })
+      eventMarker.mark('editor-dispose', { editor: 'codemirror', reason: 'recreate' })
       viewRef.current = null
     }
 
@@ -263,6 +266,8 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
       state,
       parent: containerRef.current,
     })
+    eventMarker.mark('editor-create', { editor: 'codemirror' })
+    eventMarker.mark('model-create', { editor: 'codemirror', charCount: state.doc.length })
 
     viewRef.current = view
     if (typeof initialScrollTop === 'number') {
@@ -278,6 +283,8 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
       inputBuffer.dispose()
       if (inputBufferRef.current === inputBuffer) inputBufferRef.current = null
       view.destroy()
+      eventMarker.mark('model-dispose', { editor: 'codemirror' })
+      eventMarker.mark('editor-dispose', { editor: 'codemirror' })
       viewRef.current = null
       setActiveEditorView(null)
       setCanUndo(false)

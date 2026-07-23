@@ -14,6 +14,7 @@ use tauri_plugin_fs::FsExt;
 
 mod api_http;
 mod database_transactions;
+mod perf_monitor;
 mod rag_index;
 use api_http::ApiOriginState;
 
@@ -1313,6 +1314,7 @@ pub fn run() {
         .manage(ApiOriginState::default())
         .manage(rag_index::RagIndexService::default())
         .manage(pending_open_files)
+        .manage(perf_monitor::PerfMonitorState::default())
         .on_webview_event(|webview, event| {
             if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
                 for path in paths {
@@ -1388,6 +1390,7 @@ pub fn run() {
             rag_index::search_rag_index,
             rag_index::refresh_rag_index_document,
             rag_index::remove_rag_index_document,
+            perf_monitor::get_perf_snapshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -20,6 +20,7 @@ import {
 } from '@/hooks/useTauri'
 import { isWorkspaceDisplayFile } from '@/services/fileTree'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
+import { eventMarker } from '@/services/eventMarker'
 
 export interface FileHandle {
   path: string
@@ -28,13 +29,21 @@ export interface FileHandle {
 }
 
 export async function openFile(): Promise<FileHandle | null> {
+  eventMarker.mark('open-file-start')
   if (isTauri()) {
     const result = await openFileDialog()
-    if (!result) return null
+    if (!result) {
+      eventMarker.mark('open-file-complete', { cancelled: true })
+      return null
+    }
     const path = Array.isArray(result) ? result[0] : result
-    if (!isWorkspaceDisplayFile(path)) return null
+    if (!isWorkspaceDisplayFile(path)) {
+      eventMarker.mark('open-file-complete', { rejected: true })
+      return null
+    }
     const content = await readFile(path)
     const name = path.split(/[/\\]/).pop() || 'untitled.md'
+    eventMarker.mark('open-file-complete', { fileKind: 'disk' })
     return { path, name, content }
   }
 
@@ -54,6 +63,7 @@ export async function openFile(): Promise<FileHandle | null> {
         return
       }
       const content = await file.text()
+      eventMarker.mark('open-file-complete', { fileKind: 'browser' })
       resolve({ path: file.name, name: file.name, content })
     }
     input.click()

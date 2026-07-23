@@ -1,3 +1,6 @@
+import { useEffect } from 'react'
+import { eventMarker } from '@/services/eventMarker'
+
 interface DiffLine {
   type: 'same' | 'added' | 'removed'
   oldLine?: number
@@ -58,6 +61,11 @@ export function MarkdownDiffView({
   wordWrap,
   lineNumbers,
 }: MarkdownDiffViewProps) {
+  useEffect(() => {
+    eventMarker.mark('diff-create')
+    return () => eventMarker.mark('diff-dispose')
+  }, [])
+
   const lines = buildLineDiff(original, current)
   const changed = lines.filter((line) => line.type !== 'same').length
 

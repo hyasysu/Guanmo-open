@@ -15,6 +15,7 @@ import { toast } from '@/services/toast'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { openFileDialog } from '@/hooks/useTauri'
 import { addSelectionContextTag, setAiShortcutPrompt } from '@/services/aiContext'
+import { eventMarker } from '@/services/eventMarker'
 import { CodeMirrorEditor } from './CodeMirrorEditor'
 import { EditorContextMenu } from './EditorContextMenu'
 import { MarkdownDiffView } from './MarkdownDiffView'
@@ -536,6 +537,7 @@ export function EditorArea() {
     }
     if (leftPreviewVisible) {
       reportPreviewSwitchPerformance(activeTab.id, restoreStartedAt)
+      eventMarker.mark('preview-render-complete', { mode: viewMode })
     }
   }, [
     activePreview.version,

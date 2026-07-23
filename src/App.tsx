@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import 'katex/dist/katex.min.css'
 import { AppLayout } from './components/layout/AppLayout'
 import { ToastContainer } from './components/common/ToastContainer'
@@ -27,6 +27,11 @@ import { detectLegacyData, type LegacyDetectionResult } from './services/databas
 import { LegacyDataNoticeModal } from './components/legacy/LegacyDataNoticeModal'
 import { scheduleIdleTask } from './services/idleScheduler'
 import { singletonManager, SINGLETON_IDS } from './services/singletonPromise'
+import { eventMarker } from './services/eventMarker'
+
+const DevPerfMonitorPanel = import.meta.env.DEV
+  ? lazy(() => import('./components/devtools/PerfMonitorPanel').then((module) => ({ default: module.PerfMonitorPanel })))
+  : null
 
 type CursorPhase = 'entering' | 'active' | 'exiting'
 
@@ -350,6 +355,7 @@ function App() {
         // ==================== UI 就绪：立即显示界面 ====================
         if (!cancelled) {
           setAppReady(true)
+          eventMarker.mark('app-ready')
         }
         logDuration('ui ready', appInitStartedAt)
 
@@ -383,6 +389,7 @@ function App() {
         <AppLayout />
       </CustomCursorFrame>
       <ToastContainer />
+      {DevPerfMonitorPanel && <Suspense fallback={null}><DevPerfMonitorPanel /></Suspense>}
       <UpdateManager />
       <GlobalTooltip />
       {legacyDetection && (
