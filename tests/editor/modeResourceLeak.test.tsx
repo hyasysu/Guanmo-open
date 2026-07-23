@@ -151,7 +151,7 @@ describe('模式资源泄漏回归', () => {
         syncScroll: false,
         autoSendAiShortcut: true,
         inlinePreviewEdit: false,
-        modePrewarm: 'off',
+        modePerformancePolicy: 'balanced',
         fullscreenContentPadding: 88,
       },
       ai: {
@@ -203,7 +203,7 @@ describe('模式资源泄漏回归', () => {
 
       // 使用 memory 策略确保立即释放
       act(() => {
-        useSettingsStore.getState().updateEditorSettings({ modeResourcePolicy: 'memory' })
+        useSettingsStore.getState().updateEditorSettings({ modePerformancePolicy: 'memory' })
       })
 
       const { container } = renderEditorArea()
@@ -231,7 +231,7 @@ describe('模式资源泄漏回归', () => {
 
       // 使用 memory 策略确保立即释放
       act(() => {
-        useSettingsStore.getState().updateEditorSettings({ modeResourcePolicy: 'memory' })
+        useSettingsStore.getState().updateEditorSettings({ modePerformancePolicy: 'memory' })
       })
 
       // 设置右栏为 tab-2
@@ -262,7 +262,7 @@ describe('模式资源泄漏回归', () => {
 
       // 先开启预热确保预热实例被创建
       useSettingsStore.setState((s) => ({
-        editor: { ...s.editor, modePrewarm: 'smart' },
+        editor: { ...s.editor, modePerformancePolicy: 'balanced' },
       }))
 
       setupEditor([tab], 'tab-1', 'edit')
@@ -281,7 +281,7 @@ describe('模式资源泄漏回归', () => {
 
       // 关闭预热
       act(() => {
-        useSettingsStore.getState().updateEditorSettings({ modePrewarm: 'off' })
+        useSettingsStore.getState().updateEditorSettings({ modePerformancePolicy: 'memory' })
       })
 
       // 缺陷：预热创建的预览实例仍保留

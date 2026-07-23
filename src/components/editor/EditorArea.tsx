@@ -31,6 +31,7 @@ import {
   getNextPrewarmTarget,
   scheduleIdlePrewarm,
   decideResource,
+  mapPerformancePolicy,
   type PrewarmTargetMode,
   type PrewarmedModeKeys,
   type InstanceType,
@@ -152,8 +153,11 @@ export function EditorArea() {
   const editorLineNumbers = useSettingsStore((s) => s.editor.lineNumbers)
   const syncScroll = useSettingsStore((s) => s.editor.syncScroll)
   const inlinePreviewEdit = useSettingsStore((s) => s.editor.inlinePreviewEdit)
-  const modePrewarm = useSettingsStore((s) => s.editor.modePrewarm)
-  const modeResourcePolicy = useSettingsStore((s) => s.editor.modeResourcePolicy)
+  const modePerformancePolicy = useSettingsStore((s) => s.editor.modePerformancePolicy)
+  const { prewarm: modePrewarm, resource: modeResourcePolicy } = useMemo(
+    () => mapPerformancePolicy(modePerformancePolicy),
+    [modePerformancePolicy],
+  )
   const fullscreenContentPadding = useSettingsStore((s) => s.editor.fullscreenContentPadding)
   const viewModeUsage = useEditorStore((s) => s.viewModeUsage)
   const isFullscreen = useAppStore((s) => s.isFullscreen)
@@ -186,6 +190,9 @@ export function EditorArea() {
   const warmScopeRef = useRef<string | null>(null)
   const prewarmCancelRef = useRef(0)
   const idlePrewarmCancelRef = useRef<(() => void) | null>(null)
+  const pendingPrewarmRef = useRef<{ scheduleId: string; target: PrewarmTargetMode } | null>(null)
+  const prewarmScheduleSequenceRef = useRef(0)
+  const requestedPrewarmScheduleIdsRef = useRef<Partial<Record<PrewarmTargetMode, string>>>({})
   const lastUserActivityAtRef = useRef(Date.now())
 
   useEffect(() => {
@@ -320,6 +327,9 @@ export function EditorArea() {
     const decision = decideHiddenResource(instanceKey, instanceType, candidateDocId, docCharCount, draftRef)
     if (decision.action === 'release') {
       if (!hasDraft && !isInstanceVisible(instanceKey) && instanceDocumentRef.current[instanceKey] === candidateDocId) {
+        if (import.meta.env.DEV) {
+          eventMarker.mark('resource-release', { resource: instanceKey, reason: 'immediate', phase: 'requested' })
+        }
         releaseFn()
       }
     } else if (decision.action === 'keepUntil') {
@@ -339,22 +349,58 @@ export function EditorArea() {
           now: Date.now(),
           hasUncommittedDraft: draftRef?.current ?? false,
         })
-        if (currentDecision.action === 'release') releaseFn()
+        if (currentDecision.action === 'release') {
+          if (import.meta.env.DEV) {
+            eventMarker.mark('resource-release', { resource: instanceKey, reason: 'ttl-expired', phase: 'requested' })
+          }
+          releaseFn()
+        }
       }, Math.max(0, decision.deadline - now))
       ttlRef.current = timer
     }
   }, [clearTtl, decideHiddenResource, isInstanceVisible])
 
+  const cancelPendingPrewarm = useCallback((reason: 'user-activity' | 'mode-change' | 'context-change' | 'policy-change' | 'schedule-replaced') => {
+    const pending = pendingPrewarmRef.current
+    if (pending) {
+      if (import.meta.env.DEV) {
+        eventMarker.mark('prewarm-cancel', {
+          reason,
+          scheduleId: pending.scheduleId,
+          target: pending.target,
+        })
+      }
+      pendingPrewarmRef.current = null
+    }
+    if (idlePrewarmCancelRef.current) {
+      idlePrewarmCancelRef.current()
+      idlePrewarmCancelRef.current = null
+    }
+  }, [])
+
+  const cancelModePrewarm = useCallback((reason: 'user-activity' | 'mode-change' | 'context-change' | 'policy-change') => {
+    prewarmCancelRef.current += 1
+    lastUserActivityAtRef.current = Date.now()
+    cancelPendingPrewarm(reason)
+  }, [cancelPendingPrewarm])
+
   const previousModePrewarmRef = useRef(modePrewarm)
+
+  // Detect policy changes for performance monitor
+  const previousPerformancePolicyRef = useRef(modePerformancePolicy)
+  useEffect(() => {
+    const prev = previousPerformancePolicyRef.current
+    previousPerformancePolicyRef.current = modePerformancePolicy
+    if (import.meta.env.DEV && prev !== modePerformancePolicy) {
+      eventMarker.mark('policy-change', { policy: modePerformancePolicy, prewarm: modePrewarm, resource: modeResourcePolicy })
+    }
+  }, [modePerformancePolicy, modePrewarm, modeResourcePolicy])
+
   useEffect(() => {
     const previous = previousModePrewarmRef.current
     previousModePrewarmRef.current = modePrewarm
     if (previous !== 'off' && modePrewarm === 'off') {
-      prewarmCancelRef.current += 1
-      if (idlePrewarmCancelRef.current) {
-        idlePrewarmCancelRef.current()
-        idlePrewarmCancelRef.current = null
-      }
+      cancelModePrewarm('policy-change')
       clearAllTtls()
       if (!editorVisible) {
         setResourceMounted('editor', false)
@@ -382,7 +428,7 @@ export function EditorArea() {
       }
       setPrewarmedModeKeys({})
     }
-  }, [modePrewarm, editorVisible, leftPreviewVisible, viewMode, clearAllTtls, setResourceMounted])
+  }, [modePrewarm, editorVisible, leftPreviewVisible, viewMode, cancelModePrewarm, clearAllTtls, setResourceMounted])
 
   const handlePreviewDraftStateChange = useCallback((pane: 'left' | 'right', hasDraft: boolean) => {
     const draftRef = pane === 'left' ? leftPreviewDraftRef : rightPreviewDraftRef
@@ -594,13 +640,8 @@ export function EditorArea() {
     viewMode === 'dual-preview'
   )
 
-  const cancelModePrewarm = useCallback(() => {
-    prewarmCancelRef.current += 1
-    lastUserActivityAtRef.current = Date.now()
-  }, [])
-
   useEffect(() => {
-    const handleActivity = () => cancelModePrewarm()
+    const handleActivity = () => cancelModePrewarm('user-activity')
     window.addEventListener('keydown', handleActivity, true)
     window.addEventListener('pointerdown', handleActivity, true)
     window.addEventListener('wheel', handleActivity, { capture: true, passive: true })
@@ -614,7 +655,7 @@ export function EditorArea() {
   }, [cancelModePrewarm])
 
   useEffect(() => {
-    cancelModePrewarm()
+    cancelModePrewarm('mode-change')
   }, [viewMode, cancelModePrewarm])
 
   useEffect(() => {
@@ -622,12 +663,13 @@ export function EditorArea() {
   }, [modePrewarm])
 
   useEffect(() => {
-    cancelModePrewarm()
+    cancelModePrewarm('context-change')
     setPrewarmedModeKeys({})
   }, [activeTab?.id, activeTab?.content, activeTab?.originalContent, cancelModePrewarm, viewMode])
 
   useEffect(() => {
-    if (!activeTab?.id || modePrewarm === 'off') return
+    const canPrewarm = modePrewarm !== 'off' && modeResourcePolicy !== 'memory'
+    if (!activeTab?.id || !canPrewarm) return
     if (activePreview.pending || rightPreview.pending) return
 
     const target = getNextPrewarmTarget({
@@ -644,6 +686,9 @@ export function EditorArea() {
     })
     if (!target) return
 
+    cancelPendingPrewarm('schedule-replaced')
+    const scheduleId = `prewarm-${++prewarmScheduleSequenceRef.current}`
+    pendingPrewarmRef.current = { scheduleId, target }
     const token = prewarmCancelRef.current
     const timer = window.setTimeout(() => {
       const idleSince = Date.now() - lastUserActivityAtRef.current
@@ -658,6 +703,10 @@ export function EditorArea() {
         if (prewarmCancelRef.current !== token) return
         const key = getModeRenderKey(target)
         if (!key) return
+        if (pendingPrewarmRef.current?.scheduleId === scheduleId) {
+          pendingPrewarmRef.current = null
+        }
+        requestedPrewarmScheduleIdsRef.current[target] = scheduleId
         setPrewarmedModeKeys((current) => (
           current[target] === key
             ? current
@@ -665,6 +714,14 @@ export function EditorArea() {
         ))
       })
     }, Math.max(MODE_PREWARM_IDLE_DELAY, MODE_PREWARM_ACTIVITY_PAUSE))
+
+    if (import.meta.env.DEV) {
+      eventMarker.mark('prewarm-schedule', {
+        target,
+        scheduleId,
+        delayMs: Math.max(MODE_PREWARM_IDLE_DELAY, MODE_PREWARM_ACTIVITY_PAUSE),
+      })
+    }
 
     return () => window.clearTimeout(timer)
   }, [
@@ -674,6 +731,8 @@ export function EditorArea() {
     activeTab?.id,
     getModeRenderKey,
     modePrewarm,
+    modeResourcePolicy,
+    cancelPendingPrewarm,
     prewarmedModeKeys,
     rightPreview.pending,
     viewMode,
@@ -681,7 +740,8 @@ export function EditorArea() {
   ])
 
   useEffect(() => {
-    if (!activeTab?.id || modePrewarm === 'off') return
+    const canPrewarm = modePrewarm !== 'off' && modeResourcePolicy !== 'memory'
+    if (!activeTab?.id || !canPrewarm) return
     const requestedModes = Object.keys(prewarmedModeKeys) as PrewarmTargetMode[]
     if (requestedModes.length === 0) return
     const now = Date.now()
@@ -693,11 +753,28 @@ export function EditorArea() {
     if (wantsLeft && !leftPreviewVisible && !leftPreviewMountedRef.current) {
       lastInstanceUseRef.current['left-preview'] = now
       setResourceMounted('left-preview', true, activeTab.id)
+      const target = requestedModes.find((mode) => mode === 'preview' || mode === 'edit-preview' || mode === 'dual-preview')
+      if (import.meta.env.DEV) {
+        eventMarker.mark('prewarm-create', {
+          resource: 'left-preview',
+          target: target ?? null,
+          scheduleId: target ? requestedPrewarmScheduleIdsRef.current[target] ?? null : null,
+          phase: 'requested',
+        })
+      }
     }
 
     if (wantsEditor && !editorVisible && !editorMountedRef.current) {
       lastInstanceUseRef.current.editor = now
       setResourceMounted('editor', true, activeTab.id)
+      if (import.meta.env.DEV) {
+        eventMarker.mark('prewarm-create', {
+          resource: 'editor',
+          target: 'edit-preview',
+          scheduleId: requestedPrewarmScheduleIdsRef.current['edit-preview'] ?? null,
+          phase: 'requested',
+        })
+      }
     }
 
     if (wantsRight && viewMode !== 'dual-preview' && !rightPreviewMountedRef.current) {
@@ -705,11 +782,27 @@ export function EditorArea() {
       retainedRightTabRef.current = candidate
       lastInstanceUseRef.current['right-preview'] = now
       setResourceMounted('right-preview', true, candidate.id)
+      if (import.meta.env.DEV) {
+        eventMarker.mark('prewarm-create', {
+          resource: 'right-preview',
+          target: 'dual-preview',
+          scheduleId: requestedPrewarmScheduleIdsRef.current['dual-preview'] ?? null,
+          phase: 'requested',
+        })
+      }
     }
 
     if (wantsDiff && viewMode !== 'diff-preview' && !diffMountedRef.current) {
       lastInstanceUseRef.current.diff = now
       setResourceMounted('diff', true, activeTab.id)
+      if (import.meta.env.DEV) {
+        eventMarker.mark('prewarm-create', {
+          resource: 'diff',
+          target: 'diff-preview',
+          scheduleId: requestedPrewarmScheduleIdsRef.current['diff-preview'] ?? null,
+          phase: 'requested',
+        })
+      }
       const decision = decideHiddenResource('diff', 'diff', activeTab.id, activeTab.content.length)
       if (decision.action !== 'release') return
       if (diffReleaseFrameRef.current !== null) window.cancelAnimationFrame(diffReleaseFrameRef.current)

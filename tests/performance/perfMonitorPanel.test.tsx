@@ -12,6 +12,7 @@ vi.mock('@/hooks/usePerfMonitor', () => ({ usePerfMonitor: vi.fn() }))
 import { PerfMonitorPanel } from '@/components/devtools/PerfMonitorPanel'
 import type { PerfData } from '@/services/perfTypes'
 import { usePerfStore } from '@/stores/perfStore'
+import { useSettingsStore } from '@/stores/settingsStore'
 
 describe('PerfMonitorPanel export', () => {
   beforeEach(() => {
@@ -40,6 +41,19 @@ describe('PerfMonitorPanel export', () => {
 
     await waitFor(() => expect(fileApi.saveFileDialog).toHaveBeenCalledTimes(1))
     expect(fileApi.writeFile).not.toHaveBeenCalled()
+  })
+
+  it('导出报告记录当前模式性能策略', async () => {
+    useSettingsStore.setState((state) => ({
+      editor: { ...state.editor, modePerformancePolicy: 'speed' },
+    }))
+    render(<PerfMonitorPanel />)
+
+    fireEvent.click(screen.getByRole('button', { name: '导出 JSON' }))
+    await waitFor(() => expect(fileApi.writeFile).toHaveBeenCalledTimes(1))
+    const report = JSON.parse(fileApi.writeFile.mock.calls[0][1] as string)
+
+    expect(report.testContext.modePerformancePolicy).toBe('speed')
   })
 
   it('重挂面板后仍导出基线并脱敏用户操作', async () => {

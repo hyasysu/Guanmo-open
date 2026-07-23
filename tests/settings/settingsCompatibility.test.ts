@@ -20,7 +20,7 @@ describe('设置兼容', () => {
     const store = await loadSettingsStore()
     const state = store.getState()
 
-    expect(state.editor).toMatchObject({ fontSize: 14, lineHeight: 1.65, autoSave: true, modePrewarm: 'smart', inlinePreviewEdit: true })
+    expect(state.editor).toMatchObject({ fontSize: 14, lineHeight: 1.65, autoSave: true, modePerformancePolicy: 'balanced', inlinePreviewEdit: true })
     expect(state.appearance).toMatchObject({ theme: 'light', lightPalette: 'warm' })
     expect(state.webSearch).toMatchObject({ provider: 'duckduckgo', maxResults: 5 })
   })
@@ -48,12 +48,12 @@ describe('设置兼容', () => {
     expect(state.ai).toBeDefined()
   })
 
-  it('旧配置缺少 modeResourcePolicy 时默认 balanced', async () => {
+  it('旧配置缺少 modePerformancePolicy 时默认 balanced', async () => {
     const store = await loadSettingsStore({
       editor: { fontSize: 16 },
     })
     const state = store.getState()
-    expect(state.editor.modeResourcePolicy).toBe('balanced')
+    expect(state.editor.modePerformancePolicy).toBe('balanced')
   })
 
   it('损坏的持久配置不会阻止应用使用默认设置', async () => {
@@ -62,5 +62,129 @@ describe('设置兼容', () => {
 
     expect(store.getState().editor.fontSize).toBe(14)
     expect(store.getState().appearance.theme).toBe('light')
+  })
+})
+
+describe('旧字段迁移', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('新字段合法时以新字段为准', async () => {
+    const store = await loadSettingsStore({
+      editor: { modePerformancePolicy: 'speed', modePrewarm: 'off', modeResourcePolicy: 'memory' },
+    })
+    expect(store.getState().editor.modePerformancePolicy).toBe('speed')
+  })
+
+  it('新字段非法时回退迁移', async () => {
+    const store = await loadSettingsStore({
+      editor: { modePerformancePolicy: 'invalid', modePrewarm: 'smart' },
+    } as unknown as Record<string, unknown>)
+    expect(store.getState().editor.modePerformancePolicy).toBe('balanced')
+  })
+
+  it('只有旧 modePrewarm=off 时迁移为 memory', async () => {
+    const store = await loadSettingsStore({
+      editor: { modePrewarm: 'off' },
+    } as unknown as Record<string, unknown>)
+    expect(store.getState().editor.modePerformancePolicy).toBe('memory')
+  })
+
+  it('只有旧 modePrewarm=smart 时迁移为 balanced', async () => {
+    const store = await loadSettingsStore({
+      editor: { modePrewarm: 'smart' },
+    } as unknown as Record<string, unknown>)
+    expect(store.getState().editor.modePerformancePolicy).toBe('balanced')
+  })
+
+  it('只有旧 modePrewarm=turbo 时迁移为 speed', async () => {
+    const store = await loadSettingsStore({
+      editor: { modePrewarm: 'turbo' },
+    } as unknown as Record<string, unknown>)
+    expect(store.getState().editor.modePerformancePolicy).toBe('speed')
+  })
+
+  it('只有旧 modeResourcePolicy=memory 时迁移为 memory', async () => {
+    const store = await loadSettingsStore({
+      editor: { modeResourcePolicy: 'memory' },
+    } as unknown as Record<string, unknown>)
+    expect(store.getState().editor.modePerformancePolicy).toBe('memory')
+  })
+
+  it('只有旧 modeResourcePolicy=balanced 时迁移为 balanced', async () => {
+    const store = await loadSettingsStore({
+      editor: { modeResourcePolicy: 'balanced' },
+    } as unknown as Record<string, unknown>)
+    expect(store.getState().editor.modePerformancePolicy).toBe('balanced')
+  })
+
+  it('只有旧 modeResourcePolicy=speed 时迁移为 speed', async () => {
+    const store = await loadSettingsStore({
+      editor: { modeResourcePolicy: 'speed' },
+    } as unknown as Record<string, unknown>)
+    expect(store.getState().editor.modePerformancePolicy).toBe('speed')
+  })
+
+  describe('两个旧字段组合时选择较保守的较低档', () => {
+    const prewarmValues = ['off', 'smart', 'turbo'] as const
+    const resourceValues = ['memory', 'balanced', 'speed'] as const
+    const expected: Record<string, Record<string, string>> = {
+      off: { memory: 'memory', balanced: 'memory', speed: 'memory' },
+      smart: { memory: 'memory', balanced: 'balanced', speed: 'balanced' },
+      turbo: { memory: 'memory', balanced: 'balanced', speed: 'speed' },
+    }
+    for (const pw of prewarmValues) {
+      for (const rp of resourceValues) {
+        it(`modePrewarm=${pw} + modeResourcePolicy=${rp} → ${expected[pw][rp]}`, async () => {
+          const store = await loadSettingsStore({
+            editor: { modePrewarm: pw, modeResourcePolicy: rp },
+          } as unknown as Record<string, unknown>)
+          expect(store.getState().editor.modePerformancePolicy).toBe(expected[pw][rp])
+        })
+      }
+    }
+  })
+
+  it('两个旧字段都非法时使用 balanced', async () => {
+    const store = await loadSettingsStore({
+      editor: { modePrewarm: 'bad', modeResourcePolicy: 'bad' },
+    } as unknown as Record<string, unknown>)
+    expect(store.getState().editor.modePerformancePolicy).toBe('balanced')
+  })
+
+  it('两个旧字段都缺失时使用 balanced', async () => {
+    const store = await loadSettingsStore({
+      editor: { fontSize: 16 },
+    })
+    expect(store.getState().editor.modePerformancePolicy).toBe('balanced')
+  })
+
+  it('迁移后运行时对象不含旧字段', async () => {
+    localStorage.clear()
+    const store = await loadSettingsStore({
+      editor: { modePrewarm: 'off', modeResourcePolicy: 'memory' },
+    } as unknown as Record<string, unknown>)
+    const state = store.getState()
+    expect(state.editor).toHaveProperty('modePerformancePolicy')
+    expect(state.editor as Record<string, unknown>).not.toHaveProperty('modePrewarm')
+    expect(state.editor as Record<string, unknown>).not.toHaveProperty('modeResourcePolicy')
+  })
+
+  it('迁移后重新写入的 localStorage 不含旧字段', async () => {
+    localStorage.clear()
+    const store = await loadSettingsStore({
+      editor: { modePrewarm: 'turbo', modeResourcePolicy: 'speed' },
+    } as unknown as Record<string, unknown>)
+    // Trigger a state change to force persistence
+    store.getState().updateEditorSettings({ fontSize: 16 })
+    // Wait for persist middleware debounce
+    await new Promise(r => setTimeout(r, 50))
+    const raw = localStorage.getItem('guanmo-settings')
+    expect(raw).toBeTruthy()
+    // After migration, saved data should not contain old fields
+    expect(raw).not.toContain('"modePrewarm"')
+    expect(raw).not.toContain('"modeResourcePolicy"')
+    expect(raw).toContain('"modePerformancePolicy"')
   })
 })

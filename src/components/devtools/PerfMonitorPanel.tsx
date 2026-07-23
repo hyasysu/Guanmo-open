@@ -6,6 +6,7 @@ import { eventMarker, type PerfEvent } from '@/services/eventMarker'
 import { perfCollector } from '@/services/perfCollector'
 import { PERF_SCHEMA_VERSION, withLegacyPerfFields, type PerfData } from '@/services/perfTypes'
 import { getPerfHistory, usePerfStore, type PerfBaseline, type SampleIntervalMs } from '@/stores/perfStore'
+import { useSettingsStore } from '@/stores/settingsStore'
 import { toast } from '@/services/toast'
 
 type PanelSection = 'overview' | 'processes' | 'resources' | 'context' | 'events'
@@ -102,6 +103,11 @@ const EVENT_LABELS: Record<PerfEvent['type'], string> = {
   'exit-fullscreen': '退出全屏',
   'baseline-set': '设置基线',
   'memory-snapshot': '内存快照',
+  'policy-change': '策略切换',
+  'prewarm-schedule': '预热调度',
+  'prewarm-create': '预热创建请求',
+  'prewarm-cancel': '预热取消',
+  'resource-release': '资源回收请求',
 }
 
 function formatKb(kb: number) {
@@ -141,6 +147,9 @@ async function exportReport() {
     environment: {
       platform: navigator.platform,
       language: navigator.language,
+    },
+    testContext: {
+      modePerformancePolicy: useSettingsStore.getState().editor.modePerformancePolicy,
     },
     buildMode: document.querySelector('meta[name="guanmo-build-mode"]')?.getAttribute('content') ?? 'unknown',
     appVersion: await getVersion().catch(() => 'unknown'),
@@ -318,10 +327,21 @@ function Timeline({ events }: { events: PerfEvent[] }) {
       const memoryDelta = event.before && event.after
         ? event.after.appPrivateWorkingSetKb - event.before.appPrivateWorkingSetKb
         : null
-      return <div key={event.id} className="grid grid-cols-[64px_150px_1fr] gap-2 border-b border-gray-800 py-1">
+      const meta = event.metadata
+      const metaStr = meta
+        ? Object.entries(meta)
+            .filter(([, v]) => v != null)
+            .map(([k, v]) => `${k}=${v}`)
+            .join(' ')
+        : ''
+      return <div key={event.id} className="grid grid-cols-[64px_120px_1fr] gap-2 border-b border-gray-800 py-1">
         <span className="text-gray-500">{formatTime(event.timestamp)}</span>
         <span>{EVENT_LABELS[event.type] ?? event.type}</span>
-        <span className="text-gray-400">{event.durationMs !== undefined ? `${event.durationMs.toFixed(1)}ms` : ''}{memoryDelta !== null ? ` · 内存 ${memoryDelta >= 0 ? '+' : ''}${formatKb(memoryDelta)}` : ''}</span>
+        <span className="text-gray-400">
+          {metaStr && <span className="text-gray-500">{metaStr} </span>}
+          {event.durationMs !== undefined ? `${event.durationMs.toFixed(1)}ms` : ''}
+          {memoryDelta !== null ? ` · 内存 ${memoryDelta >= 0 ? '+' : ''}${formatKb(memoryDelta)}` : ''}
+        </span>
       </div>
     })}
     {!events.length && <div className="py-8 text-center text-gray-500">暂无事件</div>}

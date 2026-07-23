@@ -215,17 +215,32 @@ function SliderField({
   )
 }
 
-const MODE_PREWARM_OPTIONS = [
-  { key: 'off', label: '关闭', description: '关闭闲时预热，首次切换其他模式时再进行渲染。' },
-  { key: 'smart', label: '智能', description: '当前模式渲染完成并空闲后，优先预热预览模式，再预热一个常用模式。' },
-  { key: 'turbo', label: '极速', description: '当前模式渲染完成并空闲后，优先预热预览模式，再预热两个常用模式，可能增加资源占用。' },
+const MODE_PERFORMANCE_OPTIONS = [
+  {
+    key: 'memory',
+    label: '节省内存',
+    description: '关闭闲时预热，隐藏的编辑器和预览将尽快释放，减少资源占用。',
+    cssClass: 'off',
+  },
+  {
+    key: 'balanced',
+    label: '平衡',
+    description: '智能预热常用模式。小文档隐藏后保留 45 秒，大文档（≥10 万字符）保留 5 秒后释放。',
+    cssClass: 'smart',
+  },
+  {
+    key: 'speed',
+    label: '极速切换',
+    description: '积极预热多个模式，尽量保留当前文档已创建的编辑器和预览。切换文档时仍会释放旧文档资源，Diff 离开后始终释放。',
+    cssClass: 'turbo',
+  },
 ] as const
 
-type ModePrewarmLevel = typeof MODE_PREWARM_OPTIONS[number]['key']
-const MODE_PREWARM_KEYS = MODE_PREWARM_OPTIONS.map((option) => option.key)
-const MODE_PREWARM_STOP_POSITIONS = ['var(--gm-mode-prewarm-stop-edge)', '50%', 'calc(100% - var(--gm-mode-prewarm-stop-edge))'] as const
-const MODE_PREWARM_LABEL_POSITIONS = ['var(--gm-mode-prewarm-stop-edge)', 'calc(50% - 14px)', 'calc(100% - var(--gm-mode-prewarm-stop-edge) - 26px)'] as const
-const MODE_PREWARM_FILL_WIDTHS = ['var(--gm-mode-prewarm-thumb-size)', 'calc(50% + var(--gm-mode-prewarm-thumb-size) / 2)', '100%'] as const
+type ModePerformanceLevel = typeof MODE_PERFORMANCE_OPTIONS[number]['key']
+const MODE_PERFORMANCE_KEYS = MODE_PERFORMANCE_OPTIONS.map((option) => option.key)
+const MODE_PERFORMANCE_STOP_POSITIONS = ['var(--gm-mode-prewarm-stop-edge)', '50%', 'calc(100% - var(--gm-mode-prewarm-stop-edge))'] as const
+const MODE_PERFORMANCE_LABEL_POSITIONS = ['var(--gm-mode-prewarm-stop-edge)', 'calc(50% - 14px)', 'calc(100% - var(--gm-mode-prewarm-stop-edge) - 26px)'] as const
+const MODE_PERFORMANCE_FILL_WIDTHS = ['var(--gm-mode-prewarm-thumb-size)', 'calc(50% + var(--gm-mode-prewarm-thumb-size) / 2)', '100%'] as const
 
 const LIGHT_PALETTE_OPTIONS = [
   { key: 'warm', label: '暖色' },
@@ -234,33 +249,33 @@ const LIGHT_PALETTE_OPTIONS = [
 
 type LightPalette = typeof LIGHT_PALETTE_OPTIONS[number]['key']
 
-function getModePrewarmIndex(value: ModePrewarmLevel) {
-  return Math.max(0, MODE_PREWARM_KEYS.indexOf(value))
+function getModePerformanceIndex(value: ModePerformanceLevel) {
+  return Math.max(0, MODE_PERFORMANCE_KEYS.indexOf(value))
 }
 
-function ModePrewarmSlider({
+function ModePerformanceSlider({
   value,
   onChange,
 }: {
-  value: ModePrewarmLevel
-  onChange: (value: ModePrewarmLevel) => void
+  value: ModePerformanceLevel
+  onChange: (value: ModePerformanceLevel) => void
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
-  const committedIndex = getModePrewarmIndex(value)
+  const committedIndex = getModePerformanceIndex(value)
   const [draftIndex, setDraftIndex] = useState(committedIndex)
   const [dragging, setDragging] = useState(false)
-  const activeOption = MODE_PREWARM_OPTIONS[draftIndex] ?? MODE_PREWARM_OPTIONS[0]
-  const thumbPosition = MODE_PREWARM_STOP_POSITIONS[draftIndex] ?? MODE_PREWARM_STOP_POSITIONS[0]
-  const fillWidth = MODE_PREWARM_FILL_WIDTHS[draftIndex] ?? MODE_PREWARM_FILL_WIDTHS[0]
+  const activeOption = MODE_PERFORMANCE_OPTIONS[draftIndex] ?? MODE_PERFORMANCE_OPTIONS[0]
+  const thumbPosition = MODE_PERFORMANCE_STOP_POSITIONS[draftIndex] ?? MODE_PERFORMANCE_STOP_POSITIONS[0]
+  const fillWidth = MODE_PERFORMANCE_FILL_WIDTHS[draftIndex] ?? MODE_PERFORMANCE_FILL_WIDTHS[0]
 
   useEffect(() => {
     if (!dragging) setDraftIndex(committedIndex)
   }, [committedIndex, dragging])
 
   const commitIndex = useCallback((index: number) => {
-    const nextIndex = Math.max(0, Math.min(MODE_PREWARM_OPTIONS.length - 1, Math.round(index)))
+    const nextIndex = Math.max(0, Math.min(MODE_PERFORMANCE_OPTIONS.length - 1, Math.round(index)))
     setDraftIndex(nextIndex)
-    const nextValue = MODE_PREWARM_OPTIONS[nextIndex].key
+    const nextValue = MODE_PERFORMANCE_OPTIONS[nextIndex].key
     if (nextValue !== value) onChange(nextValue)
   }, [onChange, value])
 
@@ -280,38 +295,38 @@ function ModePrewarmSlider({
       ArrowRight: draftIndex + 1,
       ArrowUp: draftIndex + 1,
       Home: 0,
-      End: MODE_PREWARM_OPTIONS.length - 1,
+      End: MODE_PERFORMANCE_OPTIONS.length - 1,
     }
     if (!(event.key in keyTargets)) return
     event.preventDefault()
     commitIndex(keyTargets[event.key])
   }, [commitIndex, draftIndex])
 
-  const labelNodes = useMemo(() => MODE_PREWARM_OPTIONS.map((option, index) => (
+  const labelNodes = useMemo(() => MODE_PERFORMANCE_OPTIONS.map((option, index) => (
     <span
       key={option.key}
       className="gm-mode-prewarm__label"
       data-active={index === draftIndex}
-      style={{ left: MODE_PREWARM_LABEL_POSITIONS[index] }}
+      style={{ left: MODE_PERFORMANCE_LABEL_POSITIONS[index] }}
     >
       {option.label}
     </span>
   )), [draftIndex])
 
   return (
-    <div className={`gm-mode-prewarm gm-mode-prewarm--${activeOption.key}`} data-dragging={dragging}>
+    <div className={`gm-mode-prewarm gm-mode-prewarm--${activeOption.cssClass}`} data-dragging={dragging}>
       <div className="gm-mode-prewarm__labels" aria-hidden="true">
         {labelNodes}
       </div>
       <div className="gm-mode-prewarm__slider">
         <div className="gm-mode-prewarm__track" aria-hidden="true">
           <span className="gm-mode-prewarm__fill" style={{ width: fillWidth }} />
-          {MODE_PREWARM_OPTIONS.map((option, index) => (
+          {MODE_PERFORMANCE_OPTIONS.map((option, index) => (
             <span
               key={option.key}
               className="gm-mode-prewarm__node"
               data-active={index <= draftIndex}
-              style={{ left: MODE_PREWARM_STOP_POSITIONS[index] }}
+              style={{ left: MODE_PERFORMANCE_STOP_POSITIONS[index] }}
             />
           ))}
           <span className="gm-mode-prewarm__thumb" style={{ left: thumbPosition }} />
@@ -323,7 +338,7 @@ function ModePrewarmSlider({
           max={2}
           step={1}
           value={draftIndex}
-          aria-label="模式闲时预热"
+          aria-label="模式性能策略"
           aria-valuetext={activeOption.label}
           className="gm-mode-prewarm__input"
           onChange={handleRangeChange}
@@ -1014,7 +1029,7 @@ function StatItem({ label, value }: { label: string; value: number }) {
 
 function EditorSettings() {
   const { editor, updateEditorSettings } = useSettingsStore()
-  const modePrewarmDescription = MODE_PREWARM_OPTIONS[getModePrewarmIndex(editor.modePrewarm)].description
+  const modePerformanceDescription = MODE_PERFORMANCE_OPTIONS[getModePerformanceIndex(editor.modePerformancePolicy)].description
 
   return (
     <div className="w-full pb-6">
@@ -1053,21 +1068,10 @@ function EditorSettings() {
       </SettingField>
       <Sep />
       <SectionTitle>性能</SectionTitle>
-      <SettingField label="模式闲时预热" description={modePrewarmDescription} descriptionClassName="min-h-[54px]">
-        <ModePrewarmSlider
-          value={editor.modePrewarm}
-          onChange={(modePrewarm) => updateEditorSettings({ modePrewarm })}
-        />
-      </SettingField>
-      <SettingField label="模式资源策略" description="控制切换模式后旧编辑器与预览的保留策略。节省内存：立即释放；平衡：延时释放；极速：尽量保留。">
-        <Select
-          options={[
-            { key: 'memory', label: '节省内存' },
-            { key: 'balanced', label: '平衡（默认）' },
-            { key: 'speed', label: '极速切换' },
-          ]}
-          value={editor.modeResourcePolicy}
-          onChange={(v) => updateEditorSettings({ modeResourcePolicy: v as 'memory' | 'balanced' | 'speed' })}
+      <SettingField label="模式性能策略" description={modePerformanceDescription} descriptionClassName="min-h-[54px]">
+        <ModePerformanceSlider
+          value={editor.modePerformancePolicy}
+          onChange={(modePerformancePolicy) => updateEditorSettings({ modePerformancePolicy })}
         />
       </SettingField>
     </div>
@@ -1207,7 +1211,7 @@ function GeneralSettings() {
       syncScroll: true,
       autoSendAiShortcut: true,
       inlinePreviewEdit: true,
-      modePrewarm: 'smart',
+      modePerformancePolicy: 'balanced',
     })
     updateAppearanceSettings({ customCursorEnabled: true, aiMascotAvatarEnabled: false, theme: 'light', lightPalette: 'warm' })
     updateWebSearchConfig({ provider: 'duckduckgo', apiKey: '', maxResults: 5, customUrl: '' })

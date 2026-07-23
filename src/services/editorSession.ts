@@ -11,8 +11,25 @@ export const BALANCED_SMALL_DOC_TTL_MS = 45000
 export const BALANCED_LARGE_DOC_THRESHOLD = 100000
 export const BALANCED_LARGE_DOC_TTL_MS = 5000
 
+export type ModePerformancePolicy = 'memory' | 'balanced' | 'speed'
 export type ResourcePolicy = 'memory' | 'balanced' | 'speed'
+export type ModePrewarmLevel = 'off' | 'smart' | 'turbo'
 export type InstanceType = 'editor' | 'preview' | 'diff'
+
+export interface PerformancePolicyDerived {
+  prewarm: ModePrewarmLevel
+  resource: ResourcePolicy
+}
+
+const PERFORMANCE_POLICY_MAP: Record<ModePerformancePolicy, PerformancePolicyDerived> = {
+  memory: { prewarm: 'off', resource: 'memory' },
+  balanced: { prewarm: 'smart', resource: 'balanced' },
+  speed: { prewarm: 'turbo', resource: 'speed' },
+}
+
+export function mapPerformancePolicy(policy: ModePerformancePolicy): PerformancePolicyDerived {
+  return PERFORMANCE_POLICY_MAP[policy]
+}
 
 export interface ResourceDecisionInput {
   policy: ResourcePolicy

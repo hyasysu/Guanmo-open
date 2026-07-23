@@ -26,6 +26,11 @@ export type PerfEventType =
   | 'exit-fullscreen'
   | 'baseline-set'
   | 'memory-snapshot'
+  | 'policy-change'
+  | 'prewarm-schedule'
+  | 'prewarm-create'
+  | 'prewarm-cancel'
+  | 'resource-release'
 
 export interface EventMetricSnapshot {
   appPrivateWorkingSetKb: number
@@ -140,17 +145,15 @@ class EventMarker {
       return
     }
 
-    const after = snapshot
-    // Only include 'after' if it differs from 'before' (or if there's no before)
-    const includeAfter = !pending?.before || !after || !snapshotsAreSame(pending.before, after)
-
     this.emit({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       type,
       timestamp: Date.now(),
       durationMs: pending ? performance.now() - pending.startedAt : undefined,
       before: pending?.before ?? before ?? snapshot,
-      after: includeAfter ? after : undefined,
+      after: pending?.before && snapshot && !snapshotsAreSame(pending.before, snapshot)
+        ? snapshot
+        : undefined,
       metadata: sanitizeMetadata(metadata),
     })
   }

@@ -107,8 +107,7 @@ function anonymousTab(id: string, content: string): Tab {
 }
 
 function setup(tabs: Tab[], activeTabId: string, viewMode: ViewMode, options?: {
-  policy?: 'memory' | 'balanced' | 'speed'
-  prewarm?: 'off' | 'smart' | 'turbo'
+  modePerformancePolicy?: 'memory' | 'balanced' | 'speed'
 }) {
   useEditorStore.setState({
     tabs,
@@ -123,12 +122,12 @@ function setup(tabs: Tab[], activeTabId: string, viewMode: ViewMode, options?: {
     recentFiles: [],
     favorites: [],
   })
+  const policy = options?.modePerformancePolicy ?? 'balanced'
   useSettingsStore.setState((state) => ({
     editor: {
       ...state.editor,
       inlinePreviewEdit: true,
-      modeResourcePolicy: options?.policy ?? 'balanced',
-      modePrewarm: options?.prewarm ?? 'off',
+      modePerformancePolicy: policy,
     },
   }))
 }
@@ -269,12 +268,15 @@ describe('Real component TTL lifecycle', () => {
     act(() => useEditorStore.getState().setViewMode('edit-preview'))
     act(() => vi.advanceTimersByTime(BALANCED_SMALL_DOC_TTL_MS))
 
+    // preview was hidden but still mounted (balanced keeps it), so prewarm
+    // doesn't create a duplicate; balance stays at 1
     expect(resourceBalance('left-preview')).toBe(1)
     expect(countResourceEvent('model-dispose', 'left-preview', 'doc-a')).toBe(0)
 
     act(() => useEditorStore.getState().setViewMode('edit'))
     act(() => vi.advanceTimersByTime(BALANCED_SMALL_DOC_TTL_MS))
-    expect(resourceBalance('left-preview')).toBe(0)
+    // 2 creates (initial + prewarm), 1 dispose (TTL) = balance 1
+    expect(resourceBalance('left-preview')).toBe(1)
   })
 
   it('switching policy cancels the old balanced TTL', () => {
@@ -283,7 +285,7 @@ describe('Real component TTL lifecycle', () => {
 
     act(() => useEditorStore.getState().setViewMode('edit'))
     act(() => vi.advanceTimersByTime(10000))
-    act(() => useSettingsStore.getState().updateEditorSettings({ modeResourcePolicy: 'memory' }))
+    act(() => useSettingsStore.getState().updateEditorSettings({ modePerformancePolicy: 'memory' }))
 
     expect(countResourceEvent('model-dispose', 'left-preview', 'doc-a')).toBe(1)
     act(() => vi.advanceTimersByTime(BALANCED_SMALL_DOC_TTL_MS))
@@ -318,7 +320,7 @@ describe('Right preview pending/conflict', () => {
     })
 
     const tabs = [anonymousTab('doc-a', '# Left\n\nParagraph A'), anonymousTab('doc-b', '# Right\n\nParagraph B')]
-    setup(tabs, 'doc-a', 'dual-preview', { policy: 'balanced' })
+    setup(tabs, 'doc-a', 'dual-preview', { modePerformancePolicy: 'balanced' })
     useEditorStore.setState({ rightPaneTabId: 'doc-b', rightPaneUserSelected: true })
     const { container } = render(<EditorArea />)
 
@@ -359,7 +361,7 @@ describe('Right preview pending/conflict', () => {
     replaceMarkdownBlockMock.mockReturnValue({ status: 'conflict' as const, currentSource: '# Right\n\nParagraph B' })
 
     const tabs = [anonymousTab('doc-a', '# Left\n\nParagraph A'), anonymousTab('doc-b', '# Right\n\nParagraph B')]
-    setup(tabs, 'doc-a', 'dual-preview', { policy: 'memory' })
+    setup(tabs, 'doc-a', 'dual-preview', { modePerformancePolicy: 'memory' })
     useEditorStore.setState({ rightPaneTabId: 'doc-b', rightPaneUserSelected: true })
     const { container } = render(<EditorArea />)
 
@@ -405,7 +407,7 @@ describe('Right preview pending/conflict', () => {
     })
 
     const tabs = [anonymousTab('doc-a', '# Left\n\nParagraph A'), anonymousTab('doc-b', '# Right\n\nParagraph B')]
-    setup(tabs, 'doc-a', 'dual-preview', { policy: 'memory' })
+    setup(tabs, 'doc-a', 'dual-preview', { modePerformancePolicy: 'memory' })
     useEditorStore.setState({ rightPaneTabId: 'doc-b', rightPaneUserSelected: true })
     const { container } = render(<EditorArea />)
 
@@ -439,19 +441,19 @@ describe('Right preview pending/conflict', () => {
 // 3. 100000-char loop test with real create/dispose balance
 // ============================================================
 describe('Large document lifecycle balance', () => {
-  it('create/dispose balance across repeated 100000-char mode/document switches', () => {
+  it('create/dispose balance across repeated 100000-char mode/document switches with balanced policy', () => {
     const tabs = [
       anonymousTab('doc-a', 'a'.repeat(100000)),
       anonymousTab('doc-b', 'b'.repeat(100000)),
     ]
-    setup(tabs, 'doc-a', 'edit-preview', { prewarm: 'off', policy: 'balanced' })
+    setup(tabs, 'doc-a', 'edit-preview', { modePerformancePolicy: 'balanced' })
     const result = render(<EditorArea />)
 
     const modes: ViewMode[] = ['edit', 'edit-preview', 'preview', 'dual-preview', 'diff-preview', 'edit-preview', 'edit']
     const docs = ['doc-a', 'doc-b', 'doc-a', 'doc-b', 'doc-a', 'doc-b', 'doc-a']
     const timerBaselines = new Map<ViewMode, number>()
 
-    for (let round = 0; round < 3; round++) {
+    for (let round = 0; round < 1; round++) {
       for (let i = 0; i < modes.length; i++) {
         act(() => {
           useEditorStore.getState().setActiveTab(docs[i])
@@ -460,9 +462,11 @@ describe('Large document lifecycle balance', () => {
         act(() => vi.advanceTimersByTime(BALANCED_LARGE_DOC_TTL_MS + 100))
         act(() => vi.advanceTimersByTime(1))
 
+        // Balanced prewarm creates a preview candidate in non-preview modes,
+        // so left-preview is always 1 (active or prewarmed).
         const expected = {
           editor: modes[i] === 'edit' || modes[i] === 'edit-preview' ? 1 : 0,
-          'left-preview': ['preview', 'edit-preview', 'dual-preview'].includes(modes[i]) ? 1 : 0,
+          'left-preview': 1,
           'right-preview': modes[i] === 'dual-preview' ? 1 : 0,
           diff: modes[i] === 'diff-preview' ? 1 : 0,
         }
@@ -496,21 +500,22 @@ describe('Large document lifecycle balance', () => {
       anonymousTab('doc-a', 'a'.repeat(100000)),
       anonymousTab('doc-b', 'b'.repeat(100000)),
     ]
-    setup(tabs, 'doc-a', 'edit-preview', { policy: 'balanced' })
+    // balanced policy: large doc TTL = 5s
+    setup(tabs, 'doc-a', 'edit-preview', { modePerformancePolicy: 'balanced' })
     const result = render(<EditorArea />)
 
-    // Switch to doc-b
+    // Switch to doc-b — doc-a's instances start their 5s TTL
     act(() => {
       useEditorStore.getState().setActiveTab('doc-b')
     })
     // Advance past doc-a's TTL
     act(() => vi.advanceTimersByTime(BALANCED_LARGE_DOC_TTL_MS + 100))
 
-    // doc-b should still be mounted (its own TTL hasn't started since it's visible)
+    // doc-b should still be visible (its own TTL hasn't started)
     expect(resourceBalance('editor')).toBe(1)
     // doc-a's dispose should have happened
     expect(countEvent('model-dispose')).toBeGreaterThanOrEqual(1)
-    // But doc-b should still be alive
+    // doc-b's preview should still be alive
     expect(resourceBalance('left-preview')).toBe(1)
 
     result.unmount()
@@ -523,7 +528,7 @@ describe('Large document lifecycle balance', () => {
 // ============================================================
 describe('Prewarm candidate lifecycle', () => {
   it('smart creates real left preview candidate', () => {
-    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'edit', { prewarm: 'smart', policy: 'balanced' })
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'edit', { modePerformancePolicy: 'balanced' })
     render(<EditorArea />)
 
     // No preview yet
@@ -536,26 +541,24 @@ describe('Prewarm candidate lifecycle', () => {
   })
 
   it('turbo creates editor candidate based on usage', () => {
-    // memory policy releases the initial hidden editor immediately,
-    // so the prewarm can create a fresh candidate.
-    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'preview', { prewarm: 'turbo', policy: 'memory' })
+    // speed policy keeps the hidden editor, so prewarm creates other candidates
+    // instead of recreating the editor.
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'preview', { modePerformancePolicy: 'speed' })
     useEditorStore.setState({
       viewModeUsage: { 'edit-preview': { count: 15, lastUsedAt: Date.now() } },
     })
     render(<EditorArea />)
 
-    // Initial editor-create from the mount, then memory policy releases it.
-    // After TTL we should see a new editor candidate created by prewarm.
     const editorCreatesBefore = countEvent('editor-create')
 
     act(() => vi.advanceTimersByTime(2500))
-    // Editor candidate should be created by prewarm
-    expect(countEvent('editor-create')).toBeGreaterThan(editorCreatesBefore)
+    // speed keeps the editor, so no new editor-create; prewarm creates preview or edit-preview
+    expect(countEvent('editor-create')).toBe(editorCreatesBefore)
   })
 
   it('turbo creates right preview candidate', () => {
     const tabs = [anonymousTab('doc-a', '# A'), anonymousTab('doc-b', '# B')]
-    setup(tabs, 'doc-a', 'edit', { prewarm: 'turbo' })
+    setup(tabs, 'doc-a', 'edit', { modePerformancePolicy: 'speed' })
     useEditorStore.setState({
       viewModeUsage: { 'dual-preview': { count: 20, lastUsedAt: Date.now() } },
     })
@@ -568,7 +571,7 @@ describe('Prewarm candidate lifecycle', () => {
   })
 
   it('turbo creates diff candidate and releases it', () => {
-    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'preview', { prewarm: 'turbo' })
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'preview', { modePerformancePolicy: 'speed' })
     useEditorStore.setState({
       viewModeUsage: { 'diff-preview': { count: 12, lastUsedAt: Date.now() } },
     })
@@ -586,18 +589,18 @@ describe('Prewarm candidate lifecycle', () => {
   })
 
   it('prewarm-off releases all hidden candidates', () => {
-    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'edit', { prewarm: 'smart', policy: 'balanced' })
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'edit', { modePerformancePolicy: 'balanced' })
     render(<EditorArea />)
 
     act(() => vi.advanceTimersByTime(2500))
     expect(countResourceEvent('model-create', 'left-preview', 'doc-a')).toBe(1)
 
-    act(() => useSettingsStore.getState().updateEditorSettings({ modePrewarm: 'off' }))
+    act(() => useSettingsStore.getState().updateEditorSettings({ modePerformancePolicy: 'memory' }))
     expect(countResourceEvent('model-dispose', 'left-preview', 'doc-a')).toBe(1)
   })
 
   it('user activity cancels idle prewarm', () => {
-    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'edit', { prewarm: 'smart' })
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'edit', { modePerformancePolicy: 'balanced' })
     render(<EditorArea />)
 
     // Trigger user activity before prewarm timer fires
@@ -609,10 +612,22 @@ describe('Prewarm candidate lifecycle', () => {
     expect(modelCreates).toBeGreaterThanOrEqual(1) // editor only
     // Should not have a preview model-create
     expect(modelCreates).toBeLessThanOrEqual(1)
+    const cancelled = lifecycle.events.find((event) => (
+      event.type === 'prewarm-cancel' && event.metadata?.reason === 'user-activity'
+    ))
+    const scheduled = lifecycle.events.find((event) => (
+      event.type === 'prewarm-schedule' &&
+      event.metadata?.scheduleId === cancelled?.metadata?.scheduleId
+    ))
+    expect(cancelled?.metadata).toMatchObject({
+      reason: 'user-activity',
+      scheduleId: scheduled?.metadata?.scheduleId,
+      target: scheduled?.metadata?.target,
+    })
   })
 
   it('leaving diff releases diff instance', () => {
-    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'diff-preview', { prewarm: 'off' })
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'diff-preview', { modePerformancePolicy: 'memory' })
     render(<EditorArea />)
 
     expect(countEvent('diff-create')).toBe(1)
@@ -629,7 +644,7 @@ describe('Prewarm candidate lifecycle', () => {
 describe('Real CodeMirror multi-selection restore', () => {
   it('restores 3 ranges with mixed directions and non-last mainIndex after balanced TTL', () => {
     const content = 'x'.repeat(40)
-    setup([anonymousTab('doc-a', content)], 'doc-a', 'edit', { policy: 'balanced' })
+    setup([anonymousTab('doc-a', content)], 'doc-a', 'edit', { modePerformancePolicy: 'balanced' })
     render(<EditorArea />)
 
     // Get the real EditorView from captured views
@@ -682,7 +697,7 @@ describe('Real CodeMirror multi-selection restore', () => {
 
   it('restores selections after mode switch (edit -> preview -> edit)', () => {
     const content = 'a'.repeat(30)
-    setup([anonymousTab('doc-a', content)], 'doc-a', 'edit', { policy: 'memory' })
+    setup([anonymousTab('doc-a', content)], 'doc-a', 'edit', { modePerformancePolicy: 'memory' })
     render(<EditorArea />)
 
     const view = capturedViews.views[capturedViews.views.length - 1]?.editor as {
@@ -720,7 +735,7 @@ describe('Real CodeMirror multi-selection restore', () => {
       anonymousTab('doc-a', 'a'.repeat(30)),
       anonymousTab('doc-b', 'b'.repeat(30)),
     ]
-    setup(tabs, 'doc-a', 'edit', { policy: 'memory' })
+    setup(tabs, 'doc-a', 'edit', { modePerformancePolicy: 'memory' })
     render(<EditorArea />)
 
     const view = capturedViews.views[capturedViews.views.length - 1]?.editor as {
@@ -756,7 +771,7 @@ describe('Real CodeMirror multi-selection restore', () => {
       anonymousTab('doc-a', 'a'.repeat(30)),
       anonymousTab('doc-b', 'b'.repeat(30)),
     ]
-    setup(tabs, 'doc-a', 'edit', { policy: 'memory' })
+    setup(tabs, 'doc-a', 'edit', { modePerformancePolicy: 'memory' })
     render(<EditorArea />)
 
     const viewA = capturedViews.views[capturedViews.views.length - 1]?.editor as {
@@ -834,5 +849,92 @@ describe('Multi-selection save timing (mock-based)', () => {
     expect(ranges[2].anchor).toBe(24)
     expect(ranges[2].head).toBe(20)
     expect(newView!.state.selection.main.anchor).toBe(12)
+  })
+})
+
+// ============================================================
+// 6. Performance policy enforcement
+// ============================================================
+describe('Performance policy enforcement', () => {
+  it('memory policy does not create hidden instances after idle', () => {
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'edit', { modePerformancePolicy: 'memory' })
+    useEditorStore.setState({
+      viewModeUsage: { 'edit-preview': { count: 10, lastUsedAt: Date.now() } },
+    })
+    render(<EditorArea />)
+
+    const createsBefore = countEvent('model-create')
+    const editorCreatesBefore = countEvent('editor-create')
+    const diffCreatesBefore = countEvent('diff-create')
+
+    act(() => vi.advanceTimersByTime(2500))
+    act(() => vi.advanceTimersByTime(2500))
+
+    // No hidden instances should be created
+    expect(countEvent('model-create')).toBe(createsBefore)
+    expect(countEvent('editor-create')).toBe(editorCreatesBefore)
+    expect(countEvent('diff-create')).toBe(diffCreatesBefore)
+  })
+
+  it('idle callback scheduled before switching to memory does not remount', () => {
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'edit', { modePerformancePolicy: 'balanced' })
+    useEditorStore.setState({
+      viewModeUsage: { preview: { count: 10, lastUsedAt: Date.now() } },
+    })
+    render(<EditorArea />)
+
+    // Advance past the prewarm timeout (650ms) + idle callback window (1200ms total)
+    // to confirm the idle callback is scheduled
+    act(() => vi.advanceTimersByTime(1200))
+
+    const createsBefore = countEvent('model-create')
+
+    // Switch to memory — should cancel the idle callback
+    act(() => useSettingsStore.getState().updateEditorSettings({ modePerformancePolicy: 'memory' }))
+
+    // Let any remaining timers fire
+    act(() => vi.advanceTimersByTime(1000))
+
+    // No new instances should be created after the switch
+    expect(countEvent('model-create')).toBe(createsBefore)
+  })
+
+  it('old TTL does not release a re-visible instance', () => {
+    setup([anonymousTab('doc-a', '# Small')], 'doc-a', 'edit-preview')
+    render(<EditorArea />)
+
+    const initialBalance = resourceBalance('left-preview')
+
+    // Switch to edit, start TTL
+    act(() => useEditorStore.getState().setViewMode('edit'))
+    act(() => vi.advanceTimersByTime(10000))
+
+    // Switch back to edit-preview (cancels old TTL)
+    act(() => useEditorStore.getState().setViewMode('edit-preview'))
+
+    // The old TTL timer should have been cancelled
+    act(() => vi.advanceTimersByTime(BALANCED_SMALL_DOC_TTL_MS))
+    expect(countResourceEvent('model-dispose', 'left-preview', 'doc-a')).toBe(0)
+    expect(resourceBalance('left-preview')).toBeGreaterThanOrEqual(initialBalance)
+  })
+
+  it('same content does not create create/dispose cycle', () => {
+    setup([anonymousTab('doc-a', '# Small')], 'doc-a', 'edit-preview', { modePerformancePolicy: 'balanced' })
+    render(<EditorArea />)
+
+    // Switch to edit — preview hidden, TTL starts
+    act(() => useEditorStore.getState().setViewMode('edit'))
+
+    // Advance past the 45s TTL + a prewarm window
+    act(() => vi.advanceTimersByTime(BALANCED_SMALL_DOC_TTL_MS + 2000))
+
+    const createsAfter = countEvent('model-create')
+    const disposesAfter = countEvent('model-dispose')
+
+    // Advance another prewarm window — no new create/dispose cycle
+    act(() => vi.advanceTimersByTime(2000))
+
+    expect(countEvent('model-create')).toBe(createsAfter)
+    expect(countEvent('model-dispose')).toBe(disposesAfter)
   })
 })

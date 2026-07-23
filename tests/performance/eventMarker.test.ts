@@ -29,4 +29,15 @@ describe('performance events', () => {
     expect(complete?.before?.appPrivateWorkingSetKb).toBe(10)
     expect(complete?.after?.appPrivateWorkingSetKb).toBe(20)
   })
+
+  it('点事件不伪造同一采样的内存增量', () => {
+    const current = { appPrivateWorkingSetKb: 10 } as PerfData
+    eventMarker.setSnapshotSource(() => current)
+
+    eventMarker.mark('prewarm-create', { resource: 'left-preview', phase: 'requested' })
+
+    const event = eventMarker.exportEvents().at(-1)
+    expect(event?.before?.appPrivateWorkingSetKb).toBe(10)
+    expect(event?.after).toBeUndefined()
+  })
 })

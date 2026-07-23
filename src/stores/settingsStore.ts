@@ -27,8 +27,7 @@ interface EditorSettings {
   syncScroll: boolean
   autoSendAiShortcut: boolean
   inlinePreviewEdit: boolean
-  modePrewarm: 'off' | 'smart' | 'turbo'
-  modeResourcePolicy: 'memory' | 'balanced' | 'speed'
+  modePerformancePolicy: 'memory' | 'balanced' | 'speed'
   fullscreenContentPadding: number
 }
 
@@ -81,8 +80,7 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   syncScroll: true,
   autoSendAiShortcut: true,
   inlinePreviewEdit: true,
-  modePrewarm: 'smart',
-  modeResourcePolicy: 'balanced',
+  modePerformancePolicy: 'balanced',
   fullscreenContentPadding: FULLSCREEN_CONTENT_PADDING.default,
 }
 
@@ -265,10 +263,36 @@ export const useSettingsStore = create<SettingsState>()(
           ai: patchedAi || current.ai,
           customChatPresets: patchedChatPresets.length > 0 ? patchedChatPresets : current.customChatPresets,
           customEmbeddingPresets: patchedEmbPresets.length > 0 ? patchedEmbPresets : current.customEmbeddingPresets,
-          editor: {
-            ...current.editor,
-            ...saved.editor,
-          },
+          editor: (() => {
+            const savedEditor = (saved.editor ?? {}) as Record<string, unknown>
+            const {
+              modePrewarm: _mp,
+              modeResourcePolicy: _mrp,
+              modePerformancePolicy: _mpp,
+              ...cleanSaved
+            } = savedEditor as Record<string, unknown>
+            const mergedEditor = { ...current.editor, ...cleanSaved }
+            const validPolicies = ['memory', 'balanced', 'speed']
+            const newPolicy = savedEditor.modePerformancePolicy
+            if (typeof newPolicy === 'string' && validPolicies.includes(newPolicy)) {
+              return { ...mergedEditor, modePerformancePolicy: newPolicy as 'memory' | 'balanced' | 'speed' }
+            }
+            const oldPrewarm = savedEditor.modePrewarm
+            const oldResource = savedEditor.modeResourcePolicy
+            const prewarmValid = typeof oldPrewarm === 'string' && ['off', 'smart', 'turbo'].includes(oldPrewarm as string)
+            const resourceValid = typeof oldResource === 'string' && validPolicies.includes(oldResource as string)
+            let migrated: 'memory' | 'balanced' | 'speed' = 'balanced'
+            if (prewarmValid && !resourceValid) {
+              migrated = ({ off: 'memory' as const, smart: 'balanced' as const, turbo: 'speed' as const })[oldPrewarm as string]!
+            } else if (!prewarmValid && resourceValid) {
+              migrated = oldResource as 'memory' | 'balanced' | 'speed'
+            } else if (prewarmValid && resourceValid) {
+              const prewarmRank = ({ off: 0, smart: 1, turbo: 2 } as Record<string, number>)[oldPrewarm as string] ?? 1
+              const resourceRank = ({ memory: 0, balanced: 1, speed: 2 } as Record<string, number>)[oldResource as string] ?? 1
+              migrated = (['memory', 'balanced', 'speed'] as const)[Math.min(prewarmRank, resourceRank)]
+            }
+            return { ...mergedEditor, modePerformancePolicy: migrated }
+          })(),
           appearance: {
             ...current.appearance,
             ...saved.appearance,
