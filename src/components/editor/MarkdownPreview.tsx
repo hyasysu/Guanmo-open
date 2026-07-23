@@ -1,4 +1,4 @@
-import ReactMarkdown, { type Components } from 'react-markdown'
+import ReactMarkdown, { type Components, type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeHighlight from 'rehype-highlight'
@@ -86,6 +86,38 @@ function getNormalizedMarkdown(content: string): string {
   return normalized
 }
 
+const StableMarkdownDocument = memo(function StableMarkdownDocument({
+  normalizedContent,
+  skipHtml,
+  rehypePlugins,
+  components,
+  fontSize,
+  lineHeight,
+}: {
+  normalizedContent: string
+  skipHtml: boolean
+  rehypePlugins: Options['rehypePlugins']
+  components: Partial<Components>
+  fontSize: number
+  lineHeight: number
+}) {
+  return (
+    <div
+      className="prose gm-markdown-preview max-w-none min-w-0 text-gm-text"
+      style={{ fontSize: `${fontSize}px`, lineHeight }}
+    >
+      <ReactMarkdown
+        skipHtml={skipHtml}
+        remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+        rehypePlugins={rehypePlugins}
+        components={components}
+      >
+        {normalizedContent}
+      </ReactMarkdown>
+    </div>
+  )
+})
+
 export const MarkdownPreview = memo(function MarkdownPreview({
   content,
   filePath,
@@ -103,6 +135,8 @@ export const MarkdownPreview = memo(function MarkdownPreview({
 }: MarkdownPreviewProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   const [activeEdit, setActiveEdit] = useState<ActiveBlockEdit | null>(null)
+  const [overlayRect, setOverlayRect] = useState<{ top: number; left: number; width: number } | null>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
   const [optimisticContent, setOptimisticContent] = useState<OptimisticPreviewContent | null>(null)
   const activeEditRef = useRef<ActiveBlockEdit | null>(null)
   const optimisticContentRef = useRef<OptimisticPreviewContent | null>(null)
@@ -158,11 +192,35 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     scrollRestoreRef.current = null
   }, [activeEdit, displayedContent])
 
+  const overlayRectRef = useRef<{ top: number; left: number; width: number } | null>(null)
+
+  useLayoutEffect(() => {
+    if (!activeEdit) return
+    const target = rootRef.current?.querySelector<HTMLElement>(
+      `[data-md-block-key="${activeEdit.block.renderKey}"]`,
+    )
+    if (!target) return
+    if (!target.hasAttribute('data-md-editing')) {
+      target.setAttribute('data-md-editing', '')
+    }
+    const rootRect = rootRef.current?.getBoundingClientRect()
+    if (!rootRect) return
+    const bcr = target.getBoundingClientRect()
+    const next = {
+      top: bcr.top - rootRect.top,
+      left: bcr.left - rootRect.left,
+      width: bcr.width,
+    }
+    const prev = overlayRectRef.current
+    if (prev && prev.top === next.top && prev.left === next.left && prev.width === next.width) return
+    overlayRectRef.current = next
+    setOverlayRect(next)
+  }, [activeEdit])
+
   const closeActiveEdit = useCallback((edit: ActiveBlockEdit) => {
     if (!mountedRef.current) return
     const scrollContainer = rootRef.current?.parentElement
     if (scrollContainer) {
-      // 退出编辑时记录当前滚动位置，退出后恢复
       scrollRestoreRef.current = {
         scrollTop: edit.scrollAnchor.scrollTop,
         container: scrollContainer,
@@ -171,6 +229,11 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     if (activeEditRef.current?.documentKey === edit.documentKey && activeEditRef.current.block.renderKey === edit.block.renderKey) {
       activeEditRef.current = null
     }
+    const prevTarget = rootRef.current?.querySelector<HTMLElement>(
+      `[data-md-block-key="${edit.block.renderKey}"]`,
+    )
+    prevTarget?.removeAttribute('data-md-editing')
+    setOverlayRect(null)
     setActiveEdit((current) => (
       current?.documentKey === edit.documentKey && current.block.renderKey === edit.block.renderKey
         ? null
@@ -218,16 +281,19 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     return true
   }, [closeActiveEdit, onBlockCommit])
 
+  const submitEditRef = useRef(submitEdit)
+  submitEditRef.current = submitEdit
+
   const submitActiveEdit = useCallback(() => {
     if (submitPromiseRef.current) return submitPromiseRef.current
     const edit = activeEditRef.current
     if (!edit) return Promise.resolve(true)
-    const promise = submitEdit(edit).finally(() => {
+    const promise = submitEditRef.current(edit).finally(() => {
       if (submitPromiseRef.current === promise) submitPromiseRef.current = null
     })
     submitPromiseRef.current = promise
     return promise
-  }, [submitEdit])
+  }, [])
 
   useEffect(() => {
     const edit = activeEditRef.current
@@ -257,7 +323,6 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     const clickedLine = Number(lineElement?.dataset.mdLine)
     if (current?.block.renderKey === requestedBlock.renderKey && current.documentKey === documentKey) return
 
-    // 读取目标预览块的实际高度和进入编辑时的滚动位置
     const blockWrapper = target.closest<HTMLElement>('[data-md-block-index]')
     const previewHeight = blockWrapper
       ? blockWrapper.getBoundingClientRect().height
@@ -302,6 +367,19 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     draftRef.current = block.rawSource
     activeEditRef.current = edit
     setActiveEdit(edit)
+
+    if (blockWrapper) {
+      blockWrapper.setAttribute('data-md-editing', '')
+      const rootRect = rootRef.current?.getBoundingClientRect()
+      if (rootRect) {
+        const bcr = blockWrapper.getBoundingClientRect()
+        setOverlayRect({
+          top: bcr.top - rootRect.top,
+          left: bcr.left - rootRect.left,
+          width: bcr.width,
+        })
+      }
+    }
   }, [blocks, content, displayedContent, documentKey, inlineEditEnabled, onBlockCommit, submitActiveEdit])
 
   const handlePointerDownCapture = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
@@ -371,29 +449,6 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     return {
           div: ({ children, node, ...props }) => {
             void node
-            const blockIndexValue = (props as Record<string, unknown>)['data-md-block-index']
-            const blockIndex = typeof blockIndexValue === 'number' ? blockIndexValue : Number(blockIndexValue)
-            const block = Number.isInteger(blockIndex) ? blocks[blockIndex] : undefined
-            if (block && activeEdit?.block.renderKey === block.renderKey) {
-              return (
-                <InlineMarkdownBlockEditor
-                  block={activeEdit.block}
-                  initialCursor={activeEdit.initialCursor}
-                  fontSize={fontSize}
-                  lineHeight={lineHeight}
-                  fontFamily={fontFamily}
-                  wordWrap={wordWrap}
-                  conflict={activeEdit.conflict}
-                  previewHeight={activeEdit.previewHeight}
-                  onDraftChange={(draft) => { draftRef.current = draft }}
-                  onSubmit={(draft) => {
-                    draftRef.current = draft
-                    void submitActiveEdit()
-                  }}
-                  onCopyDraft={(draft) => void navigator.clipboard.writeText(draft)}
-                />
-              )
-            }
             return <div {...props}>{children}</div>
           },
           h1: ({ children, node }) => {
@@ -576,26 +631,56 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             )
           },
         }
-  }, [activeEdit, blocks, filePath, fontFamily, fontSize, lineHeight, onHeadingClick, onTaskToggle, submitActiveEdit, wordWrap])
+  }, [filePath, fontSize, onHeadingClick, onTaskToggle])
 
   return (
     <div
       ref={rootRef}
       className="prose gm-markdown-preview max-w-none min-w-0 text-gm-text"
-      style={{ fontSize: `${fontSize}px`, lineHeight }}
+      style={{ fontSize: `${fontSize}px`, lineHeight, position: 'relative' }}
       onPointerDownCapture={handlePointerDownCapture}
       onPointerMoveCapture={handlePointerMoveCapture}
       onPointerUpCapture={handlePointerUpCapture}
       onClickCapture={handleClickCapture}
     >
-      <ReactMarkdown
+      <StableMarkdownDocument
+        normalizedContent={normalizedContent}
         skipHtml={skipHtml}
-        remarkPlugins={MARKDOWN_REMARK_PLUGINS}
         rehypePlugins={rehypePlugins}
         components={components}
-      >
-        {normalizedContent}
-      </ReactMarkdown>
+        fontSize={fontSize}
+        lineHeight={lineHeight}
+      />
+      {activeEdit && overlayRect && (
+        <div
+          ref={overlayRef}
+          className="gm-inline-edit-overlay"
+          style={{
+            position: 'absolute',
+            top: overlayRect.top,
+            left: overlayRect.left,
+            width: overlayRect.width,
+            zIndex: 10,
+          }}
+        >
+          <InlineMarkdownBlockEditor
+            block={activeEdit.block}
+            initialCursor={activeEdit.initialCursor}
+            fontSize={fontSize}
+            lineHeight={lineHeight}
+            fontFamily={fontFamily}
+            wordWrap={wordWrap}
+            conflict={activeEdit.conflict}
+            previewHeight={activeEdit.previewHeight}
+            onDraftChange={(draft) => { draftRef.current = draft }}
+            onSubmit={(draft) => {
+              draftRef.current = draft
+              void submitActiveEdit()
+            }}
+            onCopyDraft={(draft) => void navigator.clipboard.writeText(draft)}
+          />
+        </div>
+      )}
       {zoomImage && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-8"

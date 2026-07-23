@@ -5,6 +5,26 @@ import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { MarkdownPreview, type MarkdownBlockCommitRequest } from '@/components/editor/MarkdownPreview'
 import { replaceMarkdownBlock } from '@/services/markdownBlocks'
 
+const hoisted = vi.hoisted(() => {
+  let renderCount = 0
+  return {
+    get renderCount() { return renderCount },
+    inc() { renderCount += 1 },
+    RealReactMarkdown: vi.fn(),
+  }
+})
+
+vi.mock('react-markdown', async () => {
+  const actual = await vi.importActual<typeof import('react-markdown')>('react-markdown')
+  hoisted.RealReactMarkdown.mockImplementation(actual.default)
+  return {
+    default: (props: Record<string, unknown>) => {
+      hoisted.inc()
+      return hoisted.RealReactMarkdown(props)
+    },
+  }
+})
+
 beforeAll(() => {
   if (!Range.prototype.getClientRects) {
     Range.prototype.getClientRects = () => [] as unknown as DOMRectList
@@ -390,5 +410,64 @@ describe('MarkdownPreview 预览内源码编辑', () => {
     unmount()
     expect(onBlockCommit).toHaveBeenCalledTimes(2)
     expect(onBlockCommit.mock.calls[1][0].documentKey).toBe('doc-2')
+  })
+})
+
+describe('块 DOM 稳定性', () => {
+  it('打开编辑后 CodeMirror 宿主元素引用不变', async () => {
+    const { rerender } = render(
+      <MarkdownPreview content="原文" documentKey="d1" documentVersion={1} inlineEditEnabled onBlockCommit={vi.fn()} />,
+    )
+    altClick(screen.getByText('原文'))
+    const cmHostBefore = document.querySelector('.gm-inline-markdown-editor__host')
+
+    rerender(
+      <MarkdownPreview content="原文" documentKey="d1" documentVersion={1} inlineEditEnabled onBlockCommit={vi.fn()} fontSize={15} />,
+    )
+    const cmHostAfter = document.querySelector('.gm-inline-markdown-editor__host')
+
+    expect(cmHostBefore).toBe(cmHostAfter)
+    expect(cmHostAfter).toBeInTheDocument()
+  })
+})
+
+describe('ReactMarkdown 重渲染保护', () => {
+  it('正文未变化时打开编辑不应再次执行 ReactMarkdown', () => {
+    render(
+      <MarkdownPreview
+        content="段落 A\n\n段落 B"
+        documentKey="d2"
+        documentVersion={1}
+        inlineEditEnabled
+        onBlockCommit={vi.fn(async () => ({ status: 'applied' as const }))}
+      />,
+    )
+    const initialCount = hoisted.renderCount
+
+    altClick(screen.getByText(/段落 A/))
+
+    expect(screen.getByText('Markdown')).toBeInTheDocument()
+    expect(hoisted.renderCount).toBe(initialCount)
+  })
+
+  it('大文档（2000 段落）打开编辑不触发额外 ReactMarkdown 执行', () => {
+    const paragraphs = Array.from({ length: 2000 }, (_, i) => `段落${i + 1}：这是匿名测试内容`).join('\n\n')
+    const { container } = render(
+      <MarkdownPreview
+        content={paragraphs}
+        documentKey="d-large"
+        documentVersion={1}
+        inlineEditEnabled
+        onBlockCommit={vi.fn(async () => ({ status: 'applied' as const }))}
+      />,
+    )
+    const initialCount = hoisted.renderCount
+    const firstBlock = container.querySelector('[data-md-block-index="0"]') as HTMLElement
+
+    altClick(firstBlock)
+
+    expect(screen.getByText('Markdown')).toBeInTheDocument()
+    expect(document.querySelector('.cm-editor')).toBeInTheDocument()
+    expect(hoisted.renderCount).toBe(initialCount)
   })
 })

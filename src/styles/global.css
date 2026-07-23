@@ -1396,6 +1396,12 @@ body {
   min-width: 0;
 }
 
+.gm-markdown-block[data-md-editing] > * {
+  visibility: hidden;
+  position: absolute;
+  pointer-events: none;
+}
+
 .gm-markdown-block[data-md-block-type='html']:empty {
   min-height: 32px;
   border: 1px dashed var(--gm-border-subtle);
