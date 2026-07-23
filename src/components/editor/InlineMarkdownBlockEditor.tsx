@@ -2,8 +2,11 @@ import { useLayoutEffect, useRef } from 'react'
 import { EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
+import { bracketMatching, syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language'
+import { editorCodeLanguages } from '@/services/editorCodeLanguages'
 import type { MarkdownBlock } from '@/services/markdownBlocks'
-import { buildMarkdownEditorTheme } from './CodeMirrorEditor'
+import { buildMarkdownEditorTheme, markdownHighlightStyle } from './CodeMirrorEditor'
 
 interface InlineMarkdownBlockEditorProps {
   block: MarkdownBlock
@@ -13,7 +16,6 @@ interface InlineMarkdownBlockEditorProps {
   fontFamily: string
   wordWrap: boolean
   conflict: boolean
-  previewHeight: number
   onDraftChange: (draft: string) => void
   onSubmit: (draft: string) => void
   onCopyDraft: (draft: string) => void
@@ -27,7 +29,6 @@ export function InlineMarkdownBlockEditor({
   fontFamily,
   wordWrap,
   conflict,
-  previewHeight,
   onDraftChange,
   onSubmit,
   onCopyDraft,
@@ -39,11 +40,6 @@ export function InlineMarkdownBlockEditor({
   const onSubmitRef = useRef(onSubmit)
   onDraftChangeRef.current = onDraftChange
   onSubmitRef.current = onSubmit
-
-  // 计算编辑器高度：减去 border (2px) 后 clamp 到合理范围
-  // 编辑器外壳有 border: 1px，所以实际内容高度 = previewHeight - 2
-  const contentHeight = Math.max(0, previewHeight - 2)
-  const editorHeight = Math.max(96, Math.min(contentHeight, Math.min(window.innerHeight * 0.7, 720)))
 
   useLayoutEffect(() => {
     if (!hostRef.current) return
@@ -57,11 +53,13 @@ export function InlineMarkdownBlockEditor({
       selection: { anchor: Math.max(0, Math.min(initialCursor, block.rawSource.length)) },
       extensions: [
         history(),
+        bracketMatching(),
+        syntaxHighlighting(markdownHighlightStyle),
+        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        markdown({ base: markdownLanguage, codeLanguages: editorCodeLanguages }),
         buildMarkdownEditorTheme(fontSize, lineHeight, fontFamily),
         EditorView.theme({
-          '&': { height: `${editorHeight}px` },
-          '.cm-scroller': { height: '100%', overflow: 'auto' },
-          '.cm-content': { padding: '10px 12px', minHeight: '100%' },
+          '& .cm-content': { padding: '8px 12px' },
           '.cm-gutters': { display: 'none' },
           '.cm-activeLine': { backgroundColor: 'transparent' },
         }),
@@ -109,26 +107,18 @@ export function InlineMarkdownBlockEditor({
 
   return (
     <div className={`gm-inline-markdown-editor ${conflict ? 'gm-inline-markdown-editor--conflict' : ''}`}>
-      <div className="gm-inline-markdown-editor__status">
-        <span>Markdown</span>
-        {conflict && (
-          <>
-            <span className="text-gm-error">内容已在其他位置发生变化，修改尚未覆盖原文</span>
-            <button type="button" onClick={() => onCopyDraft(viewRef.current?.state.doc.toString() ?? block.rawSource)}>
-              复制修改内容
-            </button>
-          </>
-        )}
-      </div>
+      {conflict && (
+        <div className="gm-inline-markdown-editor__status">
+          <span className="text-gm-error">内容已在其他位置发生变化，修改尚未覆盖原文</span>
+          <button type="button" onClick={() => onCopyDraft(viewRef.current?.state.doc.toString() ?? block.rawSource)}>
+            复制修改内容
+          </button>
+        </div>
+      )}
       <div
         ref={hostRef}
         className="gm-inline-markdown-editor__host"
-        style={{ height: `${editorHeight}px` }}
       />
     </div>
   )
-}
-
-function isLongBlock(block: MarkdownBlock): boolean {
-  return block.type === 'code' || block.type === 'mermaid' || block.type === 'table'
 }

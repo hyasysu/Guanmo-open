@@ -51,10 +51,6 @@ interface ActiveBlockEdit {
   contentSnapshot: string
   initialCursor: number
   conflict: boolean
-  previewHeight: number
-  scrollAnchor: {
-    scrollTop: number
-  }
 }
 
 interface AltPointerIntent {
@@ -185,7 +181,6 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   useLayoutEffect(() => {
     if (activeEdit || !scrollRestoreRef.current) return
     const pending = scrollRestoreRef.current
-    // 直接恢复进入编辑前的滚动位置
     if (pending.container) {
       pending.container.scrollTop = pending.scrollTop
     }
@@ -222,7 +217,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     const scrollContainer = rootRef.current?.parentElement
     if (scrollContainer) {
       scrollRestoreRef.current = {
-        scrollTop: edit.scrollAnchor.scrollTop,
+        scrollTop: scrollContainer.scrollTop,
         container: scrollContainer,
       }
     }
@@ -324,14 +319,6 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     if (current?.block.renderKey === requestedBlock.renderKey && current.documentKey === documentKey) return
 
     const blockWrapper = target.closest<HTMLElement>('[data-md-block-index]')
-    const previewHeight = blockWrapper
-      ? blockWrapper.getBoundingClientRect().height
-      : 200
-    const scrollContainer = rootRef.current?.parentElement
-    const scrollTop = scrollContainer
-      ? scrollContainer.scrollTop
-      : 0
-
     let contentSnapshot = displayedContent
     let block = requestedBlock
     if (current) {
@@ -359,10 +346,6 @@ export const MarkdownPreview = memo(function MarkdownPreview({
       contentSnapshot,
       initialCursor,
       conflict: false,
-      previewHeight,
-      scrollAnchor: {
-        scrollTop,
-      },
     }
     draftRef.current = block.rawSource
     activeEditRef.current = edit
@@ -657,7 +640,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
           className="gm-inline-edit-overlay"
           style={{
             position: 'absolute',
-            top: overlayRect.top,
+            top: overlayRect.top - 12,
             left: overlayRect.left,
             width: overlayRect.width,
             zIndex: 10,
@@ -671,7 +654,6 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             fontFamily={fontFamily}
             wordWrap={wordWrap}
             conflict={activeEdit.conflict}
-            previewHeight={activeEdit.previewHeight}
             onDraftChange={(draft) => { draftRef.current = draft }}
             onSubmit={(draft) => {
               draftRef.current = draft

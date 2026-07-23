@@ -1063,7 +1063,7 @@ body {
   width: 100%;
 }
 
-/* range thumb 垂直居中�?track */
+/* range thumb ��ֱ����??track */
 .gm-setting-control input[type="range"]::-webkit-slider-thumb {
   margin-top: -14px;
 }
@@ -1398,7 +1398,6 @@ body {
 
 .gm-markdown-block[data-md-editing] > * {
   visibility: hidden;
-  position: absolute;
   pointer-events: none;
 }
 
@@ -1452,18 +1451,6 @@ body {
   outline: none;
 }
 
-.gm-inline-markdown-editor__host {
-  contain: layout;
-  overflow: hidden;
-}
-
-.gm-inline-markdown-editor .cm-editor {
-  height: 100%;
-}
-
-.gm-inline-markdown-editor .cm-scroller {
-  height: 100%;
-}
 
 .gm-code-block {
   background: var(--gm-code-bg);

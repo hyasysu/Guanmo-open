@@ -122,11 +122,10 @@ describe('MarkdownPreview 预览内源码编辑', () => {
     const link = screen.getByRole('link', { name: '链接' })
 
     fireEvent.click(link)
-    expect(screen.queryByText('Markdown')).not.toBeInTheDocument()
+    expect(document.querySelector('.cm-editor')).not.toBeInTheDocument()
 
     altClick(link)
-    expect(await screen.findByText('Markdown')).toBeInTheDocument()
-    expect(document.querySelector('.cm-editor')).toBeInTheDocument()
+    await waitFor(() => expect(document.querySelector('.cm-editor')).toBeInTheDocument())
   })
 
   it('Alt+拖动超过阈值时不进入编辑', () => {
@@ -137,7 +136,7 @@ describe('MarkdownPreview 预览内源码编辑', () => {
     fireEvent.pointerMove(paragraph, { altKey: true, pointerId: 2, clientX: 22, clientY: 10 })
     fireEvent.pointerUp(paragraph, { altKey: true, pointerId: 2, clientX: 22, clientY: 10 })
 
-    expect(screen.queryByText('Markdown')).not.toBeInTheDocument()
+    expect(document.querySelector('.cm-editor')).not.toBeInTheDocument()
   })
 
   it('普通点击图片放大和任务复选框仍执行原功能', () => {
@@ -155,39 +154,34 @@ describe('MarkdownPreview 预览内源码编辑', () => {
   ])('Alt+点击%s优先进入块编辑', async (_label, getTarget) => {
     renderPreview()
     altClick(getTarget())
-    expect(await screen.findByText('Markdown')).toBeInTheDocument()
+    await waitFor(() => expect(document.querySelector('.cm-editor')).toBeInTheDocument())
   })
 
-  it('Alt+点击代码块按钮进入完整代码块编辑并限制最大高度', async () => {
+  it('Alt+点击代码块按钮进入完整代码块编辑', async () => {
     renderPreview({ content: '```ts\nconst value = 1\n```' })
     altClick(screen.getByRole('button', { name: '复制 ts 代码' }))
 
-    await screen.findByText('Markdown')
-    // 新实现：编辑器高度由外壳容器控制，scroller 使用 height: 100%
-    expect(getComputedStyle(document.querySelector('.cm-scroller') as Element).height).toBe('100%')
+    await waitFor(() => expect(document.querySelector('.cm-editor')).toBeInTheDocument())
   })
 
   it.each([
     ['图片', '![示例图片](image.png)', 'image'],
     ['无序列表', '- 第一项\n- 第二项', 'list'],
     ['Mermaid', '```mermaid\ngraph TD\nA-->B\n```', 'mermaid'],
-  ])('%s 的预览高度不会变成源码编辑区的最小高度', { timeout: 10000 }, async (_label, content, blockType) => {
+  ])('Alt+点击%s可进入编辑', { timeout: 10000 }, async (_label, content, blockType) => {
     const { container } = renderPreview({ content })
     const wrapper = container.querySelector<HTMLElement>(`[data-md-block-type="${blockType}"]`)
     expect(wrapper).not.toBeNull()
-    vi.spyOn(wrapper as HTMLElement, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 640, 720))
 
     altClick(wrapper as HTMLElement)
 
-    await screen.findByText('Markdown')
-    // 新实现：编辑器高度由外壳容器控制，cm-content 使用 minHeight: 100%
-    expect(getComputedStyle(document.querySelector('.cm-content') as Element).minHeight).toBe('100%')
+    await waitFor(() => expect(document.querySelector('.cm-editor')).toBeInTheDocument())
   })
 
   it('外部 pointerdown 提交后恢复预览，Esc 不再提交', async () => {
     const { onBlockCommit } = renderPreview()
     altClick(screen.getByText(/段落/))
-    await screen.findByText('Markdown')
+    await waitFor(() => expect(document.querySelector('.cm-editor')).toBeInTheDocument())
 
     fireEvent.keyDown(document.querySelector('.cm-content') as HTMLElement, { key: 'Escape' })
     expect(onBlockCommit).not.toHaveBeenCalled()
@@ -237,12 +231,12 @@ describe('MarkdownPreview 预览内源码编辑', () => {
     renderPreview({ onBlockCommit })
 
     altClick(screen.getByText(/段落/))
-    await screen.findByText('Markdown')
+    await waitFor(() => expect(document.querySelector('.cm-editor')).toBeInTheDocument())
     altClick(screen.getByRole('button', { name: /图片/ }))
 
     await waitFor(() => expect(onBlockCommit).toHaveBeenCalledTimes(1))
     expect(order[0]).toContain('段落')
-    expect(await screen.findByText('Markdown')).toBeInTheDocument()
+    await waitFor(() => expect(document.querySelector('.cm-editor')).toBeInTheDocument())
   })
 
   it('预览内容防抖期间连续切换块仍按最新 offset 保存，并可用 Esc 退出', async () => {
@@ -446,7 +440,7 @@ describe('ReactMarkdown 重渲染保护', () => {
 
     altClick(screen.getByText(/段落 A/))
 
-    expect(screen.getByText('Markdown')).toBeInTheDocument()
+    expect(document.querySelector('.cm-editor')).toBeInTheDocument()
     expect(hoisted.renderCount).toBe(initialCount)
   })
 
@@ -466,7 +460,6 @@ describe('ReactMarkdown 重渲染保护', () => {
 
     altClick(firstBlock)
 
-    expect(screen.getByText('Markdown')).toBeInTheDocument()
     expect(document.querySelector('.cm-editor')).toBeInTheDocument()
     expect(hoisted.renderCount).toBe(initialCount)
   })
