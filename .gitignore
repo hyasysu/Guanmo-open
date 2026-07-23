@@ -67,9 +67,12 @@ secrets.json
 
 # Internal assistant/workflow state
 .claude/
+.codex-logs/
+output/
 agentmd.json
 AGENTS.md
 CLAUDE.md
+AI_IMPLEMENTATION_PLAN.md
 
 # Playwright
 .playwright-cli/

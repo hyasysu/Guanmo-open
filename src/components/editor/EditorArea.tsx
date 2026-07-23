@@ -539,7 +539,15 @@ export function EditorArea() {
       // Clear strong references
       if (!rightPreviewDraftRef.current) retainedRightTabRef.current = null
       leftPreviewRenderRef.current = { content: '', filePath: undefined }
-      restoredPreviewKeysRef.current = { left: null, right: null }
+      // Preserve restore marks for visible panes — the restore useLayoutEffect
+      // already set them for the new tab, and clearing would cause
+      // leftPreviewMasked to re-evaluate to true on the next render (if the
+      // target tab has a saved non-zero scroll position) with no mechanism to
+      // unmask, leaving the preview permanently blank.
+      restoredPreviewKeysRef.current = {
+        left: leftPreviewVisible ? restoredPreviewKeysRef.current.left : null,
+        right: viewMode === 'dual-preview' ? restoredPreviewKeysRef.current.right : null,
+      }
       setPrewarmedModeKeys({})
       warmedModeKeysRef.current.clear()
       // Re-mount visible instances for new doc
@@ -835,6 +843,20 @@ export function EditorArea() {
       )
     )
   )
+
+  // Invalidate preview anchor cache when preview transitions from hidden to
+  // visible. While hidden, getVisiblePreviewAnchors() returns [] (all elements
+  // filtered as visibility:hidden) and that empty array gets cached. When the
+  // preview is revealed, the cache key (version/clientWidth/scrollHeight) may
+  // not change, so the stale empty array is returned — breaking scroll sync.
+  const prevLeftMaskedRef = useRef(leftPreviewMasked)
+  useLayoutEffect(() => {
+    if (prevLeftMaskedRef.current && !leftPreviewMasked) {
+      previewAnchorCacheRef.current = new WeakMap()
+    }
+    prevLeftMaskedRef.current = leftPreviewMasked
+  }, [leftPreviewMasked])
+
   const rightPreviewMasked = Boolean(
     rightTab?.id
     && restoredPreviewKeysRef.current.right !== rightTab.id
