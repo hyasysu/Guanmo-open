@@ -16,6 +16,7 @@ interface ToggleOption {
   id: ManualCapability
   label: string
   tooltip: string
+  disabledTooltip?: string
   icon: React.ReactNode
   checkEnabled: () => Promise<boolean>
 }
@@ -63,6 +64,7 @@ const TOGGLE_OPTIONS: ToggleOption[] = [
     id: 'web',
     label: '联网搜索',
     tooltip: '选中后强制联网搜索，获取最新信息和资料',
+    disabledTooltip: '请在设置中开启联网搜索',
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="12" cy="12" r="10" />
@@ -78,11 +80,12 @@ const TOGGLE_OPTIONS: ToggleOption[] = [
 ]
 
 export function ManualToolToggle({ onChange, disabled = false, resetKey }: ManualToolToggleProps) {
+  const webSearchEnabled = useSettingsStore((state) => state.ai.webSearchEnabled)
   const [selected, setSelected] = useState<ManualCapability[]>([])
   const [enabledStates, setEnabledStates] = useState<Record<ManualCapability, boolean>>({
     knowledge: true,
     memory: true,
-    web: true,
+    web: webSearchEnabled,
   })
   const retryCountRef = useRef(0)
 
@@ -106,6 +109,12 @@ export function ManualToolToggle({ onChange, disabled = false, resetKey }: Manua
     const timer = setTimeout(checkAllEnabled, 500)
     return () => clearTimeout(timer)
   }, [checkAllEnabled])
+
+  useEffect(() => {
+    setEnabledStates((states) => states.web === webSearchEnabled
+      ? states
+      : { ...states, web: webSearchEnabled })
+  }, [webSearchEnabled])
 
   // 外部触发重置
   useEffect(() => {
@@ -152,7 +161,7 @@ export function ManualToolToggle({ onChange, disabled = false, resetKey }: Manua
             </Button>
             {/* Tooltip */}
             <div className="gm-manual-tool-tooltip absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded-lg text-micro whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
-              {isEnabled ? option.tooltip : `${option.label}不可用`}
+              {isEnabled ? option.tooltip : option.disabledTooltip ?? `${option.label}不可用`}
             </div>
           </div>
         )
