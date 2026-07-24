@@ -505,7 +505,7 @@ export const ChatBubble = memo(function ChatBubble({
         <AiAvatar size="message" streaming={isAssistantStreaming} bounce={isEmpty} />
       )}
       <div
-        className={`max-w-[80%] min-w-0 rounded-2xl px-4 py-2.5 text-body ${
+        className={`select-text max-w-[80%] min-w-0 rounded-2xl px-4 py-2.5 text-body ${
           isUser
             ? 'rounded-br-md'
             : 'bg-gm-surface-elevated text-gm-text border border-gm-border rounded-bl-md'
@@ -519,7 +519,7 @@ export const ChatBubble = memo(function ChatBubble({
             <span style={{ animationDelay: '280ms' }} />
           </div>
         ) : isUser || (isLast && streaming) ? (
-          <div className={`whitespace-pre-wrap overflow-wrap-anywhere ${isAssistantStreaming ? 'gm-streaming-text' : ''}`} style={{ wordBreak: 'normal' }}>
+          <div className={`select-text whitespace-pre-wrap overflow-wrap-anywhere ${isAssistantStreaming ? 'gm-streaming-text' : ''}`} style={{ wordBreak: 'normal' }}>
             <span>{content}</span>
             {isAssistantStreaming && <span className="gm-streaming-caret" aria-hidden="true" />}
           </div>
@@ -688,7 +688,7 @@ const ASSISTANT_MARKDOWN_COMPONENTS: Components = {
 
 const AssistantMarkdown = memo(function AssistantMarkdown({ content }: { content: string }) {
   return (
-    <div className="ai-message-content max-w-none min-w-0 overflow-wrap-anywhere [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+    <div className="ai-message-content select-text max-w-none min-w-0 overflow-wrap-anywhere [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
       <ReactMarkdown
         remarkPlugins={ASSISTANT_MARKDOWN_REMARK_PLUGINS}
         components={ASSISTANT_MARKDOWN_COMPONENTS}

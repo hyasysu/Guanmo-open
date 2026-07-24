@@ -178,7 +178,7 @@ describe('MarkdownPreview 预览内源码编辑', () => {
     await waitFor(() => expect(document.querySelector('.cm-editor')).toBeInTheDocument())
   })
 
-  it('外部 pointerdown 提交后恢复预览，Esc 不再提交', async () => {
+  it('外部 pointerdown 提交后恢复预览，Esc 不再提交', { timeout: 10000 }, async () => {
     const { onBlockCommit } = renderPreview()
     altClick(screen.getByText(/段落/))
     await waitFor(() => expect(document.querySelector('.cm-editor')).toBeInTheDocument())

@@ -24,6 +24,7 @@ interface AppState {
 
   toggleSidebar: () => void
   toggleAiPanel: () => void
+  openAiPanel: () => void
   closeAiPanel: () => void
   setSidebarWidth: (width: number) => void
   setAiPanelWidth: (width: number) => void
@@ -45,6 +46,7 @@ export const useAppStore = create<AppState>()(
 
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       toggleAiPanel: () => set((s) => ({ aiPanelOpen: !s.aiPanelOpen })),
+  openAiPanel: () => set({ aiPanelOpen: true }),
       closeAiPanel: () => set({ aiPanelOpen: false }),
       setSidebarWidth: (width) => set({ sidebarWidth: width }),
       setAiPanelWidth: (width) => set({ aiPanelWidth: width }),

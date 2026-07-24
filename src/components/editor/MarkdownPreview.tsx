@@ -154,6 +154,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   const blocks = useMemo(() => parseMarkdownBlocks(displayedContent), [displayedContent])
   const normalizedContent = useMemo(() => getNormalizedMarkdown(displayedContent), [displayedContent])
   const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
+  const previewFontFamily = useSettingsStore((state) => state.editor.previewFontFamily)
 
   activeEditRef.current = activeEdit
   optimisticContentRef.current = optimisticContent
@@ -542,22 +543,29 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             )
           },
           ul: ({ children }) => (
-            <ul className="my-3 pl-6 space-y-1 list-disc">{children}</ul>
+            <ul className="my-3 pl-6 list-disc">{children}</ul>
           ),
           ol: ({ children }) => (
-            <ol className="my-3 pl-6 space-y-1 list-decimal">{children}</ol>
+            <ol className="my-3 pl-6 list-decimal">{children}</ol>
           ),
           li: ({ children, node, ...liProps }) => {
             const line = node?.position?.start?.line
             return (
-              <li data-md-line={typeof line === 'number' ? line : undefined} {...liProps}>
+              <li
+                data-md-line={typeof line === 'number' ? line : undefined}
+                {...liProps}
+                style={{
+                  ...(('style' in liProps && typeof liProps.style === 'object' && liProps.style) ? liProps.style : {}),
+                  whiteSpace: 'normal',
+                }}
+              >
                 {children}
               </li>
             )
           },
           hr: ({ node }) => <hr className="my-6 border-gm-border" data-md-line={getNodeStartLine(node)} />,
           table: ({ children, node }) => (
-            <div className="my-4 overflow-x-auto rounded-xl border border-gm-border" data-md-line={getNodeStartLine(node)}>
+            <div className="gm-markdown-table-wrap my-4 overflow-x-auto rounded-xl border border-gm-border" data-md-line={getNodeStartLine(node)}>
               <table className="w-full border-collapse">
                 {children}
               </table>
@@ -633,7 +641,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     <div
       ref={rootRef}
       className="prose gm-markdown-preview max-w-none min-w-0 text-gm-text"
-      style={{ fontSize: `${fontSize}px`, lineHeight, position: 'relative' }}
+      style={{ fontSize: `${fontSize}px`, lineHeight, fontFamily: previewFontFamily, position: 'relative' }}
       onPointerDownCapture={handlePointerDownCapture}
       onPointerMoveCapture={handlePointerMoveCapture}
       onPointerUpCapture={handlePointerUpCapture}

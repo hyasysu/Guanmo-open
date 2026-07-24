@@ -20,7 +20,15 @@ describe('设置兼容', () => {
     const store = await loadSettingsStore()
     const state = store.getState()
 
-    expect(state.editor).toMatchObject({ fontSize: 14, lineHeight: 1.65, autoSave: true, modePerformancePolicy: 'balanced', inlinePreviewEdit: true })
+    expect(state.editor).toMatchObject({
+      fontSize: 14,
+      lineHeight: 1.65,
+      fontFamily: "'JetBrains Mono', 'Cascadia Code', monospace",
+      previewFontFamily: 'var(--gm-font-family)',
+      autoSave: true,
+      modePerformancePolicy: 'balanced',
+      inlinePreviewEdit: true,
+    })
     expect(state.appearance).toMatchObject({ theme: 'light', lightPalette: 'warm' })
     expect(state.webSearch).toMatchObject({ provider: 'duckduckgo', maxResults: 5 })
   })
@@ -32,8 +40,24 @@ describe('设置兼容', () => {
     })
     const state = store.getState()
 
-    expect(state.editor).toMatchObject({ fontSize: 18, lineHeight: 1.65, fullscreenContentPadding: 88, inlinePreviewEdit: true })
+    expect(state.editor).toMatchObject({
+      fontSize: 18,
+      lineHeight: 1.65,
+      fontFamily: "'JetBrains Mono', 'Cascadia Code', monospace",
+      previewFontFamily: 'var(--gm-font-family)',
+      fullscreenContentPadding: 88,
+      inlinePreviewEdit: true,
+    })
     expect(state.appearance).toMatchObject({ theme: 'dark', lightPalette: 'warm', aiMascotAvatarEnabled: false })
+  })
+
+  it('新的明亮配色会从持久配置中恢复', async () => {
+    const store = await loadSettingsStore({
+      appearance: { lightPalette: 'github-dmmono' },
+    })
+    const state = store.getState()
+
+    expect(state.appearance).toMatchObject({ theme: 'light', lightPalette: 'github-dmmono' })
   })
 
   it('未知字段不影响已知配置和默认值加载', async () => {

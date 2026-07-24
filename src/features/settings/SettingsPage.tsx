@@ -215,6 +215,46 @@ function SliderField({
   )
 }
 
+function FontStackField({
+  label,
+  description,
+  value,
+  presets,
+  placeholder,
+  onChange,
+}: {
+  label: string
+  description: string
+  value: string
+  presets: readonly FontPresetOption[]
+  placeholder: string
+  onChange: (value: string) => void
+}) {
+  const matchedPreset = presets.find((option) => option.value === value)
+
+  return (
+    <SettingField label={label} description={description}>
+      <div className="w-full max-w-[360px] space-y-2">
+        <Select
+          options={presets.map((option) => ({ key: option.key, label: option.label }))}
+          value={matchedPreset?.key ?? ''}
+          placeholder={matchedPreset ? '选择预设' : '当前为自定义字体栈'}
+          onChange={(key) => {
+            const preset = presets.find((option) => option.key === key)
+            if (preset) onChange(preset.value)
+          }}
+        />
+        <Input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={placeholder}
+          style={{ width: '100%' }}
+        />
+      </div>
+    </SettingField>
+  )
+}
+
 const MODE_PERFORMANCE_OPTIONS = [
   {
     key: 'memory',
@@ -245,6 +285,28 @@ const MODE_PERFORMANCE_FILL_WIDTHS = ['var(--gm-mode-prewarm-thumb-size)', 'calc
 const LIGHT_PALETTE_OPTIONS = [
   { key: 'warm', label: '暖色' },
   { key: 'plain', label: '浅色' },
+  { key: 'github-dmmono', label: 'GitHub' },
+] as const
+
+type FontPresetOption = {
+  key: string
+  label: string
+  value: string
+}
+
+const EDITOR_FONT_OPTIONS: readonly FontPresetOption[] = [
+  { key: 'dmmono', label: 'DMMono Nerd Font', value: "'DMMono Nerd Font', 'JetBrains Mono', 'Cascadia Code', monospace" },
+  { key: 'jetbrains-mono', label: 'JetBrains Mono', value: "'JetBrains Mono', 'Cascadia Code', monospace" },
+  { key: 'cascadia', label: 'Cascadia Code', value: "'Cascadia Code', 'Consolas', monospace" },
+  { key: 'fira-code', label: 'Fira Code', value: "'Fira Code', 'Cascadia Code', monospace" },
+  { key: 'system-mono', label: '系统等宽', value: "'Consolas', 'Courier New', monospace" },
+] as const
+
+const PREVIEW_FONT_OPTIONS: readonly FontPresetOption[] = [
+  { key: 'dmmono-ui', label: 'DMMono / GitHub', value: "'DMMono Nerd Font', 'Microsoft YaHei', 'Open Sans', 'Clear Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif" },
+  { key: 'ui-default', label: '跟随界面字体', value: 'var(--gm-font-family)' },
+  { key: 'sans', label: '清晰无衬线', value: "'Noto Sans SC', 'HarmonyOS Sans SC', 'MiSans', 'PingFang SC', 'Microsoft YaHei', sans-serif" },
+  { key: 'serif', label: '书卷衬线', value: "'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', serif" },
 ] as const
 
 type LightPalette = typeof LIGHT_PALETTE_OPTIONS[number]['key']
@@ -1036,6 +1098,22 @@ function EditorSettings() {
       <SectionTitle>外观</SectionTitle>
       <SliderField label="字号" description="编辑区与预览区文字大小，推荐 14-16px，Ctrl+滚轮可快捷调节" value={editor.fontSize} min={10} max={24} step={1} onChange={(v) => updateEditorSettings({ fontSize: Math.round(v) })} format={(v) => `${v}px`} debounceMs={150} />
       <SliderField label="行高" description="编辑区与预览区行间距倍数，影响阅读舒适度" value={editor.lineHeight} min={1.2} max={2.0} step={0.05} onChange={(v) => updateEditorSettings({ lineHeight: v })} format={(v) => v.toFixed(2)} debounceMs={150} />
+      <FontStackField
+        label="编辑器字体栈"
+        description="影响 Markdown 编辑区的字体；支持直接输入 CSS font-family 字符串"
+        value={editor.fontFamily}
+        presets={EDITOR_FONT_OPTIONS}
+        placeholder="例如: 'JetBrains Mono', 'Cascadia Code', monospace"
+        onChange={(fontFamily) => updateEditorSettings({ fontFamily })}
+      />
+      <FontStackField
+        label="Markdown 正文字体栈"
+        description="仅影响 Markdown 预览与阅读视图；支持直接输入 CSS font-family 字符串"
+        value={editor.previewFontFamily}
+        presets={PREVIEW_FONT_OPTIONS}
+        placeholder="例如: 'Noto Serif SC', 'Source Han Serif SC', serif"
+        onChange={(previewFontFamily) => updateEditorSettings({ previewFontFamily })}
+      />
       <SettingField label="Tab 大小" description="按 Tab 键插入的空格数">
         <Select
           options={[
@@ -1202,6 +1280,8 @@ function GeneralSettings() {
     updateEditorSettings({
       fontSize: 14,
       lineHeight: 1.65,
+      fontFamily: "'JetBrains Mono', 'Cascadia Code', monospace",
+      previewFontFamily: 'var(--gm-font-family)',
       tabSize: 2,
       wordWrap: true,
       lineNumbers: true,

@@ -18,6 +18,7 @@ interface EditorSettings {
   fontSize: number
   lineHeight: number
   fontFamily: string
+  previewFontFamily: string
   tabSize: number
   wordWrap: boolean
   lineNumbers: boolean
@@ -35,7 +36,7 @@ interface AppearanceSettings {
   customCursorEnabled: boolean
   aiMascotAvatarEnabled: boolean
   theme: 'light' | 'dark'
-  lightPalette: 'warm' | 'plain'
+  lightPalette: 'warm' | 'plain' | 'github-dmmono'
 }
 
 type AppearanceTheme = AppearanceSettings['theme']
@@ -71,6 +72,7 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   fontSize: 14,
   lineHeight: 1.65,
   fontFamily: "'JetBrains Mono', 'Cascadia Code', monospace",
+  previewFontFamily: 'var(--gm-font-family)',
   tabSize: 2,
   wordWrap: true,
   lineNumbers: true,

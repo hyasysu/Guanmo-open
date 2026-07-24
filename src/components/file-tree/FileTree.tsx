@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useEditorStore } from '@/stores/editorStore'
 import { createFile, createFolder, openFile } from '@/services/fileSystem'
 import type { FileNode } from '@/services/fileTree'
@@ -17,14 +17,86 @@ interface FileTreeProps {
   workspacePath?: string | null
   onRefreshWorkspace?: () => void
   onCloseWorkspace?: () => void
+  collapseAllSignal?: number
+  expandAllSignal?: number
 }
 
-export function FileTree({ nodes, onOpenFile, workspacePath, onRefreshWorkspace, onCloseWorkspace }: FileTreeProps) {
+function getTopLevelExpandedPaths(nodes: FileNode[]): Set<string> {
+  return new Set(
+    nodes
+      .filter((node) => node.type === 'directory')
+      .map((node) => node.path)
+  )
+}
+
+function collectDirectoryPaths(nodes: FileNode[]): Set<string> {
+  const paths = new Set<string>()
+  const visit = (items: FileNode[]) => {
+    for (const item of items) {
+      if (item.type !== 'directory') continue
+      paths.add(item.path)
+      if (item.children?.length) visit(item.children)
+    }
+  }
+  visit(nodes)
+  return paths
+}
+
+export function FileTree({ nodes, onOpenFile, workspacePath, onRefreshWorkspace, onCloseWorkspace, collapseAllSignal, expandAllSignal }: FileTreeProps) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const [creating, setCreating] = useState<'file' | 'folder' | null>(null)
   const [newName, setNewName] = useState('')
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => getTopLevelExpandedPaths(nodes))
   const createCancelledRef = useRef(false)
   const createSubmittingRef = useRef(false)
+  const previousWorkspacePathRef = useRef<string | null | undefined>(workspacePath)
+  const previousCollapseAllSignalRef = useRef<number | undefined>(collapseAllSignal)
+  const previousExpandAllSignalRef = useRef<number | undefined>(expandAllSignal)
+
+  useEffect(() => {
+    const directoryPaths = collectDirectoryPaths(nodes)
+    setExpandedPaths((current) => {
+      if (previousWorkspacePathRef.current !== workspacePath) {
+        previousWorkspacePathRef.current = workspacePath
+        return getTopLevelExpandedPaths(nodes)
+      }
+
+      const next = new Set<string>()
+      for (const path of current) {
+        if (directoryPaths.has(path)) next.add(path)
+      }
+      previousWorkspacePathRef.current = workspacePath
+      return next
+    })
+  }, [nodes, workspacePath])
+
+  useEffect(() => {
+    if (collapseAllSignal === undefined) return
+    if (previousCollapseAllSignalRef.current === collapseAllSignal) return
+    previousCollapseAllSignalRef.current = collapseAllSignal
+    setExpandedPaths(new Set())
+  }, [collapseAllSignal])
+
+  useEffect(() => {
+    if (expandAllSignal === undefined) return
+    if (previousExpandAllSignalRef.current === expandAllSignal) return
+    previousExpandAllSignalRef.current = expandAllSignal
+    setExpandedPaths(collectDirectoryPaths(nodes))
+  }, [expandAllSignal, nodes])
+
+  const isExpandedPath = useCallback((path: string) => expandedPaths.has(path), [expandedPaths])
+
+  const toggleDirectory = useCallback((path: string) => {
+    setExpandedPaths((current) => {
+      const next = new Set(current)
+      if (next.has(path)) {
+        next.delete(path)
+      } else {
+        next.add(path)
+      }
+      return next
+    })
+  }, [])
 
   const handleBlankContextMenu = useCallback((e: React.MouseEvent) => {
     if (!workspacePath) return
@@ -78,7 +150,16 @@ export function FileTree({ nodes, onOpenFile, workspacePath, onRefreshWorkspace,
         <EmptyState />
       ) : (
         nodes.map((node) => (
-          <FileTreeNode key={node.path} node={node} depth={0} onOpenFile={onOpenFile} onRefreshWorkspace={onRefreshWorkspace} />
+          <FileTreeNode
+            key={node.path}
+            node={node}
+            depth={0}
+            expanded={expandedPaths.has(node.path)}
+            isExpandedPath={isExpandedPath}
+            onToggleDirectory={toggleDirectory}
+            onOpenFile={onOpenFile}
+            onRefreshWorkspace={onRefreshWorkspace}
+          />
         ))
       )}
       {creating && (
@@ -155,15 +236,20 @@ function EmptyState() {
 function FileTreeNode({
   node,
   depth,
+  expanded,
+  isExpandedPath,
+  onToggleDirectory,
   onOpenFile,
   onRefreshWorkspace,
 }: {
   node: FileNode
   depth: number
+  expanded: boolean
+  isExpandedPath: (path: string) => boolean
+  onToggleDirectory: (path: string) => void
   onOpenFile?: (path: string) => void
   onRefreshWorkspace?: () => void
 }) {
-  const [expanded, setExpanded] = useState(depth === 0)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const rename = useFileRename()
   const activeTab = useEditorStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
@@ -172,11 +258,11 @@ function FileTreeNode({
 
   const handleClick = useCallback(() => {
     if (node.type === 'directory') {
-      setExpanded((prev) => !prev)
+      onToggleDirectory(node.path)
     } else {
       onOpenFile?.(node.path)
     }
-  }, [node, onOpenFile])
+  }, [node, onOpenFile, onToggleDirectory])
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     if (!isFile) return
@@ -282,7 +368,16 @@ function FileTreeNode({
       {node.type === 'directory' && expanded && node.children && (
         <div>
           {node.children.map((child) => (
-            <FileTreeNode key={child.path} node={child} depth={depth + 1} onOpenFile={onOpenFile} onRefreshWorkspace={onRefreshWorkspace} />
+            <FileTreeNode
+              key={child.path}
+              node={child}
+              depth={depth + 1}
+              expanded={isExpandedPath(child.path)}
+              isExpandedPath={isExpandedPath}
+              onToggleDirectory={onToggleDirectory}
+              onOpenFile={onOpenFile}
+              onRefreshWorkspace={onRefreshWorkspace}
+            />
           ))}
         </div>
       )}

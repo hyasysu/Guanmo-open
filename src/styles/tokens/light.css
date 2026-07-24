@@ -244,3 +244,128 @@
   --animal-table-loading-bg: rgba(255, 255, 255, 0.82);
   --animal-table-loading-color: #2f9f98;
 }
+
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) {
+  --gm-canvas: #fafafa;
+  --gm-surface: #ffffff;
+  --gm-surface-elevated: #f8f8f8;
+  --gm-surface-overlay: #ffffff;
+  --gm-surface-hover: rgba(65, 131, 196, 0.08);
+
+  --gm-primary: #4183c4;
+  --gm-primary-hover: #2f6ea9;
+  --gm-primary-active: #255f94;
+  --gm-primary-subtle: #e6f0fe;
+
+  --gm-accent: #b4654d;
+  --gm-accent-subtle: rgba(180, 101, 77, 0.08);
+
+  --gm-text: #333333;
+  --gm-text-secondary: #777777;
+  --gm-text-tertiary: #999999;
+  --gm-text-disabled: #b5b5b5;
+  --gm-text-on-primary: #ffffff;
+
+  --gm-user-bubble-bg: #f3f4f4;
+  --gm-user-bubble-text: #333333;
+  --gm-active-indicator: #4183c4;
+
+  --gm-border: #dfe2e5;
+  --gm-border-subtle: #eeeeee;
+  --gm-border-focus: #4183c4;
+  --gm-border-hover: #c9d1d9;
+
+  --gm-success: #2c974b;
+  --gm-warning: #bf8700;
+  --gm-error: #d73a49;
+
+  --gm-radius-sm: 6px;
+  --gm-radius-base: 8px;
+  --gm-radius-lg: 10px;
+
+  --gm-font-family: 'DMMono Nerd Font', 'Microsoft YaHei', 'Open Sans', 'Clear Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+
+  --gm-editor-bg: #ffffff;
+  --gm-editor-selection: rgba(65, 131, 196, 0.16);
+  --gm-editor-line-highlight: rgba(231, 231, 231, 0.5);
+  --gm-editor-gutter: #fafafa;
+  --gm-editor-heading: #333333;
+  --gm-editor-quote: #777777;
+  --gm-editor-code: #333333;
+  --gm-editor-link: #4183c4;
+  --gm-editor-list: #333333;
+  --gm-markdown-heading: #333333;
+  --gm-markdown-quote-bg: transparent;
+  --gm-code-bg: #f8f8f8;
+  --gm-code-text: #333333;
+  --gm-code-muted: #777777;
+  --gm-code-command: #4183c4;
+  --gm-code-path: #b4654d;
+  --gm-code-error: #d73a49;
+  --gm-code-info: #777777;
+
+  --gm-tooltip-bg: #ffffff;
+  --gm-tooltip-border: rgba(51, 51, 51, 0.12);
+  --gm-tooltip-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --gm-settings-mask-bg: rgba(51, 51, 51, 0.18);
+  --gm-settings-modal-bg: #fafafa;
+  --gm-settings-modal-border: rgba(223, 226, 229, 0.9);
+  --gm-settings-modal-shadow: 0 18px 42px rgba(0, 0, 0, 0.08);
+
+  --gm-scrollbar-thumb: #d0d7de;
+  --gm-scrollbar-thumb-hover: #afb8c1;
+
+  --animal-primary-color: #4183c4;
+  --animal-primary-color-hover: #2f6ea9;
+  --animal-primary-color-active: #255f94;
+  --animal-primary-color-bg: #e6f0fe;
+  --animal-text-color: #333333;
+  --animal-text-color-secondary: #777777;
+  --animal-text-color-muted: #999999;
+  --animal-text-color-disabled: #b5b5b5;
+  --animal-border-color: #dfe2e5;
+  --animal-border-color-hover: #c9d1d9;
+  --animal-border-color-light: #eeeeee;
+  --animal-bg-color: #ffffff;
+  --animal-bg-color-secondary: #f8f8f8;
+  --animal-bg-color-disabled: #f3f4f4;
+  --animal-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.04);
+  --animal-shadow-base: 0 3px 10px rgba(0, 0, 0, 0.08);
+  --animal-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --animal-tabs-bg: #fafafa;
+  --animal-tabs-border: #dfe2e5;
+  --animal-tabs-list-bg: #f8f8f8;
+  --animal-tabs-item-text: #777777;
+  --animal-tabs-item-hover-bg: #e6f0fe;
+  --animal-tabs-active-bg: #4183c4;
+  --animal-tabs-active-text: #ffffff;
+  --animal-tabs-active-shadow: 0 3px 0 0 rgba(65, 131, 196, 0.12);
+  --animal-select-trigger-bg: #ffffff;
+  --animal-select-trigger-border: #dfe2e5;
+  --animal-select-trigger-hover-bg: #f8f8f8;
+  --animal-select-trigger-hover-border: #c9d1d9;
+  --animal-select-dropdown-bg: #ffffff;
+  --animal-select-pill-bg: #4183c4;
+  --animal-select-disabled-bg: #f3f4f4;
+  --animal-switch-bg: #dfe2e5;
+  --animal-switch-border: #c9d1d9;
+  --animal-switch-hover-border: #9aa4af;
+  --animal-switch-focus: #4183c4;
+  --animal-switch-handle-bg: #ffffff;
+  --animal-switch-text: #ffffff;
+  --animal-button-primary-text: #ffffff;
+  --animal-button-primary-bg: #4183c4;
+  --animal-button-primary-border: #4183c4;
+  --animal-button-primary-shadow: #2f6ea9;
+  --animal-button-text-active-bg: #e6f0fe;
+  --animal-table-bg: #ffffff;
+  --animal-table-divider: #dfe2e5;
+  --animal-table-text: #333333;
+  --animal-table-text-hover: #111111;
+  --animal-table-text-muted: #777777;
+  --animal-table-striped-bg: #f8f8f8;
+  --animal-table-hover-stripe-a: rgba(65, 131, 196, 0.08);
+  --animal-table-hover-stripe-b: rgba(65, 131, 196, 0.12);
+  --animal-table-loading-bg: rgba(255, 255, 255, 0.8);
+  --animal-table-loading-color: #4183c4;
+}
