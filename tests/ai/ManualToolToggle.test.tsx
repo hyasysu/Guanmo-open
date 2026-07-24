@@ -41,4 +41,13 @@ describe('ManualToolToggle 联网搜索状态', () => {
 
     expect(screen.getByRole('button', { name: '联网搜索' })).toBeEnabled()
   })
+
+  it('右侧两个工具的提示向左展开，避免超出应用窗口', () => {
+    render(<ManualToolToggle onChange={vi.fn()} />)
+
+    expect(screen.getByText('选中后强制查询长期记忆，回答基于您的历史偏好和习惯'))
+      .toHaveClass('gm-manual-tool-tooltip--right')
+    expect(screen.getByText('请在设置中开启联网搜索'))
+      .toHaveClass('gm-manual-tool-tooltip--right')
+  })
 })

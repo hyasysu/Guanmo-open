@@ -136,9 +136,12 @@ export function ManualToolToggle({ onChange, disabled = false, resetKey }: Manua
 
   return (
     <div className="flex items-center gap-1.5 px-2 pt-0.5 pb-1">
-      {TOGGLE_OPTIONS.map((option) => {
+      {TOGGLE_OPTIONS.map((option, index) => {
         const isSelected = selected.includes(option.id)
         const isEnabled = enabledStates[option.id]
+        const tooltipAlignment = index === 0
+          ? 'left-0 gm-manual-tool-tooltip--left'
+          : 'right-0 gm-manual-tool-tooltip--right'
 
         return (
           <div key={option.id} className="relative group">
@@ -160,7 +163,7 @@ export function ManualToolToggle({ onChange, disabled = false, resetKey }: Manua
               {option.label}
             </Button>
             {/* Tooltip */}
-            <div className="gm-manual-tool-tooltip absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded-lg text-micro whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+            <div className={`gm-manual-tool-tooltip absolute bottom-full mb-2 px-2 py-1 rounded-lg text-micro opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 ${tooltipAlignment}`}>
               {isEnabled ? option.tooltip : option.disabledTooltip ?? `${option.label}不可用`}
             </div>
           </div>
