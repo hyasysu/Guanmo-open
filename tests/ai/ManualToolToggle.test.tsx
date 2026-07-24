@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ManualToolToggle } from '@/components/ai/ManualToolToggle'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -20,6 +20,8 @@ describe('ManualToolToggle 联网搜索状态', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
     vi.useRealTimers()
   })
 
@@ -30,8 +32,13 @@ describe('ManualToolToggle 联网搜索状态', () => {
       await vi.advanceTimersByTimeAsync(500)
     })
 
-    expect(screen.getByRole('button', { name: '联网搜索' })).toBeDisabled()
-    expect(screen.getByText('请在设置中开启联网搜索')).toBeInTheDocument()
+    const webSearchButton = screen.getByRole('button', { name: '联网搜索' })
+    expect(webSearchButton).toBeDisabled()
+
+    fireEvent.mouseEnter(webSearchButton.parentElement as HTMLElement)
+    act(() => vi.advanceTimersByTime(320))
+    expect(screen.getByRole('tooltip')).toHaveTextContent('请在设置中开启联网搜索')
+    fireEvent.mouseLeave(webSearchButton.parentElement as HTMLElement)
 
     act(() => {
       useSettingsStore.setState((state) => ({
@@ -42,12 +49,41 @@ describe('ManualToolToggle 联网搜索状态', () => {
     expect(screen.getByRole('button', { name: '联网搜索' })).toBeEnabled()
   })
 
-  it('右侧两个工具的提示向左展开，避免超出应用窗口', () => {
+  it.each([
+    { name: '查知识库', left: 0 },
+    { name: '联网搜索', left: 160 },
+  ])('窄窗口中 $name 的提示保持在应用窗口内', ({ name, left: triggerLeft }) => {
+    vi.stubGlobal('innerWidth', 240)
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function () {
+      return this.getAttribute('role') === 'tooltip' ? 220 : 0
+    })
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function () {
+      return this.getAttribute('role') === 'tooltip' ? 30 : 0
+    })
+
     render(<ManualToolToggle onChange={vi.fn()} />)
 
-    expect(screen.getByText('选中后强制查询长期记忆，回答基于您的历史偏好和习惯'))
-      .toHaveClass('gm-manual-tool-tooltip--right')
-    expect(screen.getByText('请在设置中开启联网搜索'))
-      .toHaveClass('gm-manual-tool-tooltip--right')
+    const button = screen.getByRole('button', { name })
+    const trigger = button.parentElement as HTMLElement
+    vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue({
+      x: triggerLeft,
+      y: 160,
+      left: triggerLeft,
+      top: 160,
+      right: triggerLeft + 80,
+      bottom: 188,
+      width: 80,
+      height: 28,
+      toJSON: () => ({}),
+    })
+
+    fireEvent.mouseEnter(trigger)
+    act(() => vi.advanceTimersByTime(320))
+
+    const tooltip = screen.getByRole('tooltip')
+    const left = Number.parseFloat(tooltip.style.left)
+    expect(left).toBeGreaterThanOrEqual(8)
+    expect(left + tooltip.offsetWidth).toBeLessThanOrEqual(window.innerWidth - 8)
+    expect(tooltip).toHaveClass('gm-tooltip--top')
   })
 })

@@ -16,33 +16,55 @@ interface TooltipProps {
   children: ReactNode
   className?: string
   onlyWhenTruncated?: boolean
+  placement?: TooltipPlacement
 }
+
+type TooltipPlacement = 'top' | 'bottom'
 
 type TooltipPosition = {
   left: number
   top: number
   arrowLeft: number
   anchorCenter: number
+  anchorTop: number
+  anchorBottom: number
+  placement: TooltipPlacement
 }
 
 const TOOLTIP_MARGIN = 8
 const TOOLTIP_ARROW_MARGIN = 12
+const TOOLTIP_GAP = 7
 const TOOLTIP_FALLBACK_WIDTH = 264
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
 }
 
-function getTooltipPosition(anchorCenter: number, top: number, tooltipWidth = TOOLTIP_FALLBACK_WIDTH): TooltipPosition {
+function getTooltipPosition(
+  anchorCenter: number,
+  anchorTop: number,
+  anchorBottom: number,
+  placement: TooltipPlacement,
+  tooltipWidth = TOOLTIP_FALLBACK_WIDTH,
+  tooltipHeight = 0,
+): TooltipPosition {
   const width = Math.min(tooltipWidth, window.innerWidth - TOOLTIP_MARGIN * 2)
   const left = clamp(anchorCenter - width / 2, TOOLTIP_MARGIN, window.innerWidth - width - TOOLTIP_MARGIN)
   const arrowLeft = clamp(anchorCenter - left, TOOLTIP_ARROW_MARGIN, width - TOOLTIP_ARROW_MARGIN)
-  return { left, top, arrowLeft, anchorCenter }
+  const top = placement === 'top'
+    ? anchorTop - tooltipHeight - TOOLTIP_GAP
+    : anchorBottom + TOOLTIP_GAP
+  return { left, top, arrowLeft, anchorCenter, anchorTop, anchorBottom, placement }
 }
 
-function getTriggerTooltipPosition(trigger: HTMLElement) {
+function getTriggerTooltipPosition(trigger: HTMLElement, placement: TooltipPlacement = 'bottom') {
   const rect = trigger.getBoundingClientRect()
-  return getTooltipPosition(rect.left + rect.width / 2, rect.bottom + 7)
+  return getTooltipPosition(
+    rect.left + rect.width / 2,
+    rect.top,
+    rect.bottom,
+    placement,
+  )
 }
 
 function getTooltipStyle(position: TooltipPosition): CSSProperties {
@@ -60,13 +82,26 @@ function useMeasuredTooltipPosition<T extends TooltipPosition>(
 ) {
   useLayoutEffect(() => {
     if (!position || !tooltipRef.current) return
-    const next = getTooltipPosition(position.anchorCenter, position.top, tooltipRef.current.offsetWidth)
-    if (next.left === position.left && next.arrowLeft === position.arrowLeft) return
-    setPosition(current => current ? { ...current, left: next.left, arrowLeft: next.arrowLeft } : current)
+    const next = getTooltipPosition(
+      position.anchorCenter,
+      position.anchorTop,
+      position.anchorBottom,
+      position.placement,
+      tooltipRef.current.offsetWidth,
+      tooltipRef.current.offsetHeight,
+    )
+    if (next.left === position.left && next.top === position.top && next.arrowLeft === position.arrowLeft) return
+    setPosition(current => current ? { ...current, ...next } : current)
   }, [position, setPosition, tooltipRef])
 }
 
-export function Tooltip({ content, children, className = '', onlyWhenTruncated = false }: TooltipProps) {
+export function Tooltip({
+  content,
+  children,
+  className = '',
+  onlyWhenTruncated = false,
+  placement = 'bottom',
+}: TooltipProps) {
   const triggerRef = useRef<HTMLSpanElement>(null)
   const tooltipRef = useRef<HTMLDivElement>(null)
   const timerRef = useRef<number | null>(null)
@@ -83,7 +118,7 @@ export function Tooltip({ content, children, className = '', onlyWhenTruncated =
   const show = () => {
     const trigger = triggerRef.current
     if (!trigger || (onlyWhenTruncated && trigger.scrollWidth <= trigger.clientWidth)) return
-    const nextPosition = getTriggerTooltipPosition(trigger)
+    const nextPosition = getTriggerTooltipPosition(trigger, placement)
     timerRef.current = window.setTimeout(() => {
       setPosition(nextPosition)
     }, 320)
@@ -106,7 +141,12 @@ export function Tooltip({ content, children, className = '', onlyWhenTruncated =
         {children}
       </span>
       {position && createPortal(
-        <div ref={tooltipRef} role="tooltip" className="gm-tooltip" style={getTooltipStyle(position)}>
+        <div
+          ref={tooltipRef}
+          role="tooltip"
+          className={`gm-tooltip gm-tooltip--${position.placement}`}
+          style={getTooltipStyle(position)}
+        >
           {content}
         </div>,
         document.body,
@@ -181,7 +221,12 @@ export function GlobalTooltip() {
   }, [])
 
   return tooltip ? createPortal(
-    <div ref={tooltipRef} role="tooltip" className="gm-tooltip" style={getTooltipStyle(tooltip)}>
+    <div
+      ref={tooltipRef}
+      role="tooltip"
+      className={`gm-tooltip gm-tooltip--${tooltip.placement}`}
+      style={getTooltipStyle(tooltip)}
+    >
       {tooltip.content}
     </div>,
     document.body,
