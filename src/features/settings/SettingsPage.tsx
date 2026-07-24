@@ -3,7 +3,7 @@ import { Button, Collapse, Divider, Footer, Icon, Input, Modal, Select, Switch, 
 import appIcon from '@/assets/icon-settings.png'
 
 import { isTauri } from '@/hooks/useTauri'
-import { useSettingsStore } from '@/stores/settingsStore'
+import { LIGHT_PALETTE_OPTIONS, useSettingsStore, type LightPalette } from '@/stores/settingsStore'
 import type { WebSearchConfig } from '@/services/webSearch'
 import { initAiClient, initEmbeddingClient, isLocalApi, testAiConnection, validateAiStatus } from '@/services/ai/aiClient'
 import { AI_CHAT_PRESETS, AI_EMBEDDING_PRESETS } from '@/services/ai/types'
@@ -282,12 +282,6 @@ const MODE_PERFORMANCE_STOP_POSITIONS = ['var(--gm-mode-prewarm-stop-edge)', '50
 const MODE_PERFORMANCE_LABEL_POSITIONS = ['var(--gm-mode-prewarm-stop-edge)', 'calc(50% - 14px)', 'calc(100% - var(--gm-mode-prewarm-stop-edge) - 26px)'] as const
 const MODE_PERFORMANCE_FILL_WIDTHS = ['var(--gm-mode-prewarm-thumb-size)', 'calc(50% + var(--gm-mode-prewarm-thumb-size) / 2)', '100%'] as const
 
-const LIGHT_PALETTE_OPTIONS = [
-  { key: 'warm', label: '暖色' },
-  { key: 'plain', label: '浅色' },
-  { key: 'github-dmmono', label: 'GitHub' },
-] as const
-
 type FontPresetOption = {
   key: string
   label: string
@@ -308,8 +302,6 @@ const PREVIEW_FONT_OPTIONS: readonly FontPresetOption[] = [
   { key: 'sans', label: '清晰无衬线', value: "'Noto Sans SC', 'HarmonyOS Sans SC', 'MiSans', 'PingFang SC', 'Microsoft YaHei', sans-serif" },
   { key: 'serif', label: '书卷衬线', value: "'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', serif" },
 ] as const
-
-type LightPalette = typeof LIGHT_PALETTE_OPTIONS[number]['key']
 
 function getModePerformanceIndex(value: ModePerformanceLevel) {
   return Math.max(0, MODE_PERFORMANCE_KEYS.indexOf(value))
@@ -1890,3 +1882,4 @@ function MemorySettings() {
     </div>
   )
 }
+

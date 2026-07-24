@@ -1,14 +1,70 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { undo, redo } from '@codemirror/commands'
 import { useEditorHistoryStore } from '@/stores/editorHistoryStore'
-import { useSettingsStore } from '@/stores/settingsStore'
+import {
+  LIGHT_PALETTE_OPTIONS,
+  useSettingsStore,
+  type LightPalette,
+} from '@/stores/settingsStore'
 import { getActiveEditorView } from '@/services/editorViewRef'
 import { useFullscreen } from '@/hooks/useFullscreen'
 
 import { isTauri } from '@/hooks/useTauri'
 
+type ThemeChoice =
+  | { kind: 'light'; palette: LightPalette }
+  | { kind: 'dark' }
+
+const THEME_OPTIONS: Array<{
+  id: string
+  label: string
+  description: string
+  choice: ThemeChoice
+  swatches: [string, string, string]
+}> = [
+  {
+    id: 'light-warm',
+    label: '暖色',
+    description: '动物岛暖色明亮',
+    choice: { kind: 'light', palette: 'warm' },
+    swatches: ['#f7f3df', '#3aafa4', '#794f27'],
+  },
+  {
+    id: 'light-plain',
+    label: '浅色',
+    description: '干净白底明亮',
+    choice: { kind: 'light', palette: 'plain' },
+    swatches: ['#ffffff', '#2f9f98', '#1f2937'],
+  },
+  {
+    id: 'light-github-dmmono',
+    label: 'GitHub',
+    description: 'GitHub 风格明亮',
+    choice: { kind: 'light', palette: 'github-dmmono' },
+    swatches: ['#ffffff', '#4183c4', '#333333'],
+  },
+  {
+    id: 'dark',
+    label: '深色',
+    description: '夜间写作配色',
+    choice: { kind: 'dark' },
+    swatches: ['#1d1a15', '#58b8ae', '#e0be84'],
+  },
+]
+
+function isThemeSelected(
+  choice: ThemeChoice,
+  theme: 'light' | 'dark',
+  lightPalette: LightPalette,
+): boolean {
+  if (choice.kind === 'dark') return theme === 'dark'
+  return theme === 'light' && lightPalette === choice.palette
+}
+
 export function TitleBar() {
   const [maximized, setMaximized] = useState(false)
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false)
+  const themeMenuRef = useRef<HTMLDivElement>(null)
   const canUndo = useEditorHistoryStore((s) => s.canUndo)
   const canRedo = useEditorHistoryStore((s) => s.canRedo)
   const { isFullscreen, toggleFullscreen } = useFullscreen()
@@ -43,6 +99,25 @@ export function TitleBar() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!themeMenuOpen) return
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (themeMenuRef.current?.contains(event.target as Node)) return
+      setThemeMenuOpen(false)
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setThemeMenuOpen(false)
+    }
+
+    window.addEventListener('mousedown', handlePointerDown)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [themeMenuOpen])
+
   const handleMinimize = useCallback(() => {
     if (!isTauri()) return
     import('@tauri-apps/api/window')
@@ -75,10 +150,28 @@ export function TitleBar() {
   }, [])
 
   const theme = useSettingsStore((s) => s.appearance.theme)
+  const lightPalette = useSettingsStore((s) => s.appearance.lightPalette)
+
   const toggleTheme = useCallback(() => {
     const next = theme === 'dark' ? 'light' : 'dark'
     useSettingsStore.getState().updateAppearanceSettings({ theme: next })
   }, [theme])
+
+  const applyThemeChoice = useCallback((choice: ThemeChoice) => {
+    if (choice.kind === 'dark') {
+      useSettingsStore.getState().updateAppearanceSettings({ theme: 'dark' })
+    } else {
+      useSettingsStore.getState().updateAppearanceSettings({
+        theme: 'light',
+        lightPalette: choice.palette,
+      })
+    }
+    setThemeMenuOpen(false)
+  }, [])
+
+  const activeThemeLabel = theme === 'dark'
+    ? '深色'
+    : (LIGHT_PALETTE_OPTIONS.find((option) => option.key === lightPalette)?.label ?? '暖色')
 
   return (
     <div className="h-[38px] flex items-center bg-gm-surface border-b border-gm-border-subtle select-none flex-shrink-0">
@@ -152,6 +245,80 @@ export function TitleBar() {
             </svg>
           )}
         </button>
+        {/* Theme picker */}
+        <div className="relative h-full" ref={themeMenuRef}>
+          <button
+            type="button"
+            onClick={() => setThemeMenuOpen((open) => !open)}
+            className={`h-full min-w-10 px-2 flex items-center justify-center gap-1 text-gm-text-secondary hover:bg-gm-surface-hover transition-colors ${
+              themeMenuOpen ? 'bg-gm-surface-hover text-gm-text' : ''
+            }`}
+            title={`切换主题（当前：${activeThemeLabel}）`}
+            aria-haspopup="menu"
+            aria-expanded={themeMenuOpen}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="13.5" cy="6.5" r="2.5" />
+              <circle cx="17.5" cy="10.5" r="2.5" />
+              <circle cx="8.5" cy="7.5" r="2.5" />
+              <circle cx="6.5" cy="12.5" r="2.5" />
+              <path d="M12 22a8 8 0 0 0 8-8c0-3.5-4-7-8-10-4 3-8 6.5-8 10a8 8 0 0 0 8 8z" />
+            </svg>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+          {themeMenuOpen && (
+            <div
+              role="menu"
+              aria-label="选择主题"
+              className="absolute right-0 top-full z-[60] mt-1 w-[220px] rounded-xl border border-gm-border bg-gm-surface-elevated py-1.5 shadow-lg"
+            >
+              <div className="px-3 pb-1.5 pt-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-gm-text-tertiary">
+                主题
+              </div>
+              {THEME_OPTIONS.map((option) => {
+                const selected = isThemeSelected(option.choice, theme, lightPalette)
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={selected}
+                    onClick={() => applyThemeChoice(option.choice)}
+                    className={`flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors ${
+                      selected
+                        ? 'bg-gm-primary-subtle text-gm-text'
+                        : 'text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text'
+                    }`}
+                  >
+                    <span className="flex h-5 w-5 shrink-0 overflow-hidden rounded-full border border-gm-border" aria-hidden="true">
+                      {option.swatches.map((color) => (
+                        <span key={color} className="h-full flex-1" style={{ backgroundColor: color }} />
+                      ))}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-caption font-medium text-gm-text">{option.label}</span>
+                      <span className="block text-micro text-gm-text-tertiary">{option.description}</span>
+                    </span>
+                    <span
+                      className={`ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
+                        selected
+                          ? 'border-gm-primary bg-gm-primary text-gm-text-on-primary'
+                          : 'border-gm-border-subtle text-transparent'
+                      }`}
+                      aria-hidden="true"
+                    >
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M20 6L9 17l-5-5" />
+                      </svg>
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
         {/* Divider */}
         <div className="w-px h-5 bg-gm-border-subtle mx-1" />
         <button

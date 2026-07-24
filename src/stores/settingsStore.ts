@@ -39,8 +39,14 @@ interface AppearanceSettings {
   lightPalette: 'warm' | 'plain' | 'github-dmmono'
 }
 
-type AppearanceTheme = AppearanceSettings['theme']
-type LightPalette = AppearanceSettings['lightPalette']
+export type AppearanceTheme = AppearanceSettings['theme']
+export type LightPalette = AppearanceSettings['lightPalette']
+
+export const LIGHT_PALETTE_OPTIONS = [
+  { key: 'warm', label: '暖色' },
+  { key: 'plain', label: '浅色' },
+  { key: 'github-dmmono', label: 'GitHub' },
+] as const satisfies ReadonlyArray<{ key: LightPalette; label: string }>
 
 interface SettingsState {
   ai: AiConfig
@@ -310,3 +316,4 @@ export const useSettingsStore = create<SettingsState>()(
     }
   )
 )
+
