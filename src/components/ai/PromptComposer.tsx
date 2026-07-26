@@ -3,18 +3,17 @@ import { useChatStore } from '@/stores/chatStore'
 import { Button } from 'animal-island-ui'
 import { ContextTagChip } from '@/components/common/ContextTagChip'
 import { addFileContextTag, addFolderContextTag } from '@/services/aiContext'
-import { ManualToolToggle, type ManualCapability } from './ManualToolToggle'
+import { ManualToolToggle } from './ManualToolToggle'
 
 interface PromptComposerProps {
   onSend: () => void
   streaming: boolean
   onCancel: () => void
-  onManualCapabilitiesChange?: (capabilities: ManualCapability[]) => void
   onReasoningModeChange?: (mode: 'off' | 'on') => void
   resetManualToggle?: number
 }
 
-export function PromptComposer({ onSend, streaming, onCancel, onManualCapabilitiesChange, onReasoningModeChange, resetManualToggle }: PromptComposerProps) {
+export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeChange, resetManualToggle }: PromptComposerProps) {
   const draftInput = useChatStore((s) => s.draftInput)
   const setDraftInput = useChatStore((s) => s.setDraftInput)
   const contextTags = useChatStore((s) => s.contextTags)
@@ -115,9 +114,9 @@ export function PromptComposer({ onSend, streaming, onCancel, onManualCapabiliti
         </div>
       )}
 
-      {/* 手动工具 + 深度思考开关 */}
+      {/* 深度思考开关 */}
       <ManualToolToggle
-        onChange={onManualCapabilitiesChange || (() => {})}
+        onChange={() => {}}
         onReasoningModeChange={onReasoningModeChange}
         disabled={streaming}
         resetKey={resetManualToggle}
