@@ -267,7 +267,7 @@ export function useAiChat() {
   }, [setStreaming])
 
   const sendMessage = useCallback(
-    async (content: string, forceAgent?: boolean, contextTags?: ContextTag[], manualCapabilities?: ManualCapability[]) => {
+    async (content: string, forceAgent?: boolean, contextTags?: ContextTag[], manualCapabilities?: ManualCapability[], reasoningMode?: 'off' | 'on') => {
       const hasText = content.trim().length > 0
       const hasTags = contextTags && contextTags.length > 0
       if ((!hasText && !hasTags) || useChatStore.getState().streaming) return
@@ -619,6 +619,7 @@ export function useAiChat() {
               filterToolJson: true,
               signal: requestController.signal,
               temperature: SYSTEM_TEMPERATURE.agentPlanning,
+              reasoningMode,
             })
 
             if (!isCurrentRequest()) {
@@ -782,6 +783,7 @@ export function useAiChat() {
           isCancelled: () => !isCurrentRequest(),
           signal: requestController.signal,
           temperature: ai.temperature,
+          reasoningMode,
         })
         if (!isCurrentRequest()) return
         if (isCurrentRequest()) addTimelineItem({ type: 'done', label: '生成回答完成' })

@@ -10,6 +10,7 @@ import type {
 import { AiAuthError, AiNetworkError, AiError } from '../errors'
 import { parseSSEStream } from '../stream'
 import { ExternalHttpError, externalFetch, UnsupportedCapabilityError } from '../../externalHttp'
+import { applyReasoningMode, removeReasoningParams } from '../reasoningAdapter'
 
 function isLocalApi(baseUrl: string): boolean {
   try {
@@ -75,7 +76,7 @@ export class OpenAICompatibleProvider implements AiProvider {
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
-    const body = {
+    const body: Record<string, unknown> = {
       model: this.config.chatModel,
       messages: request.messages,
       stream: false,
@@ -84,6 +85,12 @@ export class OpenAICompatibleProvider implements AiProvider {
       max_tokens: request.maxTokens,
       tools: request.tools && request.tools.length > 0 ? request.tools : undefined,
       tool_choice: request.tools && request.tools.length > 0 ? request.toolChoice || 'auto' : undefined,
+    }
+
+    // 应用思考模式参数
+    let reasoningApplied = false
+    if (request.reasoningMode) {
+      reasoningApplied = applyReasoningMode(this.config.provider, this.config.chatModel, body, request.reasoningMode)
     }
 
     const abort = this.createAbortContext(request.signal)
@@ -99,6 +106,45 @@ export class OpenAICompatibleProvider implements AiProvider {
       if (res.status === 401) throw new AiAuthError()
       if (!res.ok) {
         const text = await res.text()
+        // 如果开启了思考模式且请求失败，尝试移除思考参数重试
+        if (reasoningApplied && (res.status === 400 || res.status === 422)) {
+          removeReasoningParams(this.config.provider, body)
+          const retryRes = await externalFetch(`${this.baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: this.headers,
+            body: JSON.stringify(body),
+            signal: abort.signal,
+          })
+          if (retryRes.ok) {
+            const data = await retryRes.json()
+            const message = data.choices[0].message
+            return {
+              id: data.id,
+              content: message.content || '',
+              role: 'assistant',
+              toolCalls: Array.isArray(message.tool_calls)
+                ? message.tool_calls
+                    .filter((call: { function?: { name?: unknown; arguments?: unknown } }) => typeof call.function?.name === 'string')
+                    .map((call: { id?: string; function: { name: string; arguments?: string } }) => {
+                      let args: Record<string, unknown> = {}
+                      try {
+                        args = call.function.arguments ? JSON.parse(call.function.arguments) : {}
+                      } catch {
+                        args = {}
+                      }
+                      return { id: call.id, name: call.function.name, args }
+                    })
+                : undefined,
+              usage: data.usage
+                ? {
+                    promptTokens: data.usage.prompt_tokens,
+                    completionTokens: data.usage.completion_tokens,
+                    totalTokens: data.usage.total_tokens,
+                  }
+                : undefined,
+            }
+          }
+        }
         throw new AiError(text, 'API_ERROR', res.status)
       }
 
@@ -142,7 +188,7 @@ export class OpenAICompatibleProvider implements AiProvider {
   }
 
   async *streamChat(request: ChatRequest): AsyncIterable<StreamChunk> {
-    const body = {
+    const body: Record<string, unknown> = {
       model: this.config.chatModel,
       messages: request.messages,
       stream: true,
@@ -151,6 +197,12 @@ export class OpenAICompatibleProvider implements AiProvider {
       max_tokens: request.maxTokens,
       tools: request.tools && request.tools.length > 0 ? request.tools : undefined,
       tool_choice: request.tools && request.tools.length > 0 ? request.toolChoice || 'auto' : undefined,
+    }
+
+    // 应用思考模式参数
+    let reasoningApplied = false
+    if (request.reasoningMode) {
+      reasoningApplied = applyReasoningMode(this.config.provider, this.config.chatModel, body, request.reasoningMode)
     }
 
     const abort = this.createAbortContext(request.signal)
@@ -166,6 +218,24 @@ export class OpenAICompatibleProvider implements AiProvider {
       if (res.status === 401) throw new AiAuthError()
       if (!res.ok) {
         const text = await res.text()
+        // 如果开启了思考模式且请求失败，尝试移除思考参数重试
+        if (reasoningApplied && (res.status === 400 || res.status === 422)) {
+          removeReasoningParams(this.config.provider, body)
+          const retryRes = await externalFetch(`${this.baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: this.headers,
+            body: JSON.stringify(body),
+            signal: abort.signal,
+          })
+          if (retryRes.ok) {
+            abort.refreshTimeout()
+            for await (const chunk of parseSSEStream(retryRes)) {
+              abort.refreshTimeout()
+              yield chunk
+            }
+            return
+          }
+        }
         throw new AiError(text, 'API_ERROR', res.status)
       }
 

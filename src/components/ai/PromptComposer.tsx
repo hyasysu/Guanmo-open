@@ -10,10 +10,11 @@ interface PromptComposerProps {
   streaming: boolean
   onCancel: () => void
   onManualCapabilitiesChange?: (capabilities: ManualCapability[]) => void
+  onReasoningModeChange?: (mode: 'off' | 'on') => void
   resetManualToggle?: number
 }
 
-export function PromptComposer({ onSend, streaming, onCancel, onManualCapabilitiesChange, resetManualToggle }: PromptComposerProps) {
+export function PromptComposer({ onSend, streaming, onCancel, onManualCapabilitiesChange, onReasoningModeChange, resetManualToggle }: PromptComposerProps) {
   const draftInput = useChatStore((s) => s.draftInput)
   const setDraftInput = useChatStore((s) => s.setDraftInput)
   const contextTags = useChatStore((s) => s.contextTags)
@@ -114,9 +115,10 @@ export function PromptComposer({ onSend, streaming, onCancel, onManualCapabiliti
         </div>
       )}
 
-      {/* 手动工具开关 */}
+      {/* 手动工具 + 深度思考开关 */}
       <ManualToolToggle
         onChange={onManualCapabilitiesChange || (() => {})}
+        onReasoningModeChange={onReasoningModeChange}
         disabled={streaming}
         resetKey={resetManualToggle}
       />

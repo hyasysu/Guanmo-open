@@ -136,6 +136,7 @@ export async function streamFinalAnswer(options: {
   filterToolJson?: boolean
   signal?: AbortSignal
   temperature?: number
+  reasoningMode?: 'off' | 'on'
 }): Promise<void> {
   const filter = options.filterToolJson ?? false
 
@@ -144,6 +145,7 @@ export async function streamFinalAnswer(options: {
       messages: options.messages,
       signal: options.signal,
       temperature: options.temperature,
+      reasoningMode: options.reasoningMode,
     })
     let accumulated = ''
     const transform = (content: string) => filter ? hideLikelyToolJsonPrefix(content) : content
@@ -166,6 +168,7 @@ export async function streamFinalAnswer(options: {
     messages: options.messages,
     signal: options.signal,
     temperature: options.temperature,
+    reasoningMode: options.reasoningMode,
   })
   if (!options.isCancelled()) {
     options.onUpdate(filter ? hideLikelyToolJsonPrefix(response.content) : response.content)

@@ -8,7 +8,9 @@ import type { WebSearchConfig } from '@/services/webSearch'
 import { initAiClient, initEmbeddingClient, isLocalApi, testAiConnection, validateAiStatus } from '@/services/ai/aiClient'
 import { AI_CHAT_PRESETS, AI_EMBEDDING_PRESETS } from '@/services/ai/types'
 import type { AiConfig, ChatProtocol, CustomPreset, EmbeddingProtocol, ValidateResult } from '@/services/ai/types'
-import { updateSearchConfig } from '@/services/webSearch'
+import { testWebSearchConnection, updateSearchConfig } from '@/services/webSearch'
+import { externalFetch } from '@/services/externalHttp'
+import type { WebSearchTestResult } from '@/services/webSearch'
 import {
   embedPendingChunks,
   getEmbeddingJobStats,
@@ -457,6 +459,8 @@ function AiSettings() {
   const [chatTesting, setChatTesting] = useState(false)
   const [embTestResult, setEmbTestResult] = useState<ValidateResult | null>(null)
   const [embTesting, setEmbTesting] = useState(false)
+  const [webSearchTestResult, setWebSearchTestResult] = useState<WebSearchTestResult | null>(null)
+  const [webSearchTesting, setWebSearchTesting] = useState(false)
   // 保存预设弹窗
   const [showChatSavePreset, setShowChatSavePreset] = useState(false)
   const [chatPresetName, setChatPresetName] = useState('')
@@ -512,18 +516,43 @@ function AiSettings() {
     setEmbTesting(true)
     setEmbTestResult(null)
     try {
-      const embConfig: AiConfig = {
-        ...ai,
-        baseUrl: ai.embedding.baseUrl,
-        apiKey: ai.embedding.apiKey,
-        chatModel: ai.embedding.embeddingModel,
+      const { baseUrl, apiKey, embeddingModel } = ai.embedding
+      if (!baseUrl) {
+        setEmbTestResult({ ok: false, error: 'config', message: 'Embedding Base URL 未配置' })
+        return
       }
-      const result = await testAiConnection(embConfig)
-      setEmbTestResult(result)
+      const url = `${baseUrl.replace(/\/+$/, '')}/embeddings`
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
+      const res = await externalFetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ model: embeddingModel, input: 'test' }),
+      })
+      if (res.ok) {
+        setEmbTestResult({ ok: true })
+      } else {
+        const body = await res.text().catch(() => '')
+        const hint = body ? `（${body.slice(0, 200)}）` : ''
+        setEmbTestResult({ ok: false, error: 'http', message: `Embedding 服务连接失败 (${res.status})${hint}` })
+      }
     } catch (err) {
       setEmbTestResult({ ok: false, error: 'unknown', message: (err as Error).message || String(err) })
     } finally {
       setEmbTesting(false)
+    }
+  }
+
+  const handleWebSearchTest = async () => {
+    setWebSearchTesting(true)
+    setWebSearchTestResult(null)
+    try {
+      const result = await testWebSearchConnection(webSearch)
+      setWebSearchTestResult(result)
+    } catch (err) {
+      setWebSearchTestResult({ ok: false, message: (err as Error).message || String(err) })
+    } finally {
+      setWebSearchTesting(false)
     }
   }
 
@@ -866,6 +895,30 @@ function AiSettings() {
             disabled={!isTauri()}
           />
         </SettingField>
+      )}
+
+      {/* 测试连接 */}
+      <div className="py-1 flex items-center gap-2">
+        <Button type="default" size="small" loading={webSearchTesting} onClick={handleWebSearchTest}>
+          测试连接
+        </Button>
+      </div>
+
+      {/* 测试结果 */}
+      {webSearchTesting && (
+        <p className="text-caption text-gm-text-secondary py-1">连接中…</p>
+      )}
+      {webSearchTestResult && !webSearchTesting && (
+        <div className={`rounded-lg border px-3 py-2 mb-1 text-caption ${
+          webSearchTestResult.ok
+            ? 'border-gm-success/30 bg-gm-success/5 text-gm-success'
+            : 'border-gm-error/30 bg-gm-error/5 text-gm-error'
+        }`}>
+          <div className="flex items-center gap-1.5 font-semibold">
+            <span>{webSearchTestResult.ok ? '✓' : '✗'}</span>
+            <span>{webSearchTestResult.ok ? '连接成功' : webSearchTestResult.message || '连接失败'}</span>
+          </div>
+        </div>
       )}
 
       {isTauri() && <AuthorizedApiOrigins />}

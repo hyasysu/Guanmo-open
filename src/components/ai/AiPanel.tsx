@@ -52,6 +52,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const pendingOutgoingMessageCountRef = useRef<number | null>(null)
   const visibleMessages = useMemo(() => messages.filter((msg) => !msg.hidden), [messages])
   const [manualCapabilities, setManualCapabilities] = useState<ManualCapability[]>([])
+  const [reasoningMode, setReasoningMode] = useState<'off' | 'on'>('off')
   const [resetManualToggle, setResetManualToggle] = useState(0)
 
   // 检测是否在底部（距离底部 50px 以内视为底部）
@@ -172,13 +173,14 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     pendingOutgoingMessageCountRef.current = chatState.messages.filter((msg) => !msg.hidden).length
     streamingMessageIdRef.current = null
     streamingStartScrollTopRef.current = 0
-    sendMessage(currentDraft, undefined, currentContextTags.length > 0 ? currentContextTags : undefined, manualCapabilities)
+    sendMessage(currentDraft, undefined, currentContextTags.length > 0 ? currentContextTags : undefined, manualCapabilities.length > 0 ? manualCapabilities : undefined, reasoningMode)
     setDraftInput('')
     chatState.clearContextTags()
-    // 重置手动工具开关
+    // 重置手动工具与深度思考开关
     setManualCapabilities([])
+    setReasoningMode('off')
     setResetManualToggle((prev) => prev + 1)
-  }, [manualCapabilities, sendMessage, setDraftInput])
+  }, [manualCapabilities, reasoningMode, sendMessage, setDraftInput])
 
   useEffect(() => {
     window.addEventListener(AI_SHORTCUT_SUBMIT_EVENT, handleSend)
@@ -411,6 +413,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
         streaming={streaming}
         onCancel={cancelStream}
         onManualCapabilitiesChange={setManualCapabilities}
+        onReasoningModeChange={setReasoningMode}
         resetManualToggle={resetManualToggle}
       />
     </div>
