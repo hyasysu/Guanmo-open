@@ -51,6 +51,10 @@
       "icons/icon.ico"
     ],
     "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      },
       "wix": {
         "language": "zh-CN"
       }
