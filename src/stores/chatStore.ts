@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { ChatMessage, ChatMessageContextMeta, ChatMessageSource, EditConfirmation } from '@/services/ai/types'
-import type { AgentStep } from '@/services/agent/types'
+import type { AgentStep, AgentTaskContext } from '@/services/agent/types'
 import type { ContextTag } from '@/types/contextTag'
 import { MAX_CONTEXT_TAGS } from '@/types/contextTag'
 import {
@@ -61,6 +61,7 @@ interface ChatState {
   draftInput: string
   contextTags: ContextTag[]
   pendingEdit: PendingEdit | null
+  agentTaskContext: AgentTaskContext | null
   currentSessionId: string
   historyOffset: number
   hasMoreHistory: boolean
@@ -90,6 +91,7 @@ interface ChatState {
   removeContextTag: (id: string) => void
   clearContextTags: () => void
   setPendingEdit: (edit: PendingEdit | null) => void
+  setAgentTaskContext: (context: AgentTaskContext | null) => void
   completePendingEdit: (edit: PendingEdit) => void
   applyPendingEdit: (editId?: string) => void
   rejectPendingEdit: (editId?: string) => void
@@ -114,6 +116,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   draftInput: '',
   contextTags: [],
   pendingEdit: null,
+  agentTaskContext: null,
   currentSessionId: createSessionId(),
   historyOffset: 0,
   hasMoreHistory: true,
@@ -176,6 +179,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     draftInput: '',
     contextTags: [],
     pendingEdit: null,
+    agentTaskContext: null,
     currentSessionId: createSessionId(),
     historyOffset: 0,
     hasMoreHistory: true,
@@ -199,6 +203,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     timeline: [],
     draftInput: '',
     pendingEdit: null,
+    agentTaskContext: null,
     contextTags: [],
   }),
 
@@ -265,6 +270,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ))
       : s.messages,
   })),
+  setAgentTaskContext: (agentTaskContext) => set({ agentTaskContext }),
 
   completePendingEdit: (pendingEdit) => set((s) => {
       const { newText } = pendingEdit

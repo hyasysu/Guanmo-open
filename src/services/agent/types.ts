@@ -1,5 +1,6 @@
 import type { ChatMessage, ChatMessageSource } from '@/services/ai/types'
 import type { Capability } from './intentDetector'
+import type { AgentToolName } from './toolSelector'
 
 export interface ToolParameter {
   name: string
@@ -44,6 +45,16 @@ export interface AgentResult {
   reason: AgentResultReason
   finalMessages?: ChatMessage[]
   sources?: ChatMessageSource[]
+}
+
+export interface AgentTaskContext {
+  intent: Capability[]
+  requiredCapabilities: Capability[]
+  candidateToolNames: AgentToolName[]
+  usedToolNames: AgentToolName[]
+  originalRequest: string
+  status: 'success' | 'failed'
+  resultSummary?: string
 }
 
 export interface AgentConfig {

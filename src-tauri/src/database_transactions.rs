@@ -109,6 +109,15 @@ pub struct BackupImportSummary {
     memories: usize,
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveKnowledgeDocumentResult {
+    pub deleted: bool,
+    pub document_id: Option<String>,
+    pub chunks_deleted: usize,
+    pub embedding_jobs_deleted: usize,
+}
+
 fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_config_dir()
@@ -460,6 +469,68 @@ pub async fn import_backup_transaction(
     run_import_backup(&pool, payload).await
 }
 
+async fn remove_knowledge_document(
+    transaction: &mut Transaction<'_, Sqlite>,
+    file_path: &str,
+) -> Result<RemoveKnowledgeDocumentResult, sqlx::Error> {
+    let doc = sqlx::query("SELECT id FROM documents WHERE file_path = ?")
+        .bind(file_path)
+        .fetch_optional(&mut **transaction)
+        .await?;
+    let Some(doc_row) = doc else {
+        return Ok(RemoveKnowledgeDocumentResult {
+            deleted: false,
+            document_id: None,
+            chunks_deleted: 0,
+            embedding_jobs_deleted: 0,
+        });
+    };
+    let document_id: String = doc_row.try_get("id")?;
+
+    let ej_result = sqlx::query("DELETE FROM embedding_jobs WHERE file_path = ?")
+        .bind(file_path)
+        .execute(&mut **transaction)
+        .await?;
+    let embedding_jobs_deleted = ej_result.rows_affected() as usize;
+
+    let doc_result = sqlx::query("DELETE FROM documents WHERE id = ?")
+        .bind(&document_id)
+        .execute(&mut **transaction)
+        .await?;
+    let chunks_deleted = doc_result.rows_affected() as usize;
+
+    Ok(RemoveKnowledgeDocumentResult {
+        deleted: chunks_deleted > 0,
+        document_id: Some(document_id),
+        chunks_deleted,
+        embedding_jobs_deleted,
+    })
+}
+
+async fn run_remove_knowledge_document(
+    pool: &SqlitePool,
+    file_path: String,
+) -> Result<RemoveKnowledgeDocumentResult, String> {
+    let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;
+    let result = remove_knowledge_document(&mut transaction, &file_path)
+        .await
+        .map_err(|error| error.to_string())?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn remove_knowledge_document_by_path(
+    app: AppHandle,
+    file_path: String,
+) -> Result<RemoveKnowledgeDocumentResult, String> {
+    let pool = open_write_pool(database_path(&app)?).await?;
+    run_remove_knowledge_document(&pool, file_path).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -654,5 +725,138 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(active_status, "active");
+    }
+
+    #[tokio::test]
+    async fn remove_knowledge_document_deletes_document_chunks_embeddings_and_jobs() {
+        let pool = test_pool().await;
+        let result = run_persist_document(&pool, document_with_chunks(&["内容 A", "内容 B"]))
+            .await
+            .unwrap();
+        assert_eq!(result, ());
+
+        // Verify pre-conditions
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM documents")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM chunks")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM embedding_jobs")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+
+        let result = run_remove_knowledge_document(
+            &pool,
+            "C:/anonymous/document.md".into(),
+        )
+        .await
+        .unwrap();
+        assert!(result.deleted);
+        assert_eq!(result.chunks_deleted, 1);
+        assert_eq!(result.embedding_jobs_deleted, 1);
+
+        // Verify everything is deleted
+        for table in ["documents", "chunks", "embeddings", "embedding_jobs"] {
+            let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(count, 0, "{table} should be empty after remove");
+        }
+    }
+
+    #[tokio::test]
+    async fn remove_knowledge_document_returns_not_deleted_for_missing_path() {
+        let pool = test_pool().await;
+        let result = run_remove_knowledge_document(&pool, "nonexistent.md".into())
+            .await
+            .unwrap();
+        assert!(!result.deleted);
+        assert_eq!(result.document_id, None);
+        assert_eq!(result.chunks_deleted, 0);
+        assert_eq!(result.embedding_jobs_deleted, 0);
+    }
+
+    #[tokio::test]
+    async fn remove_knowledge_document_does_not_affect_other_documents() {
+        let pool = test_pool().await;
+        let doc_a = document_with_chunks(&["A1"]);
+        let mut doc_b = document_with_chunks(&["B1"]);
+        doc_b.document.id = "document-2".into();
+        doc_b.document.file_path = "C:/anonymous/other.md".into();
+        doc_b.document.chunks[0].id = "chunk-other".into();
+
+        run_persist_document(&pool, doc_a).await.unwrap();
+        run_persist_document(&pool, doc_b).await.unwrap();
+
+        let result = run_remove_knowledge_document(
+            &pool,
+            "C:/anonymous/document.md".into(),
+        )
+        .await
+        .unwrap();
+        assert!(result.deleted);
+
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM documents")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        let remaining_path: String =
+            sqlx::query_scalar("SELECT file_path FROM documents")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining_path, "C:/anonymous/other.md");
+    }
+
+    #[tokio::test]
+    async fn remove_knowledge_document_rolls_back_on_failure() {
+        let pool = test_pool().await;
+        run_persist_document(&pool, document_with_chunks(&["内容"]))
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER reject_remove BEFORE DELETE ON documents \
+             BEGIN SELECT RAISE(ABORT, 'forced failure'); END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(
+            run_remove_knowledge_document(&pool, "C:/anonymous/document.md".into())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM documents")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM embedding_jobs")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
     }
 }

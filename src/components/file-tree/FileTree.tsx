@@ -4,6 +4,9 @@ import { createFile, createFolder, openFile } from '@/services/fileSystem'
 import type { FileNode } from '@/services/fileTree'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
+import { addKnowledgeDocument, isKnowledgeDocumentIndexed } from '@/services/rag/knowledgeBase'
+import { isMarkdownPath } from '@/services/rag/indexer'
+import { readFile } from '@/hooks/useTauri'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { saveExistingFileAs, validateFileName } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
@@ -255,6 +258,7 @@ function FileTreeNode({
   const activeTab = useEditorStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
   const isActive = isSameFilePath(activeTab?.filePath, node.path)
   const isFile = node.type !== 'directory'
+  const [kbStatus, setKbStatus] = useState<'idle' | 'checking' | 'not-indexed' | 'indexed' | 'adding'>('idle')
 
   const handleClick = useCallback(() => {
     if (node.type === 'directory') {
@@ -268,7 +272,17 @@ function FileTreeNode({
     if (!isFile) return
     e.preventDefault()
     setContextMenu({ x: e.clientX, y: e.clientY })
-  }, [isFile])
+    if (isMarkdownPath(node.path)) {
+      setKbStatus('checking')
+      isKnowledgeDocumentIndexed(node.path).then((indexed) => {
+        setKbStatus(indexed ? 'indexed' : 'not-indexed')
+      }).catch(() => {
+        setKbStatus('not-indexed')
+      })
+    } else {
+      setKbStatus('idle')
+    }
+  }, [isFile, node.path])
 
   const handleAddToAi = useCallback(() => {
     addFileContextTag({ title: node.name, filePath: node.path })
@@ -361,6 +375,70 @@ function FileTreeNode({
           <ContextMenuGroupTitle variant="strong">AI 助手</ContextMenuGroupTitle>
           <ContextMenuItem onClick={handleSummarize}>AI 总结该文件</ContextMenuItem>
           <ContextMenuItem onClick={handleAddToAi}>添加文件到 AI 上下文</ContextMenuItem>
+          {isMarkdownPath(node.path) && (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuGroupTitle>知识库</ContextMenuGroupTitle>
+              {kbStatus === 'checking' && (
+                <ContextMenuItem onClick={() => {}} disabled>
+                  正在读取知识库状态…
+                </ContextMenuItem>
+              )}
+              {kbStatus === 'not-indexed' && (
+                <ContextMenuItem onClick={async () => {
+                  setContextMenu(null)
+                  setKbStatus('adding')
+                  try {
+                    const content = await readFile(node.path)
+                    const result = await addKnowledgeDocument({
+                      filePath: node.path,
+                      title: node.name,
+                      content,
+                    })
+                    if (result.success) {
+                      setKbStatus('indexed')
+                      toast.success('已加入知识库')
+                    } else {
+                      setKbStatus('not-indexed')
+                      toast.error(result.error || '加入知识库失败')
+                    }
+                  } catch (err) {
+                    setKbStatus('not-indexed')
+                    toast.error(err instanceof Error ? err.message : '加入知识库失败')
+                  }
+                }}>加入知识库</ContextMenuItem>
+              )}
+              {kbStatus === 'indexed' && (
+                <ContextMenuItem onClick={async () => {
+                  setContextMenu(null)
+                  setKbStatus('adding')
+                  try {
+                    const content = await readFile(node.path)
+                    const result = await addKnowledgeDocument({
+                      filePath: node.path,
+                      title: node.name,
+                      content,
+                    })
+                    if (result.success) {
+                      setKbStatus('indexed')
+                      toast.success('已更新知识库')
+                    } else {
+                      setKbStatus('not-indexed')
+                      toast.error(result.error || '更新知识库失败')
+                    }
+                  } catch (err) {
+                    setKbStatus('not-indexed')
+                    toast.error(err instanceof Error ? err.message : '更新知识库失败')
+                  }
+                }}>✓ 已加入知识库（点击更新）</ContextMenuItem>
+              )}
+              {kbStatus === 'adding' && (
+                <ContextMenuItem onClick={() => {}} disabled>
+                  正在加入知识库…
+                </ContextMenuItem>
+              )}
+            </>
+          )}
         </ContextMenu>
       )}
 
@@ -397,6 +475,7 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
   const removeRecentFile = useEditorStore((s) => s.removeRecentFile)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; file: { name: string; path: string } } | null>(null)
   const rename = useFileRename()
+  const [kbStatus, setKbStatus] = useState<'idle' | 'checking' | 'not-indexed' | 'indexed' | 'adding'>('idle')
 
   const handleOpen = useCallback(
     (file: { name: string; path: string }) => {
@@ -438,6 +517,16 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
             onContextMenu={(e) => {
               e.preventDefault()
               setContextMenu({ x: e.clientX, y: e.clientY, file })
+              if (isMarkdownPath(file.path)) {
+                setKbStatus('checking')
+                isKnowledgeDocumentIndexed(file.path).then((indexed) => {
+                  setKbStatus(indexed ? 'indexed' : 'not-indexed')
+                }).catch(() => {
+                  setKbStatus('not-indexed')
+                })
+              } else {
+                setKbStatus('idle')
+              }
             }}
             className={`group w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-caption text-left truncate ${
               isActive
@@ -498,6 +587,70 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
           <ContextMenuSeparator />
           <ContextMenuGroupTitle variant="strong">AI 助手</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => { addFileContextTag({ title: contextMenu.file.name, filePath: contextMenu.file.path }); setContextMenu(null) }}>添加文件到 AI 上下文</ContextMenuItem>
+          {isMarkdownPath(contextMenu.file.path) && (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuGroupTitle>知识库</ContextMenuGroupTitle>
+              {kbStatus === 'checking' && (
+                <ContextMenuItem onClick={() => {}} disabled>
+                  正在读取知识库状态…
+                </ContextMenuItem>
+              )}
+              {kbStatus === 'not-indexed' && (
+                <ContextMenuItem onClick={async () => {
+                  setContextMenu(null)
+                  setKbStatus('adding')
+                  try {
+                    const content = await readFile(contextMenu.file.path)
+                    const result = await addKnowledgeDocument({
+                      filePath: contextMenu.file.path,
+                      title: contextMenu.file.name,
+                      content,
+                    })
+                    if (result.success) {
+                      setKbStatus('indexed')
+                      toast.success('已加入知识库')
+                    } else {
+                      setKbStatus('not-indexed')
+                      toast.error(result.error || '加入知识库失败')
+                    }
+                  } catch (err) {
+                    setKbStatus('not-indexed')
+                    toast.error(err instanceof Error ? err.message : '加入知识库失败')
+                  }
+                }}>加入知识库</ContextMenuItem>
+              )}
+              {kbStatus === 'indexed' && (
+                <ContextMenuItem onClick={async () => {
+                  setContextMenu(null)
+                  setKbStatus('adding')
+                  try {
+                    const content = await readFile(contextMenu.file.path)
+                    const result = await addKnowledgeDocument({
+                      filePath: contextMenu.file.path,
+                      title: contextMenu.file.name,
+                      content,
+                    })
+                    if (result.success) {
+                      setKbStatus('indexed')
+                      toast.success('已更新知识库')
+                    } else {
+                      setKbStatus('not-indexed')
+                      toast.error(result.error || '更新知识库失败')
+                    }
+                  } catch (err) {
+                    setKbStatus('not-indexed')
+                    toast.error(err instanceof Error ? err.message : '更新知识库失败')
+                  }
+                }}>✓ 已加入知识库（点击更新）</ContextMenuItem>
+              )}
+              {kbStatus === 'adding' && (
+                <ContextMenuItem onClick={() => {}} disabled>
+                  正在加入知识库…
+                </ContextMenuItem>
+              )}
+            </>
+          )}
           <ContextMenuSeparator />
           <ContextMenuGroupTitle variant="strong">复制与索引</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => { navigator.clipboard.writeText(contextMenu.file.path); setContextMenu(null) }}>复制路径</ContextMenuItem>

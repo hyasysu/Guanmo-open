@@ -87,6 +87,15 @@ describe('设置兼容', () => {
     expect(store.getState().editor.fontSize).toBe(14)
     expect(store.getState().appearance.theme).toBe('light')
   })
+
+  it('旧配置缺少 knowledge 字段时默认 autoIndexEnabled=true', async () => {
+    const store = await loadSettingsStore({
+      editor: { fontSize: 16 },
+    })
+    const state = store.getState()
+    expect(state.knowledge).toBeDefined()
+    expect(state.knowledge.autoIndexEnabled).toBe(true)
+  })
 })
 
 describe('旧字段迁移', () => {

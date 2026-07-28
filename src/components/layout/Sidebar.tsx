@@ -5,7 +5,8 @@ import { isTauri, readFile } from '@/hooks/useTauri'
 import { openFile } from '@/services/fileSystem'
 import { pickDirectory } from '@/services/fileSystem'
 import { isWorkspaceDisplayFile } from '@/services/fileTree'
-import { indexMarkdownDocument, indexWorkspaceMarkdown, scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
+import { indexMarkdownDocument, indexWorkspaceMarkdown, scheduleMarkdownDocumentIndex, isMarkdownPath } from '@/services/rag/indexer'
+import { addKnowledgeDocument, isKnowledgeDocumentIndexed } from '@/services/rag/knowledgeBase'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
 import { Button, Collapse, Divider } from 'animal-island-ui'
@@ -545,6 +546,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; file: { name: string; path: string } } | null>(null)
   const rename = useFileRename()
   const [missingPaths, setMissingPaths] = useState<Set<string>>(new Set())
+  const [kbStatus, setKbStatus] = useState<'idle' | 'checking' | 'not-indexed' | 'indexed' | 'adding'>('idle')
 
   const INITIAL_SHOW = 20
   const visibleFiles = showAll ? files : files.slice(0, INITIAL_SHOW)
@@ -607,6 +609,16 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
             onContextMenu={(e) => {
               e.preventDefault()
               setContextMenu({ x: e.clientX, y: e.clientY, file })
+              if (isMarkdownPath(file.path)) {
+                setKbStatus('checking')
+                isKnowledgeDocumentIndexed(file.path).then((indexed) => {
+                  setKbStatus(indexed ? 'indexed' : 'not-indexed')
+                }).catch(() => {
+                  setKbStatus('not-indexed')
+                })
+              } else {
+                setKbStatus('idle')
+              }
             }}
             className={`w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-caption text-left truncate ${
               isActive
@@ -666,6 +678,70 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
             summarizeFileWithAi({ title: contextMenu.file.name, filePath: contextMenu.file.path })
             setContextMenu(null)
           }}>AI 总结该文件</ContextMenuItem>
+          {isMarkdownPath(contextMenu.file.path) && (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuGroupTitle>知识库</ContextMenuGroupTitle>
+              {kbStatus === 'checking' && (
+                <ContextMenuItem onClick={() => {}} disabled>
+                  正在读取知识库状态…
+                </ContextMenuItem>
+              )}
+              {kbStatus === 'not-indexed' && (
+                <ContextMenuItem onClick={async () => {
+                  setContextMenu(null)
+                  setKbStatus('adding')
+                  try {
+                    const content = await readRememberedFile(contextMenu.file.path)
+                    const result = await addKnowledgeDocument({
+                      filePath: contextMenu.file.path,
+                      title: contextMenu.file.name,
+                      content,
+                    })
+                    if (result.success) {
+                      setKbStatus('indexed')
+                      toast.success('已加入知识库')
+                    } else {
+                      setKbStatus('not-indexed')
+                      toast.error(result.error || '加入知识库失败')
+                    }
+                  } catch (err) {
+                    setKbStatus('not-indexed')
+                    toast.error(err instanceof Error ? err.message : '加入知识库失败')
+                  }
+                }}>加入知识库</ContextMenuItem>
+              )}
+              {kbStatus === 'indexed' && (
+                <ContextMenuItem onClick={async () => {
+                  setContextMenu(null)
+                  setKbStatus('adding')
+                  try {
+                    const content = await readRememberedFile(contextMenu.file.path)
+                    const result = await addKnowledgeDocument({
+                      filePath: contextMenu.file.path,
+                      title: contextMenu.file.name,
+                      content,
+                    })
+                    if (result.success) {
+                      setKbStatus('indexed')
+                      toast.success('已更新知识库')
+                    } else {
+                      setKbStatus('not-indexed')
+                      toast.error(result.error || '更新知识库失败')
+                    }
+                  } catch (err) {
+                    setKbStatus('not-indexed')
+                    toast.error(err instanceof Error ? err.message : '更新知识库失败')
+                  }
+                }}>✓ 已加入知识库（点击更新）</ContextMenuItem>
+              )}
+              {kbStatus === 'adding' && (
+                <ContextMenuItem onClick={() => {}} disabled>
+                  正在加入知识库…
+                </ContextMenuItem>
+              )}
+            </>
+          )}
           <ContextMenuSeparator />
           <ContextMenuGroupTitle variant="strong">路径与收藏</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => { navigator.clipboard.writeText(contextMenu.file.path); setContextMenu(null) }}>复制路径</ContextMenuItem>

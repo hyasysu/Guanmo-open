@@ -4,7 +4,8 @@ import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { useAppStore } from '@/stores/appStore'
 import { FULLSCREEN_CONTENT_PADDING, useSettingsStore } from '@/stores/settingsStore'
 import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
-import { indexMarkdownDocument } from '@/services/rag/indexer'
+import { addKnowledgeDocument, isKnowledgeDocumentIndexed } from '@/services/rag/knowledgeBase'
+import { isMarkdownPath } from '@/services/rag/indexer'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { reloadOpenedTabFromDisk, saveTabAsFile } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
@@ -58,6 +59,7 @@ export function FullscreenControlBar({
   const [renderedTabMode, setRenderedTabMode] = useState(false)
   const [contentVisible, setContentVisible] = useState(true)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null)
+  const [kbStatus, setKbStatus] = useState<'idle' | 'checking' | 'not-indexed' | 'indexed' | 'adding'>('idle')
   const rename = useFileRename()
   const [paddingCardOpen, setPaddingCardOpen] = useState(false)
   const hideTimerRef = useRef<number | null>(null)
@@ -258,6 +260,23 @@ export function FullscreenControlBar({
 
   const contextTab = contextMenu ? tabs.find((tab) => tab.id === contextMenu.tabId) : null
 
+  const handleTabContextMenu = useCallback((e: React.MouseEvent, tabId: string) => {
+    e.preventDefault()
+    setVisible(true)
+    setContextMenu({ x: e.clientX, y: e.clientY, tabId })
+    const tab = tabs.find((t) => t.id === tabId)
+    if (tab?.filePath && isMarkdownPath(tab.filePath)) {
+      setKbStatus('checking')
+      isKnowledgeDocumentIndexed(tab.filePath).then((indexed) => {
+        setKbStatus(indexed ? 'indexed' : 'not-indexed')
+      }).catch(() => {
+        setKbStatus('not-indexed')
+      })
+    } else {
+      setKbStatus('idle')
+    }
+  }, [tabs])
+
   const handleContextAction = useCallback(async (action: string) => {
     if (!contextMenu) return
     const tabId = contextMenu.tabId
@@ -308,9 +327,29 @@ export function FullscreenControlBar({
       case 'pinTab':
         togglePinTab(tabId)
         break
-      case 'reindexRag':
-        if (contextTab?.filePath) indexMarkdownDocument(contextTab.filePath, contextTab.title, contextTab.content)
+      case 'addToKb':
+      case 'updateKb': {
+        if (!contextTab?.filePath) return
+        setKbStatus('adding')
+        try {
+          const result = await addKnowledgeDocument({
+            filePath: contextTab.filePath,
+            title: contextTab.title,
+            content: contextTab.content,
+          })
+          if (result.success) {
+            setKbStatus('indexed')
+            toast.success('已加入知识库')
+          } else {
+            setKbStatus('not-indexed')
+            toast.error(result.error || '加入知识库失败')
+          }
+        } catch (err) {
+          setKbStatus('not-indexed')
+          toast.error(err instanceof Error ? err.message : '加入知识库失败')
+        }
         break
+      }
       case 'rename':
         if (contextTab?.filePath) {
           setVisible(true)
@@ -425,11 +464,7 @@ export function FullscreenControlBar({
                     type="button"
                     data-active={active ? 'true' : 'false'}
                     onClick={() => setActiveTab(tab.id)}
-                    onContextMenu={(e) => {
-                      e.preventDefault()
-                      setVisible(true)
-                      setContextMenu({ x: e.clientX, y: e.clientY, tabId: tab.id })
-                    }}
+                    onContextMenu={(e) => handleTabContextMenu(e, tab.id)}
                     className={`group gm-fullscreen-tab-button flex h-9 max-w-[300px] flex-shrink-0 items-center gap-2 rounded-lg px-3 text-body font-semibold transition-colors ${
                       active
                         ? 'text-gm-primary underline underline-offset-4'
@@ -549,10 +584,31 @@ export function FullscreenControlBar({
               打开文件位置
             </ContextMenuItem>
           )}
-          {contextTab?.filePath && (
-            <ContextMenuItem onClick={() => handleContextAction('reindexRag')}>
-              重新索引 RAG
-            </ContextMenuItem>
+          {contextTab?.filePath && isMarkdownPath(contextTab.filePath) && (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuGroupTitle>知识库</ContextMenuGroupTitle>
+              {kbStatus === 'checking' && (
+                <ContextMenuItem onClick={() => {}} disabled>
+                  正在读取知识库状态…
+                </ContextMenuItem>
+              )}
+              {kbStatus === 'not-indexed' && (
+                <ContextMenuItem onClick={() => handleContextAction('addToKb')}>
+                  加入知识库
+                </ContextMenuItem>
+              )}
+              {kbStatus === 'indexed' && (
+                <ContextMenuItem onClick={() => handleContextAction('updateKb')}>
+                  ✓ 已加入知识库（点击更新）
+                </ContextMenuItem>
+              )}
+              {kbStatus === 'adding' && (
+                <ContextMenuItem onClick={() => {}} disabled>
+                  正在加入知识库…
+                </ContextMenuItem>
+              )}
+            </>
           )}
           <ContextMenuSeparator />
           <ContextMenuGroupTitle>关闭标签</ContextMenuGroupTitle>

@@ -48,6 +48,9 @@ import { runManualUpdateCheck, type ManualUpdateCheckFeedback } from '@/services
 import { useUpdateStore } from '@/stores/updateStore'
 import { listAuthorizedApiOrigins, revokeApiOrigin, type AuthorizedApiOrigin } from '@/services/externalHttp'
 import { LegacyMigrationEntry } from '@/components/legacy/LegacyMigrationEntry'
+import { KnowledgeBaseManager } from '@/features/settings/KnowledgeBaseManager'
+
+const AI_ROUTING_GUIDE_URL = 'https://github.com/we-used-to-be/Guanmo-open/blob/main/docs/AI_ROUTING_GUIDE.md'
 
 async function openUrl(url: string, external: boolean) {
   if (external) {
@@ -63,7 +66,7 @@ async function openUrl(url: string, external: boolean) {
 }
 
 const TABS_CONFIG = [
-  { key: 'ai', text: 'AI 模型', children: <AiSettings /> },
+  { key: 'ai', text: 'AI 模型' },
   { key: 'editor', text: '编辑器', children: <EditorSettings /> },
   { key: 'memory', text: '记忆', children: <MemorySettings /> },
   { key: 'shortcuts', text: '快捷键', children: <ShortcutSettings /> },
@@ -72,11 +75,16 @@ const TABS_CONFIG = [
 
 export function SettingsPage({ initialSection = null }: { initialSection?: string | null }) {
   const [active, setActive] = useState('ai')
+  const [showKnowledgeManager, setShowKnowledgeManager] = useState(false)
+  const openKnowledgeManager = useCallback(() => setShowKnowledgeManager(true), [])
+  const closeKnowledgeManager = useCallback(() => setShowKnowledgeManager(false), [])
 
   const tabs = TABS_CONFIG.map((tab) => ({
     key: tab.key,
     label: <span className="text-body">{tab.text}</span>,
-    children: tab.children,
+    children: tab.key === 'ai'
+      ? <AiSettings onOpenKnowledgeManager={openKnowledgeManager} />
+      : tab.children,
   }))
 
   return (
@@ -94,6 +102,10 @@ export function SettingsPage({ initialSection = null }: { initialSection?: strin
           shadow={false}
         />
       </div>
+      <KnowledgeBaseManager
+        open={showKnowledgeManager}
+        onClose={closeKnowledgeManager}
+      />
     </div>
   )
 }
@@ -445,10 +457,11 @@ const EMB_PROTOCOL_OPTIONS: { key: EmbeddingProtocol; label: string }[] = [
   { key: 'openai-embedding', label: 'OpenAI Embeddings' },
 ]
 
-function AiSettings() {
+function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => void }) {
   const {
     ai, webSearch,
     customChatPresets, customEmbeddingPresets,
+    knowledge, updateKnowledgeSettings,
     updateAiConfig, updateEmbeddingConfig, updateWebSearchConfig,
     addCustomChatPreset, removeCustomChatPreset,
     addCustomEmbeddingPreset, removeCustomEmbeddingPreset,
@@ -466,7 +479,6 @@ function AiSettings() {
   const [chatPresetName, setChatPresetName] = useState('')
   const [showEmbSavePreset, setShowEmbSavePreset] = useState(false)
   const [embPresetName, setEmbPresetName] = useState('')
-
   useEffect(() => {
     updateSearchConfig(webSearch)
   }, [webSearch])
@@ -635,6 +647,16 @@ function AiSettings() {
           </p>
         </div>
       )}
+      <SettingField label="AI 使用指南" description="查看能力路由关键词和提问示例">
+        <Button
+          type="default"
+          size="small"
+          onClick={() => void openUrl(AI_ROUTING_GUIDE_URL, isTauri())}
+        >
+          查看指南
+        </Button>
+      </SettingField>
+
       <SectionTitle>对话 API 配置</SectionTitle>
       <SettingField label="协议类型" description="决定请求格式，大部分服务选择 OpenAI Chat Completions">
         <Select
@@ -933,7 +955,10 @@ function AiSettings() {
           </p>
         </div>
       )}
-      <KnowledgeStats />
+      <SettingField label="自动入库" description="打开或保存 Markdown 时自动加入知识库；关闭后需通过标签右键菜单手动加入">
+        <Switch checked={knowledge.autoIndexEnabled} onChange={(v) => updateKnowledgeSettings({ autoIndexEnabled: v })} disabled={!isTauri()} />
+      </SettingField>
+      <KnowledgeStats onOpenKnowledgeManager={onOpenKnowledgeManager} />
     </div>
   )
 }
@@ -991,7 +1016,7 @@ function AuthorizedApiOrigins() {
   )
 }
 
-function KnowledgeStats() {
+function KnowledgeStats({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => void }) {
   const { ai } = useSettingsStore()
   const workspacePath = useAppStore((s) => s.workspacePath)
   const [stats, setStats] = useState({ documents: 0, totalChunks: 0, embeddedChunks: 0, pendingEmbeddings: 0 })
@@ -1096,6 +1121,9 @@ function KnowledgeStats() {
       <div className="flex items-center gap-2">
         <Button type="default" size="small" loading={embedding} disabled={stats.pendingEmbeddings === 0 && jobStats.pending === 0} onClick={() => runEmbedding(false)}>
           处理嵌入队列
+        </Button>
+        <Button type="default" size="small" disabled={!isTauri()} onClick={onOpenKnowledgeManager}>
+          管理文档
         </Button>
         <Button type="text" size="small" disabled={jobStats.failed === 0} onClick={() => runEmbedding(true)}>
           重试失败

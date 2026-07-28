@@ -1385,6 +1385,7 @@ pub fn run() {
             database_transactions::persist_document_transaction,
             database_transactions::confirm_memory_candidate_transaction,
             database_transactions::import_backup_transaction,
+            database_transactions::remove_knowledge_document_by_path,
             rag_index::get_rag_index_state,
             rag_index::initialize_rag_index,
             rag_index::search_rag_index,

@@ -5,6 +5,7 @@ import { ingestDocument, processEmbeddingQueue, runSerializedDocumentOperation }
 import { vectorStore } from './vectorStore'
 import { isEmbeddingReady } from '@/services/ai/aiClient'
 import { refreshNativeRagIndexDocument } from './nativeIndex'
+import { useSettingsStore } from '@/stores/settingsStore'
 
 const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown', 'mdx'])
 const DEFAULT_INDEX_DELAY = 1200
@@ -45,6 +46,20 @@ export function indexMarkdownDocument(
   return true
 }
 
+/**
+ * 显式等待索引完成，返回真实成功/失败结果。
+ * 复用现有 performMarkdownDocumentIndex，不复制分块或持久化逻辑。
+ * 失败时向调用方抛出，不只写 console.warn。
+ */
+export async function indexMarkdownDocumentAsync(
+  filePath: string,
+  title: string,
+  content: string
+): Promise<boolean> {
+  if (!filePath || !isMarkdownPath(filePath)) return false
+  return performMarkdownDocumentIndex(filePath, title, content)
+}
+
 async function performMarkdownDocumentIndex(
   filePath: string,
   title: string,
@@ -79,6 +94,9 @@ export function scheduleMarkdownDocumentIndex(
 ): boolean {
   if (!filePath || !isMarkdownPath(filePath)) return false
 
+  const settings = useSettingsStore.getState()
+  if (!settings.knowledge.autoIndexEnabled) return false
+
   const existingTimer = pendingIndexTimers.get(filePath)
   if (existingTimer) {
     clearTimeout(existingTimer)
@@ -86,11 +104,34 @@ export function scheduleMarkdownDocumentIndex(
 
   const timer = setTimeout(() => {
     pendingIndexTimers.delete(filePath)
+    if (!useSettingsStore.getState().knowledge.autoIndexEnabled) return
     indexMarkdownDocument(filePath, title, content)
   }, Math.max(0, delay))
 
   pendingIndexTimers.set(filePath, timer)
   return true
+}
+
+/**
+ * 取消指定路径的待执行索引定时器，支持单路径和多路径。
+ * 清除 pendingIndexTimers 中对应 timer 并删除 Map 条目。
+ */
+export function cancelPendingIndexTimers(filePaths: string | string[]): void {
+  const paths = Array.isArray(filePaths) ? filePaths : [filePaths]
+  for (const filePath of paths) {
+    const timer = pendingIndexTimers.get(filePath)
+    if (timer) {
+      clearTimeout(timer)
+      pendingIndexTimers.delete(filePath)
+    }
+  }
+}
+
+/**
+ * 获取所有待执行索引定时器的路径。
+ */
+export function getPendingIndexTimerPaths(): string[] {
+  return [...pendingIndexTimers.keys()]
 }
 
 export async function indexWorkspaceMarkdown(

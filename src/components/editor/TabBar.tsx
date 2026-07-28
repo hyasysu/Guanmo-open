@@ -4,7 +4,8 @@ import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { exportMarkdownAsHtml, exportMarkdownAsPdf } from '@/services/markdownExport'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
-import { indexMarkdownDocument } from '@/services/rag/indexer'
+import { addKnowledgeDocument, isKnowledgeDocumentIndexed } from '@/services/rag/knowledgeBase'
+import { isMarkdownPath } from '@/services/rag/indexer'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { reloadOpenedTabFromDisk, saveTabAsFile } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
@@ -33,6 +34,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
   const togglePinTab = useEditorStore((s) => s.togglePinTab)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null)
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
+  const [kbStatus, setKbStatus] = useState<'idle' | 'checking' | 'not-indexed' | 'indexed' | 'adding'>('idle')
   const [dragState, setDragState] = useState<{ tabId: string; startX: number } | null>(null)
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null)
   const rename = useFileRename()
@@ -44,7 +46,18 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
   const handleContextMenu = useCallback((e: React.MouseEvent, tabId: string) => {
     e.preventDefault()
     setContextMenu({ x: e.clientX, y: e.clientY, tabId })
-  }, [])
+    const tab = tabs.find((t) => t.id === tabId)
+    if (tab?.filePath && isMarkdownPath(tab.filePath)) {
+      setKbStatus('checking')
+      isKnowledgeDocumentIndexed(tab.filePath).then((indexed) => {
+        setKbStatus(indexed ? 'indexed' : 'not-indexed')
+      }).catch(() => {
+        setKbStatus('not-indexed')
+      })
+    } else {
+      setKbStatus('idle')
+    }
+  }, [tabs])
 
   const handleDragStart = useCallback((e: React.DragEvent, tabId: string) => {
     e.dataTransfer.setData('text/plain', tabId)
@@ -167,11 +180,29 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
             })
           }
           break
-        case 'reindexRag':
-          if (contextTab?.filePath) {
-            indexMarkdownDocument(contextTab.filePath, contextTab.title, contextTab.content)
+        case 'addToKb':
+        case 'updateKb': {
+          if (!contextTab?.filePath) return
+          setKbStatus('adding')
+          try {
+            const result = await addKnowledgeDocument({
+              filePath: contextTab.filePath,
+              title: contextTab.title,
+              content: contextTab.content,
+            })
+            if (result.success) {
+              setKbStatus('indexed')
+              toast.success('已加入知识库')
+            } else {
+              setKbStatus('not-indexed')
+              toast.error(result.error || '加入知识库失败')
+            }
+          } catch (err) {
+            setKbStatus('not-indexed')
+            toast.error(err instanceof Error ? err.message : '加入知识库失败')
           }
           break
+        }
         case 'rename':
           if (contextTab?.filePath) {
             rename.startRename(contextTab.id, contextTab.title)
@@ -496,10 +527,31 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
               打开文件位置
             </ContextMenuItem>
           )}
-          {contextTab?.filePath && (
-            <ContextMenuItem onClick={() => handleContextAction('reindexRag')}>
-              重新索引 RAG
-            </ContextMenuItem>
+          {contextTab?.filePath && isMarkdownPath(contextTab.filePath) && (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuGroupTitle>知识库</ContextMenuGroupTitle>
+              {kbStatus === 'checking' && (
+                <ContextMenuItem onClick={() => {}} disabled>
+                  正在读取知识库状态…
+                </ContextMenuItem>
+              )}
+              {kbStatus === 'not-indexed' && (
+                <ContextMenuItem onClick={() => handleContextAction('addToKb')}>
+                  加入知识库
+                </ContextMenuItem>
+              )}
+              {kbStatus === 'indexed' && (
+                <ContextMenuItem onClick={() => handleContextAction('updateKb')}>
+                  ✓ 已加入知识库（点击更新）
+                </ContextMenuItem>
+              )}
+              {kbStatus === 'adding' && (
+                <ContextMenuItem onClick={() => {}} disabled>
+                  正在加入知识库…
+                </ContextMenuItem>
+              )}
+            </>
           )}
           <ContextMenuSeparator />
           <ContextMenuGroupTitle>关闭标签</ContextMenuGroupTitle>

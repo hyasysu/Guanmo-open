@@ -115,6 +115,26 @@ export async function removePersistedDocumentByPath(filePath: string): Promise<v
   await db.execute('DELETE FROM documents WHERE file_path = $1', [filePath])
 }
 
+export interface RemoveKnowledgeDocumentResult {
+  deleted: boolean
+  documentId?: string
+  chunksDeleted: number
+  embeddingJobsDeleted: number
+}
+
+/**
+ * 通过 Rust SQLx 事务删除知识库文档。
+ * 同一事务内删除 embedding_jobs 和 documents，依赖外键级联删除 chunks 和 embeddings。
+ */
+export async function removePersistedDocumentByPathTransaction(
+  filePath: string
+): Promise<RemoveKnowledgeDocumentResult> {
+  if (!isDatabaseReady()) return { deleted: false, chunksDeleted: 0, embeddingJobsDeleted: 0 }
+  return invoke<RemoveKnowledgeDocumentResult>('remove_knowledge_document_by_path', {
+    filePath,
+  })
+}
+
 export async function removeEmbeddingJobByPath(filePath: string): Promise<void> {
   if (!isDatabaseReady()) return
   const db = getDatabase()

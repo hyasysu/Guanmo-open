@@ -888,6 +888,23 @@ body {
   animation: gmReleaseModalDialogOut 160ms ease-in forwards;
 }
 
+/* Knowledge base manager modal */
+.gm-kb-modal-scrim {
+  animation: gmReleaseModalScrimIn 180ms ease-out;
+}
+
+.gm-kb-modal-dialog {
+  animation: gmReleaseModalDialogIn 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.gm-kb-modal-scrim[data-closing='true'] {
+  animation: gmReleaseModalScrimOut 140ms ease-in forwards;
+}
+
+.gm-kb-modal-scrim[data-closing='true'] .gm-kb-modal-dialog {
+  animation: gmReleaseModalDialogOut 160ms ease-in forwards;
+}
+
 .animate-float {
   animation: float 3s ease-in-out infinite;
 }
@@ -896,7 +913,9 @@ body {
   .gm-release-modal-scrim,
   .gm-release-modal-dialog,
   .gm-legacy-modal-scrim,
-  .gm-legacy-modal-dialog {
+  .gm-legacy-modal-dialog,
+  .gm-kb-modal-scrim,
+  .gm-kb-modal-dialog {
     animation: none;
   }
 }
@@ -1463,6 +1482,37 @@ body {
 
 .gm-markdown-preview blockquote {
   background: var(--gm-markdown-quote-bg);
+}
+
+.gm-markdown-preview details {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--gm-border);
+  border-radius: 0.75rem;
+  background: var(--gm-surface);
+}
+
+.gm-markdown-preview summary {
+  color: var(--gm-text);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.gm-markdown-preview kbd {
+  padding: 0.1rem 0.35rem;
+  border: 1px solid var(--gm-border);
+  border-radius: 0.3rem;
+  color: var(--gm-text);
+  background: var(--gm-surface-elevated);
+  box-shadow: 0 1px 0 var(--gm-border);
+  font-family: inherit;
+  font-size: 0.85em;
+}
+
+.gm-markdown-preview [align='center'] > .gm-markdown-image {
+  width: fit-content;
+  margin-right: auto;
+  margin-left: auto;
 }
 
 .gm-markdown-block {

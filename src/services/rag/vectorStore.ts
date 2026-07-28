@@ -133,6 +133,19 @@ class VectorStore {
     }
   }
 
+  /**
+   * 仅从内存中移除文档及其 chunks，不触发数据库写入。
+   * 用于删除事务已由 Rust 端完成后同步清理 WebView 内存副本。
+   */
+  removeByFilePathFromMemory(filePath: string): void {
+    const doc = this.findByFilePath(filePath)
+    if (!doc) return
+    for (const chunk of doc.chunks) {
+      this.chunks.delete(chunk.id)
+    }
+    this.documents.delete(doc.id)
+  }
+
   getDocument(docId: string): Document | undefined {
     return this.documents.get(docId)
   }

@@ -5,8 +5,8 @@
 <h1 align="center">观墨 · GuanMo</h1>
 
 <p align="center">
-  <strong>AI 驱动的 Markdown 知识管理桌面应用</strong><br/>
-  <sub>An AI-powered Markdown knowledge management desktop application</sub>
+  <strong>让 Markdown 文档更易阅读、更易理解、更易创作</strong><br/>
+  <sub>A Markdown workspace for better reading, understanding, and writing</sub>
 </p>
 
 <p align="center">
@@ -45,6 +45,7 @@
 ---
 
 <p align="center">
+  <a href="#guanmo-与传统-markdown-工具的区别">产品定位</a> ·
   <a href="#-功能特性-features">功能特性</a> ·
   <a href="#-主题切换-themes">主题</a> ·
   <a href="#-全屏专注模式-focus-mode">专注模式</a> ·
@@ -60,13 +61,25 @@
 
 ## 📖 简介 · Introduction
 
-**观墨**（GuanMo）是一款本地优先的 AI Markdown 知识管理应用。它把多文档编辑、公式与图表预览、本地 RAG、长期记忆和可控 Agent 工具整合在同一工作区，让 AI 能围绕用户明确提供的文件、文件夹和选区上下文完成阅读、问答与编辑。
+### GuanMo 与传统 Markdown 工具的区别
 
-观墨的定位不是构建复杂的插件生态或大型知识图谱系统，而是提供一个轻量、开箱即用、AI 原生的 Markdown 工作区。
+GuanMo 希望探索一种更高效的 Markdown 使用方式，专注于提升文档的阅读、理解和编辑体验。
 
-它更关注本地文档的阅读、编辑、对照、比较和 AI 辅助处理，让用户少折腾配置，把更多注意力放回内容本身。
+相比 Typora 等传统 Markdown 编辑器专注于提供简洁流畅的写作与预览体验，GuanMo 在保留 Markdown 编辑体验的基础上，进一步增强了文档阅读和处理能力，让用户不仅能够编辑文档，也能够更方便地理解、整理和完善其中的内容。
 
-桌面版基于 [Tauri 2](https://v2.tauri.app/)；浏览器模式可用于体验编辑、预览和 AI 对话，并会明确标示文件系统、自动保存、知识库与长期记忆等桌面专属能力。
+相比 Obsidian 等知识管理工具专注于通过双向链接、标签和知识网络构建个人知识体系，GuanMo 更关注文档本身的使用过程：从阅读学习资料、整理笔记，到修改完善内容，让 Markdown 文档成为一个可以持续阅读、编辑和探索的工作空间。
+
+简单来说：
+
+- Typora 专注于提供优秀的 Markdown 编辑与阅读体验
+- Obsidian 专注于帮助用户组织和连接知识
+- GuanMo 专注于提升 Markdown 文档的阅读、理解和创作效率
+
+**GuanMo —— 一个让 Markdown 文档更易阅读、更易理解、更易创作的工作空间。**
+
+在这一定位下，GuanMo 将多文档编辑、公式与图表预览、对照与 Diff、本地 RAG、长期记忆和可控 Agent 工具整合在同一工作区，让 AI 围绕用户明确提供的文件、文件夹和选区上下文辅助阅读、问答与编辑。
+
+桌面版基于 [Tauri 2](https://v2.tauri.app/)；浏览器模式提供基础的 Markdown 阅读、编辑与预览体验，文件管理、自动保存、AI、知识库与长期记忆等能力仅在桌面版提供。
 
 ---
 
@@ -164,8 +177,8 @@ VITE_GUANMO_WEB_SEARCH_API_KEY_SECRET=guanmo.web-search.api-key
 
 ### 🌐 浏览器模式
 
-- 可体验 Markdown 编辑、预览、公式、图表与 AI 对话。
-- 最近文件、收藏夹、工作区、自动保存、知识库和长期记忆依赖桌面能力，在浏览器中会禁用并显示说明。
+- 可体验 Markdown 阅读、编辑、预览、公式与图表。
+- AI、最近文件、收藏夹、工作区、自动保存、知识库和长期记忆依赖桌面能力，在浏览器中会禁用并显示说明。
 - 浏览器模式不会用下载行为模拟自动保存，避免产生意外文件。
 
 ### ⚙️ 配置与数据
@@ -180,6 +193,8 @@ VITE_GUANMO_WEB_SEARCH_API_KEY_SECRET=guanmo.web-search.api-key
 ## 📚 使用说明 · User Guide
 
 完整的安装、配置与功能使用指南请查阅 **[观墨使用说明书](docs/USER_GUIDE.md)**，涵盖界面总览、文件管理、编辑预览、AI 助手、知识库、长期记忆、联网搜索、外观设置、快捷键和常见问题等内容。
+
+想快速了解如何触发知识库、文件、选区、长期记忆和联网搜索等 AI 能力，请查看 **[AI 使用指南](docs/AI_ROUTING_GUIDE.md)**。
 
 ---
 

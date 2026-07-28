@@ -8,8 +8,8 @@ import { SYSTEM_TEMPERATURE } from '@/services/ai/types'
 import { initAgent, runAgent, shouldUseAgent } from '@/services/agent'
 import { classifySelectionRequest, detectIntentScores, shouldIncludeFullDocumentContext, shouldAllowMemoryWrite } from '@/services/agent/intentDetector'
 import { buildCandidateTools } from '@/services/agent/toolSelector'
-import type { AgentStep } from '@/services/agent/types'
-import { decodeAgentStepEvent, decodeKnowledgeSearchOutcome } from '@/services/agent/session'
+import type { AgentStep, AgentTaskContext } from '@/services/agent/types'
+import { createAgentTaskContext, decodeAgentStepEvent, decodeKnowledgeSearchOutcome, resolveAgentContextContinuation } from '@/services/agent/session'
 import type { ContextTag } from '@/types/contextTag'
 import { buildContextFromTags } from '@/services/contextBuilder'
 import { readFile as readTauriFile } from '@/hooks/useTauri'
@@ -174,6 +174,7 @@ export function useAiChat() {
   const ragStatus = useChatStore((s) => s.ragStatus)
   const ragSources = useChatStore((s) => s.ragSources)
   const timeline = useChatStore((s) => s.timeline)
+  const agentTaskContext = useChatStore((s) => s.agentTaskContext)
   const addMessage = useChatStore((s) => s.addMessage)
   const setStreaming = useChatStore((s) => s.setStreaming)
   const setError = useChatStore((s) => s.setError)
@@ -188,6 +189,7 @@ export function useAiChat() {
   const setRagSources = useChatStore((s) => s.setRagSources)
   const addTimelineItem = useChatStore((s) => s.addTimelineItem)
   const clearTimeline = useChatStore((s) => s.clearTimeline)
+  const setAgentTaskContext = useChatStore((s) => s.setAgentTaskContext)
   const ai = useSettingsStore((s) => s.ai)
   const workspacePath = useAppStore((s) => s.workspacePath)
   const lastConfigRef = useRef('')
@@ -342,21 +344,26 @@ export function useAiChat() {
 
       // 意图检测
       const intentResult = detectIntentScores(content.trim(), appContext)
+      const inheritedAgentContext = resolveAgentContextContinuation(content.trim(), agentTaskContext)
       const selectionRequestKind = classifySelectionRequest(content.trim(), appContext)
 
       // 合并手动选择的 capabilities
       const manualCapabilitiesSet = new Set(manualCapabilities || [])
       const mergedCandidates = Array.from(new Set([
         ...manualCapabilitiesSet,
+        ...(inheritedAgentContext?.intent || []),
         ...intentResult.candidates,
       ]))
       const mergedRequired = Array.from(new Set([
         ...manualCapabilitiesSet,
+        ...(inheritedAgentContext?.requiredCapabilities || []),
         ...intentResult.required,
       ]))
 
       // 构建候选工具
-      let candidateToolNames = buildCandidateTools(mergedCandidates)
+      let candidateToolNames = inheritedAgentContext
+        ? [...inheritedAgentContext.toolNames]
+        : buildCandidateTools(mergedCandidates)
       const currentEditTargets = buildEditTargets(contextTags || [])
       if (currentEditTargets.length > 0 && candidateToolNames.includes('replace_current_tab_text')) {
         candidateToolNames.unshift('list_current_edit_targets')
@@ -385,7 +392,7 @@ export function useAiChat() {
       const memoryIntent = classifyMemoryRetrievalIntent(content.trim())
       const personalizedRewriteMemory = isPersonalizedRewriteMemoryIntent(content.trim())
       const shouldLookupMemory = memoryIntent !== 'none'
-      const shouldLookupKnowledge = intentResult.candidates.includes('knowledge')
+      const shouldLookupKnowledge = mergedCandidates.includes('knowledge')
 
       clearAgentSteps()
 
@@ -555,10 +562,12 @@ export function useAiChat() {
         const editTargets = currentEditTargets
         const editTargetsContext = buildEditTargetsContext(editTargets)
         const agentContext = [tagContext, editTargetsContext, memoryContext].filter(Boolean).join('\n\n')
-        const normalizedUserIntent = explicitMemoryWriteIntent
+        const currentUserIntent = explicitMemoryWriteIntent
           ? `记住：${content.trim()}`
           : content.trim()
-        const agentUserQuery = content.trim() || '请根据我提供的上下文继续。'
+        const normalizedUserIntent = inheritedAgentContext?.query || currentUserIntent
+        const agentUserQuery = inheritedAgentContext?.query || content.trim() || '请根据我提供的上下文继续。'
+        const contextOriginalRequest = inheritedAgentContext?.originalRequest || content.trim()
 
         try {
           setAgentScopeContext({ contextTags: contextTags || [], editTargets })
@@ -580,6 +589,15 @@ export function useAiChat() {
             streamEnabled: ai.streamEnabled,
           })
           if (!isCurrentRequest()) return
+          if (candidateToolNames.length > 0) {
+            setAgentTaskContext(createAgentTaskContext({
+              originalRequest: contextOriginalRequest,
+              intent: mergedCandidates,
+              requiredCapabilities: mergedRequired,
+              candidateToolNames,
+              result,
+            }))
+          }
           for (const step of result.steps.slice(liveAgentStepCount)) {
             if (!isCurrentRequest()) return
             handleAgentStep(step)
@@ -649,6 +667,18 @@ export function useAiChat() {
         } catch (err) {
           if (!isCurrentRequest()) return
           const msg = err instanceof Error ? err.message : String(err)
+          if (candidateToolNames.length > 0) {
+            const failedContext: AgentTaskContext = {
+              intent: mergedCandidates,
+              requiredCapabilities: mergedRequired,
+              candidateToolNames,
+              usedToolNames: [],
+              originalRequest: contextOriginalRequest,
+              status: 'failed',
+              resultSummary: msg.slice(0, 500),
+            }
+            setAgentTaskContext(failedContext)
+          }
           setError(`Agent 执行失败：${msg}`)
           addTimelineItem({ type: 'error', label: 'Agent 执行失败', detail: msg })
         } finally {
@@ -666,6 +696,7 @@ export function useAiChat() {
         return
       }
 
+      setAgentTaskContext(null)
       const client = getAiClient()
       let ragContext = ''
 
@@ -818,7 +849,7 @@ export function useAiChat() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [streaming, agentMode, ai, ensureClient, workspacePath]
+    [streaming, agentMode, ai, ensureClient, workspacePath, agentTaskContext]
   )
 
   return {

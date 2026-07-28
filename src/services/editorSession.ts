@@ -116,7 +116,18 @@ export class ReadingPositionSession {
   }
 
   save(tabId: string, position: ReadingPosition): void {
-    this.positions[tabId] = { ...this.positions[tabId], ...position }
+    const next = { ...this.positions[tabId], ...position }
+    const hasEditorTop = typeof position.editorScrollTop === 'number'
+    const hasPreviewTop = typeof position.previewScrollTop === 'number'
+    if (hasEditorTop && hasPreviewTop) {
+      next.editorScrollTop = undefined
+      next.previewScrollTop = undefined
+    } else if (hasEditorTop) {
+      next.previewScrollTop = undefined
+    } else if (hasPreviewTop) {
+      next.editorScrollTop = undefined
+    }
+    this.positions[tabId] = next
   }
 
   saveForPane(tabId: string, pane: 'left' | 'right', position: ReadingPosition): void {

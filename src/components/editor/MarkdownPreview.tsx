@@ -15,8 +15,17 @@ import { InlineMarkdownBlockEditor } from './InlineMarkdownBlockEditor'
 
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath, remarkStandaloneDisplayMath]
 const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex, rehypeHighlight]
+const EMBEDDED_HTML_PATTERN = /<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*|\/?)>/
 const NORMALIZED_MARKDOWN_CACHE_LIMIT = 4
 const normalizedMarkdownCache = new Map<string, string>()
+type RehypePlugins = NonNullable<Options['rehypePlugins']>
+let markdownHtmlPluginsPromise: Promise<RehypePlugins> | null = null
+
+function loadMarkdownHtmlPlugins(): Promise<RehypePlugins> {
+  markdownHtmlPluginsPromise ??= import('@/services/markdownHtml')
+    .then(({ MARKDOWN_HTML_REHYPE_PLUGINS }) => MARKDOWN_HTML_REHYPE_PLUGINS)
+  return markdownHtmlPluginsPromise
+}
 
 export interface MarkdownBlockCommitRequest {
   block: MarkdownBlock
@@ -153,6 +162,8 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   const displayedContent = activeEdit?.contentSnapshot ?? optimisticContent?.content ?? content
   const blocks = useMemo(() => parseMarkdownBlocks(displayedContent), [displayedContent])
   const normalizedContent = useMemo(() => getNormalizedMarkdown(displayedContent), [displayedContent])
+  const hasEmbeddedHtml = useMemo(() => EMBEDDED_HTML_PATTERN.test(normalizedContent), [normalizedContent])
+  const [htmlRehypePlugins, setHtmlRehypePlugins] = useState<RehypePlugins | null>(null)
   const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
   const previewFontFamily = useSettingsStore((state) => state.editor.previewFontFamily)
 
@@ -164,6 +175,21 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   useEffect(() => {
     onDraftStateChange?.(activeEdit !== null)
   }, [activeEdit, onDraftStateChange])
+
+  useEffect(() => {
+    if (skipHtml || !hasEmbeddedHtml || htmlRehypePlugins) return
+    let active = true
+    void loadMarkdownHtmlPlugins()
+      .then((plugins) => {
+        if (active) setHtmlRehypePlugins(plugins)
+      })
+      .catch(() => {
+        // 加载失败时继续跳过原始 HTML，避免退回未过滤渲染。
+      })
+    return () => {
+      active = false
+    }
+  }, [hasEmbeddedHtml, htmlRehypePlugins, skipHtml])
 
   useEffect(() => {
     const lifecycleMetadata = lifecycleMetadataRef.current
@@ -423,7 +449,14 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   }, [])
 
   const blockWrapperPlugin = useMemo(() => createMarkdownBlockWrapperPlugin(blocks), [blocks])
-  const rehypePlugins = useMemo(() => [...MARKDOWN_REHYPE_PLUGINS, blockWrapperPlugin], [blockWrapperPlugin])
+  const rehypePlugins = useMemo(
+    () => [
+      ...(!skipHtml && hasEmbeddedHtml && htmlRehypePlugins ? htmlRehypePlugins : []),
+      ...MARKDOWN_REHYPE_PLUGINS,
+      blockWrapperPlugin,
+    ],
+    [blockWrapperPlugin, hasEmbeddedHtml, htmlRehypePlugins, skipHtml],
+  )
 
   const components = useMemo<Partial<Components>>(() => {
     const headingIds = new Map<string, number>()
@@ -484,8 +517,8 @@ export const MarkdownPreview = memo(function MarkdownPreview({
               </h4>
             )
           },
-          p: ({ children, node }) => (
-            <p className="my-3" data-md-line={getNodeStartLine(node)} data-md-end-line={getNodeEndLine(node)}>{children}</p>
+          p: ({ children, node, ...props }) => (
+            <p {...props} className="my-3" data-md-line={getNodeStartLine(node)} data-md-end-line={getNodeEndLine(node)}>{children}</p>
           ),
           strong: ({ children }) => (
             <strong className="font-bold text-gm-text">{children}</strong>
@@ -526,7 +559,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
               {children}
             </blockquote>
           ),
-          a: ({ href, children, ...props }) => {
+          a: ({ href, children, node: _node, ...props }) => {
             const isHashLink = href?.startsWith('#')
             const isFootnoteBackref = 'data-footnote-backref' in props
             return (
@@ -564,9 +597,9 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             )
           },
           hr: ({ node }) => <hr className="my-6 border-gm-border" data-md-line={getNodeStartLine(node)} />,
-          table: ({ children, node }) => (
-            <div className="gm-markdown-table-wrap my-4 overflow-x-auto rounded-xl border border-gm-border" data-md-line={getNodeStartLine(node)}>
-              <table className="w-full border-collapse">
+          table: ({ children, node, ...props }) => (
+            <div className="my-4 overflow-x-auto rounded-xl border border-gm-border" data-md-line={getNodeStartLine(node)}>
+              <table {...props} className="w-full border-collapse">
                 {children}
               </table>
             </div>
@@ -574,23 +607,23 @@ export const MarkdownPreview = memo(function MarkdownPreview({
           thead: ({ children }) => (
             <thead className="bg-gm-surface-elevated">{children}</thead>
           ),
-          th: ({ children }) => (
-            <th className="px-4 py-2.5 text-left font-bold text-gm-text border-b border-gm-border">
+          th: ({ children, node: _node, style: _style, ...props }) => (
+            <th {...props} className={`px-4 py-2.5 font-bold text-gm-text border-b border-gm-border${props.align ? '' : ' text-left'}`}>
               {children}
             </th>
           ),
-          td: ({ children }) => (
-            <td className="px-4 py-2 border-b border-gm-border-subtle">
+          td: ({ children, node: _node, style: _style, ...props }) => (
+            <td {...props} className="px-4 py-2 border-b border-gm-border-subtle">
               {children}
             </td>
           ),
-          img: ({ src, alt, node }) => {
+          img: ({ src, alt, title, width, height, node }) => {
             const resolvedSrc = resolveImageSrc(src, filePath)
             const altText = alt || ''
             return (
               <button
                 type="button"
-                className="my-4 block max-w-full cursor-zoom-in rounded-xl border border-gm-border bg-transparent p-0 text-left"
+                className="gm-markdown-image my-4 block max-w-full cursor-zoom-in rounded-xl border border-gm-border bg-transparent p-0 text-left"
                 onClick={() => setZoomImage({ src: resolvedSrc, alt: altText })}
                 title="点击放大图片"
                 data-md-line={getNodeStartLine(node)}
@@ -598,6 +631,9 @@ export const MarkdownPreview = memo(function MarkdownPreview({
                 <img
                   src={resolvedSrc}
                   alt={altText}
+                  title={title}
+                  width={width}
+                  height={height}
                   className="max-w-full rounded-xl"
                 />
               </button>
@@ -649,7 +685,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     >
       <StableMarkdownDocument
         normalizedContent={normalizedContent}
-        skipHtml={skipHtml}
+        skipHtml={skipHtml || (hasEmbeddedHtml && !htmlRehypePlugins)}
         rehypePlugins={rehypePlugins}
         components={components}
         fontSize={fontSize}
