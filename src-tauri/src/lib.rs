@@ -1318,7 +1318,9 @@ pub fn run() {
         .on_webview_event(|webview, event| {
             if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
                 for path in paths {
-                    let _ = register_selected_file(webview.app_handle(), path.clone());
+                    if let Err(err) = register_selected_file(webview.app_handle(), path.clone()) {
+                        eprintln!("failed to authorize dropped file: {err}");
+                    }
                 }
             }
         });

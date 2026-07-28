@@ -57,6 +57,12 @@ async function authorizeSelectedPath(path: string): Promise<void> {
   await invoke<void>('authorize_selected_path', { path: nativePath })
 }
 
+export async function authorizeDroppedPaths(paths: string[]): Promise<void> {
+  for (const path of paths) {
+    await authorizeSelectedPath(path)
+  }
+}
+
 async function authorizeWorkspacePath(path: string): Promise<void> {
   if (!isTauri()) throw new Error('Not running in Tauri')
   const nativePath = toNativeFilePath(path)

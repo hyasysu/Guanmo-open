@@ -100,6 +100,7 @@ async function run() {
 
   const sessionRestore = readFileSync('src/services/sessionRestore.ts', 'utf8')
   const externalOpen = readFileSync('src/services/externalFileOpen.ts', 'utf8')
+  const externalFileOpenHook = readFileSync('src/hooks/useExternalFileOpen.ts', 'utf8')
   const workspaceTree = readFileSync('src/hooks/useWorkspaceFileTree.ts', 'utf8')
   const tauriAdapter = readFileSync('src/hooks/useTauri.ts', 'utf8')
   const rustGateway = readFileSync('src-tauri/src/lib.rs', 'utf8')
@@ -119,6 +120,19 @@ async function run() {
   assert.match(rustGateway, /pending_legacy_files/)
   assert.match(rustGateway, /retry_pending_legacy_file_access/)
   assert.match(rustGateway, /migrate_legacy_file_access/)
+  assert.match(externalFileOpenHook, /onDragDropEvent/)
+  assert.match(externalFileOpenHook, /await authorizeDroppedPaths\(supportedPaths\)/)
+  assert.match(externalFileOpenHook, /await openPaths\(paths, 'drag-drop'\)/)
+  assert.ok(
+    externalFileOpenHook.indexOf('await authorizeDroppedPaths(supportedPaths)') <
+      externalFileOpenHook.indexOf("await openPaths(paths, 'drag-drop')")
+  )
+  const dragDropHandlerStart = rustGateway.indexOf('.on_webview_event(')
+  const desktopPluginStart = rustGateway.indexOf('#[cfg(desktop)]', dragDropHandlerStart)
+  const dragDropHandler = rustGateway.slice(dragDropHandlerStart, desktopPluginStart)
+  assert.ok(dragDropHandlerStart >= 0)
+  assert.match(dragDropHandler, /register_selected_file/)
+  assert.match(tauriAdapter, /export async function authorizeDroppedPaths/)
   const migrationCommandStart = rustGateway.indexOf('async fn migrate_legacy_file_access(')
   const nextCommandStart = rustGateway.indexOf('\n#[tauri::command]', migrationCommandStart + 1)
   const migrationCommand = rustGateway.slice(migrationCommandStart, nextCommandStart)

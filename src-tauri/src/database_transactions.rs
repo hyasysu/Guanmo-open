@@ -730,10 +730,9 @@ mod tests {
     #[tokio::test]
     async fn remove_knowledge_document_deletes_document_chunks_embeddings_and_jobs() {
         let pool = test_pool().await;
-        let result = run_persist_document(&pool, document_with_chunks(&["内容 A", "内容 B"]))
+        run_persist_document(&pool, document_with_chunks(&["内容 A", "内容 B"]))
             .await
             .unwrap();
-        assert_eq!(result, ());
 
         // Verify pre-conditions
         assert_eq!(
@@ -758,12 +757,9 @@ mod tests {
             1
         );
 
-        let result = run_remove_knowledge_document(
-            &pool,
-            "C:/anonymous/document.md".into(),
-        )
-        .await
-        .unwrap();
+        let result = run_remove_knowledge_document(&pool, "C:/anonymous/document.md".into())
+            .await
+            .unwrap();
         assert!(result.deleted);
         assert_eq!(result.chunks_deleted, 1);
         assert_eq!(result.embedding_jobs_deleted, 1);
@@ -802,12 +798,9 @@ mod tests {
         run_persist_document(&pool, doc_a).await.unwrap();
         run_persist_document(&pool, doc_b).await.unwrap();
 
-        let result = run_remove_knowledge_document(
-            &pool,
-            "C:/anonymous/document.md".into(),
-        )
-        .await
-        .unwrap();
+        let result = run_remove_knowledge_document(&pool, "C:/anonymous/document.md".into())
+            .await
+            .unwrap();
         assert!(result.deleted);
 
         assert_eq!(
@@ -817,11 +810,10 @@ mod tests {
                 .unwrap(),
             1
         );
-        let remaining_path: String =
-            sqlx::query_scalar("SELECT file_path FROM documents")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let remaining_path: String = sqlx::query_scalar("SELECT file_path FROM documents")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(remaining_path, "C:/anonymous/other.md");
     }
 

@@ -3,8 +3,9 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { isTauri } from '@/hooks/useTauri'
+import { authorizeDroppedPaths, isTauri } from '@/hooks/useTauri'
 import { isImagePath, isMarkdownPath, openExternalFilePaths, type ExternalFileOpenSource } from '@/services/externalFileOpen'
+import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { toast } from '@/services/toast'
 
 const OPEN_FILES_EVENT = 'guanmo:open-files'
@@ -83,6 +84,14 @@ export function useExternalFileOpen(appReady: boolean) {
       }
     }
 
+    const handleDroppedPaths = async (paths: string[]) => {
+      const supportedPaths = paths.filter((path) => isMarkdownPath(path) || isImagePath(path))
+      if (supportedPaths.length > 0) {
+        await authorizeDroppedPaths(supportedPaths)
+      }
+      await openPaths(paths, 'drag-drop')
+    }
+
     const setup = async () => {
       unlistenOpenFiles = await listen(OPEN_FILES_EVENT, drainPendingFiles)
       if (disposed) {
@@ -91,7 +100,10 @@ export function useExternalFileOpen(appReady: boolean) {
       }
       unlistenDragDrop = await getCurrentWebviewWindow().onDragDropEvent((event) => {
         if (event.payload.type === 'drop') {
-          void openPaths(event.payload.paths, 'drag-drop')
+          void handleDroppedPaths(event.payload.paths).catch((err) => {
+            console.error('[ExternalFileOpen] Failed to process dropped files:', err)
+            toast.error(describeFileOperationError(err, '读取拖入文件失败'))
+          })
         }
       })
       if (disposed) {

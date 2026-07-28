@@ -36,6 +36,20 @@ describe('MarkdownPreview 内嵌 HTML', () => {
     expect(container.querySelector('.katex')).toBeInTheDocument()
   })
 
+  it('以隐私友好的方式加载 HTTPS 图片', async () => {
+    render(
+      <MarkdownPreview
+        content='<img src="https://example.com/image.png" alt="远程图片" width="90%">'
+      />,
+    )
+
+    const image = await screen.findByRole('img', { name: '远程图片' })
+    expect(image).toHaveAttribute('src', 'https://example.com/image.png')
+    expect(image).toHaveAttribute('referrerpolicy', 'no-referrer')
+    expect(image).toHaveAttribute('loading', 'lazy')
+    expect(image).toHaveAttribute('decoding', 'async')
+  })
+
   it('移除危险标签、事件属性、样式和危险 URL', async () => {
     const { container } = render(
       <MarkdownPreview

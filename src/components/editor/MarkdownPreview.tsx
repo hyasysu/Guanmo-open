@@ -634,6 +634,9 @@ export const MarkdownPreview = memo(function MarkdownPreview({
                   title={title}
                   width={width}
                   height={height}
+                  referrerPolicy="no-referrer"
+                  loading="lazy"
+                  decoding="async"
                   className="max-w-full rounded-xl"
                 />
               </button>
@@ -738,6 +741,9 @@ export const MarkdownPreview = memo(function MarkdownPreview({
           <img
             src={zoomImage.src}
             alt={zoomImage.alt}
+            referrerPolicy="no-referrer"
+            loading="lazy"
+            decoding="async"
             className="max-h-full max-w-full rounded-xl bg-gm-surface object-contain shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           />
