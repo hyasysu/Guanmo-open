@@ -13,6 +13,7 @@ src-tauri/gen/
 # Release artifacts
 *.exe
 *.msi
+!docs/downloads/*.msi
 *.dmg
 *.AppImage
 *.deb
@@ -76,5 +77,7 @@ AI_IMPLEMENTATION_PLAN.md
 
 # Playwright
 .playwright-cli/
-
 screenshots-theme*
+
+# Added by code-review-graph
+.code-review-graph/

@@ -54,7 +54,7 @@
   <a href="#%EF%B8%8F-技术栈-tech-stack">技术栈</a> ·
   <a href="#-项目结构-project-structure">项目结构</a> ·
   <a href="#-快捷键-shortcuts">快捷键</a> ·
-  <a href="#-许可证-license">许可证</a>
+  <a href="#license-and-trademark">许可证与品牌声明</a>
 </p>
 
 ---
@@ -135,6 +135,7 @@ GuanMo 希望探索一种更高效的 Markdown 使用方式，专注于提升文
 - Rust 兜底文件命令会校验绝对路径、文本或图片文件扩展名，并拒绝访问未授权 workspace 之外的路径。
 - 本开源副本不内置任何 API Key。API Key 通过应用设置填写，并由 Windows DPAPI 加密后保存在本机。
 - `.env` 只用于配置本机密钥存储中的标识名，不应写入真实 API Key。请从 `.env.example` 创建本地 `.env`，并且不要提交 `.env`、数据库文件或历史记录。
+- 数据访问、第三方服务与用户控制说明见 [隐私政策](PRIVACY.md)。
 
 示例环境变量：
 
@@ -388,15 +389,19 @@ git push origin v1.3.0
 
 ## Disclaimer
 
-Guanmo is provided as a Markdown editing and AI assistance tool on an "AS IS" basis. Users are responsible for backing up important data and reviewing AI-generated content before use. For details, see [DISCLAIMER.md](DISCLAIMER.md).
+GuanMo is provided as a Markdown editing and AI assistance tool on an "AS IS" basis. Users are responsible for backing up important data and reviewing AI-generated content before use. For details, see [DISCLAIMER.md](DISCLAIMER.md).
 
 ---
 
-## 📄 许可证 · License
+<a id="license-and-trademark"></a>
 
-观墨项目原创代码基于 MIT 许可证开源。第三方代码与资源仍受各自许可证和条款约束。
+## 📄 许可证与品牌声明 · License & Trademark
 
-Guanmo's original code is licensed under the MIT License. Third-party code and assets remain subject to their respective licenses and terms.
+观墨（GuanMo）源代码采用 [MIT License](LICENSE)。第三方代码与资源仍受各自许可证和条款约束。
+
+MIT License 仅授权源代码的使用，不包含对 GuanMo 名称、Logo 或其他品牌标识的使用授权。二次开发或衍生项目不得暗示其与官方 GuanMo 存在关联，或获得官方授权、赞助或背书。详情见 [NOTICE](NOTICE)。
+
+GuanMo source code is licensed under the [MIT License](LICENSE). Third-party code and assets remain subject to their respective licenses and terms. The MIT License does not grant permission to use the GuanMo name, logo, or other brand identifiers. Forks and derivative projects must not imply affiliation with or endorsement by the official GuanMo project. See [NOTICE](NOTICE).
 
 ---
 
