@@ -1,4 +1,6 @@
 import { OpenAICompatibleProvider } from '../src/services/ai/providers/openaiCompatible'
+import { OpenAIResponsesProvider } from '../src/services/ai/providers/openaiResponses'
+import { createChatProvider } from '../src/services/ai/aiClient'
 import { updateSearchConfig, webSearch } from '../src/services/webSearch'
 import { AI_CHAT_PRESETS, AI_EMBEDDING_PRESETS, type AiConfig } from '../src/services/ai/types'
 import { readFileSync } from 'node:fs'
@@ -9,7 +11,7 @@ import {
   setOriginAuthorizationPrompt,
 } from '../src/services/externalHttp'
 
-function assert(condition: boolean, message: string) {
+function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
 }
 
@@ -23,6 +25,7 @@ globalThis.fetch = async () => { throw new TypeError('Failed to fetch') }
 
 const builtinOrigins = new Set([
   'https://ark.cn-beijing.volces.com:443',
+  'https://api.openai.com:443',
   'https://api.tavily.com:443',
   'https://api.github.com:443',
 ])
@@ -55,6 +58,47 @@ function authorize(origin: string) {
 
 function responseBody(url: string, body?: number[]) {
   const decoded = body ? new TextDecoder().decode(Uint8Array.from(body)) : ''
+  if (url.includes('/responses') && decoded.includes('"stream":true')) {
+    return [
+      `event: response.output_item.added\ndata: ${JSON.stringify({
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { id: 'fc-item-1', type: 'function_call', call_id: 'call-1', name: 'get_weather', arguments: '' },
+      })}\n\n`,
+      `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({
+        type: 'response.function_call_arguments.delta',
+        output_index: 0,
+        item_id: 'fc-item-1',
+        delta: '{"city":"Beijing"}',
+      })}\n\n`,
+      `event: response.output_text.delta\ndata: ${JSON.stringify({
+        type: 'response.output_text.delta',
+        output_index: 1,
+        content_index: 0,
+        delta: '流式',
+      })}\n\n`,
+      `event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`,
+    ].join('')
+  }
+  if (url.includes('/responses')) {
+    return JSON.stringify({
+      id: 'resp-1',
+      output: [
+        {
+          type: 'message',
+          content: [{ type: 'output_text', text: '完成' }],
+        },
+        {
+          id: 'fc-item-1',
+          type: 'function_call',
+          call_id: 'call-1',
+          name: 'get_weather',
+          arguments: '{"city":"Beijing"}',
+        },
+      ],
+      usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 },
+    })
+  }
   if (url.includes('/chat/completions') && decoded.includes('"stream":true')) {
     return 'data: {"choices":[{"delta":{"content":"流式"}}]}\n\ndata: [DONE]\n\n'
   }
@@ -152,6 +196,77 @@ assert(streamed === '流式', '流式对话应通过 Channel 保持 SSE 解析')
 const embedding = await provider.embedding('test')
 assert(embedding.embedding.length === 2, 'Embedding 应经过 Rust 代理')
 assert((await provider.listModels())[0] === 'glm-5.2', '模型列表应经过 Rust 代理')
+
+const responsesConfig: AiConfig = {
+  ...config,
+  protocol: 'openai-responses',
+  provider: 'openai',
+  baseUrl: 'https://api.openai.com/v1',
+  chatModel: 'gpt-4o-mini',
+}
+const responsesProvider = new OpenAIResponsesProvider(responsesConfig)
+assert(createChatProvider(responsesConfig) instanceof OpenAIResponsesProvider, 'Responses 协议应创建专用 Provider')
+
+const responseTools = [{
+  type: 'function' as const,
+  function: {
+    name: 'get_weather',
+    description: '获取天气',
+    parameters: {
+      type: 'object' as const,
+      properties: { city: { type: 'string', description: '城市' } },
+      required: ['city'],
+    },
+  },
+}]
+const responseChat = await responsesProvider.chat({
+  messages: [
+    { role: 'system', content: '你是一个有帮助的助手。' },
+    { role: 'user', content: '北京天气如何？' },
+  ],
+  maxTokens: 12,
+  tools: responseTools,
+  toolChoice: 'auto',
+})
+assert(responseChat.content === '完成', 'Responses 非流式输出应读取 output_text')
+assert(responseChat.toolCalls?.[0]?.name === 'get_weather', 'Responses 非流式输出应读取 function_call')
+assert(responseChat.toolCalls?.[0]?.args.city === 'Beijing', 'Responses 工具参数应解析为对象')
+assert(responseChat.usage?.totalTokens === 5, 'Responses 用量应映射为统一格式')
+
+const responseRequest = requests.find((request) => request.url.endsWith('/responses') && !new TextDecoder().decode(Uint8Array.from(request.body)).includes('"stream":true'))
+assert(responseRequest, 'Responses 对话应请求 /responses')
+const responsePayload = JSON.parse(new TextDecoder().decode(Uint8Array.from(responseRequest.body || []))) as Record<string, unknown>
+assert(responsePayload.store === false, 'Responses 请求不得默认存储用户内容')
+assert(responsePayload.max_output_tokens === 12, 'Responses 请求应映射 max_output_tokens')
+assert(
+  Array.isArray(responsePayload.input)
+  && responsePayload.input[0]?.role === 'system'
+  && responsePayload.input[1]?.content === '北京天气如何？',
+  'Responses 请求应保留对话角色和内容',
+)
+assert(
+  Array.isArray(responsePayload.tools)
+  && responsePayload.tools[0]?.name === 'get_weather'
+  && !('function' in responsePayload.tools[0]),
+  'Responses 工具定义应使用扁平 function schema',
+)
+
+let responsesStreamed = ''
+const streamedToolCall = { name: '', arguments: '' }
+for await (const chunk of responsesProvider.streamChat({
+  messages: [{ role: 'user', content: '北京天气如何？' }],
+  tools: responseTools,
+  toolChoice: 'auto',
+})) {
+  responsesStreamed += chunk.content
+  for (const delta of chunk.toolCallDeltas || []) {
+    streamedToolCall.name += delta.name || ''
+    streamedToolCall.arguments += delta.arguments || ''
+  }
+}
+assert(responsesStreamed === '流式', 'Responses 流式输出应读取 output_text delta')
+assert(streamedToolCall.name === 'get_weather', 'Responses 流式输出应读取 function_call 名称')
+assert(streamedToolCall.arguments === '{"city":"Beijing"}', 'Responses 流式输出应读取 function_call 参数')
 
 updateSearchConfig({ provider: 'tavily', apiKey: 'test', maxResults: 1 })
 assert((await webSearch('test')).results.length === 1, '联网搜索应经过 Rust 代理')

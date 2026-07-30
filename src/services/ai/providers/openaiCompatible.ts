@@ -38,9 +38,9 @@ function wrapNetworkError(err: unknown, baseUrl: string): AiNetworkError {
 }
 
 export class OpenAICompatibleProvider implements AiProvider {
-  constructor(private config: AiConfig) {}
+  constructor(protected readonly config: AiConfig) {}
 
-  private createAbortContext(signal?: AbortSignal) {
+  protected createAbortContext(signal?: AbortSignal) {
     const controller = new AbortController()
     let timeout: ReturnType<typeof setTimeout>
     const refreshTimeout = () => {
@@ -61,7 +61,7 @@ export class OpenAICompatibleProvider implements AiProvider {
     }
   }
 
-  private get headers(): Record<string, string> {
+  protected get headers(): Record<string, string> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     }
@@ -71,8 +71,12 @@ export class OpenAICompatibleProvider implements AiProvider {
     return headers
   }
 
-  private get baseUrl(): string {
+  protected get baseUrl(): string {
     return this.config.baseUrl.replace(/\/+$/, '')
+  }
+
+  protected wrapNetworkError(err: unknown): AiNetworkError {
+    return wrapNetworkError(err, this.baseUrl)
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {

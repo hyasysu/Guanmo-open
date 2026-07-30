@@ -1,7 +1,8 @@
-import type { AiProvider, AiConfig, ChatProtocol, EmbeddingConfig, ProviderId, ValidateResult } from './types'
+import type { AiProvider, AiConfig, EmbeddingConfig, ProviderId, ValidateResult } from './types'
 import type { AiServiceStatus } from '../../stores/appStore'
 import { AiConfigError } from './errors'
 import { OpenAICompatibleProvider } from './providers/openaiCompatible'
+import { OpenAIResponsesProvider } from './providers/openaiResponses'
 import { getSearchConfig } from '../webSearch'
 import { externalFetch, UnsupportedCapabilityError } from '../externalHttp'
 
@@ -37,7 +38,7 @@ export function createChatProvider(config: AiConfig): AiProvider {
     case 'anthropic-messages':
       throw new AiConfigError('Anthropic Messages 协议尚未实现，请使用 OpenAI Compatible 协议')
     case 'openai-responses':
-      throw new AiConfigError('OpenAI Responses 协议尚未实现，请使用 OpenAI Compatible 协议')
+      return new OpenAIResponsesProvider(config)
     default:
       throw new AiConfigError(`不支持的协议类型: ${(config as AiConfig).protocol}`)
   }
