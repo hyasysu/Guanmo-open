@@ -1,6 +1,7 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { createRef } from 'react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { FileTree } from '@/components/file-tree/FileTree'
+import { FileTree, type FileTreeHandle } from '@/components/file-tree/FileTree'
 import type { FileNode } from '@/services/fileTree'
 
 const nodes: FileNode[] = [
@@ -45,5 +46,24 @@ describe('FileTree collapse all', () => {
 
     rerender(<FileTree nodes={nodes} collapseAllSignal={1} expandAllSignal={1} />)
     expect(screen.getByText('intro.md')).toBeInTheDocument()
+  })
+
+  it('公开新建操作，并且初始渲染不进入新建模式', () => {
+    const ref = createRef<FileTreeHandle>()
+    render(
+      <FileTree
+        ref={ref}
+        nodes={nodes}
+        workspacePath="/workspace"
+      />
+    )
+    expect(screen.queryByDisplayValue('untitled.md')).not.toBeInTheDocument()
+    expect(screen.queryByDisplayValue('新建文件夹')).not.toBeInTheDocument()
+
+    act(() => ref.current?.startCreate('file'))
+    expect(screen.getByDisplayValue('untitled.md')).toBeInTheDocument()
+
+    act(() => ref.current?.startCreate('folder'))
+    expect(screen.getByDisplayValue('新建文件夹')).toBeInTheDocument()
   })
 })

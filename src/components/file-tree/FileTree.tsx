@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { forwardRef, useState, useCallback, useEffect, useImperativeHandle, useRef } from 'react'
 import { useEditorStore } from '@/stores/editorStore'
 import { createFile, createFolder, openFile } from '@/services/fileSystem'
 import type { FileNode } from '@/services/fileTree'
@@ -24,6 +24,10 @@ interface FileTreeProps {
   expandAllSignal?: number
 }
 
+export interface FileTreeHandle {
+  startCreate: (type: 'file' | 'folder') => void
+}
+
 function getTopLevelExpandedPaths(nodes: FileNode[]): Set<string> {
   return new Set(
     nodes
@@ -45,7 +49,15 @@ function collectDirectoryPaths(nodes: FileNode[]): Set<string> {
   return paths
 }
 
-export function FileTree({ nodes, onOpenFile, workspacePath, onRefreshWorkspace, onCloseWorkspace, collapseAllSignal, expandAllSignal }: FileTreeProps) {
+export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree({
+  nodes,
+  onOpenFile,
+  workspacePath,
+  onRefreshWorkspace,
+  onCloseWorkspace,
+  collapseAllSignal,
+  expandAllSignal,
+}, ref) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const [creating, setCreating] = useState<'file' | 'folder' | null>(null)
   const [newName, setNewName] = useState('')
@@ -115,6 +127,8 @@ export function FileTree({ nodes, onOpenFile, workspacePath, onRefreshWorkspace,
     setNewName(type === 'file' ? 'untitled.md' : '新建文件夹')
     setContextMenu(null)
   }, [])
+
+  useImperativeHandle(ref, () => ({ startCreate }), [startCreate])
 
   const commitCreate = useCallback(async () => {
     if (!workspacePath || !creating) return
@@ -200,7 +214,7 @@ export function FileTree({ nodes, onOpenFile, workspacePath, onRefreshWorkspace,
       )}
     </div>
   )
-}
+})
 
 function EmptyState() {
   const handleOpenFile = useCallback(async () => {
