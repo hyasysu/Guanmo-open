@@ -3,23 +3,26 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
-import { isValidElement, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createContext, forwardRef, isValidElement, memo, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '@/hooks/useTauri'
 import { createHeadingId, type TocItem } from '@/services/markdownToc'
-import { normalizeLatexBlockDelimiters, remarkStandaloneDisplayMath } from '@/services/markdownMath'
+import { remarkStandaloneDisplayMath } from '@/services/markdownMath'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { parseMarkdownBlocks, type MarkdownBlock } from '@/services/markdownBlocks'
+import { createMarkdownPreviewModel, computeVisibleRange, findBlockIndexByOffset, getEstimatedPreviewTopForLine, type PreviewBlock } from '@/services/markdownPreviewModel'
 import { eventMarker } from '@/services/eventMarker'
 import { InlineMarkdownBlockEditor } from './InlineMarkdownBlockEditor'
 
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath, remarkStandaloneDisplayMath]
 const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex, rehypeHighlight]
 const EMBEDDED_HTML_PATTERN = /<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*|\/?)>/
-const NORMALIZED_MARKDOWN_CACHE_LIMIT = 4
-const normalizedMarkdownCache = new Map<string, string>()
 type RehypePlugins = NonNullable<Options['rehypePlugins']>
 let markdownHtmlPluginsPromise: Promise<RehypePlugins> | null = null
+
+const BlockLineBaseContext = createContext<number>(0)
+function useBlockLineBase(): number {
+  return useContext(BlockLineBaseContext)
+}
 
 function loadMarkdownHtmlPlugins(): Promise<RehypePlugins> {
   markdownHtmlPluginsPromise ??= import('@/services/markdownHtml')
@@ -28,7 +31,7 @@ function loadMarkdownHtmlPlugins(): Promise<RehypePlugins> {
 }
 
 export interface MarkdownBlockCommitRequest {
-  block: MarkdownBlock
+  block: PreviewBlock
   draft: string
   documentKey: string
   documentVersion: number | string
@@ -37,6 +40,12 @@ export interface MarkdownBlockCommitRequest {
 export type MarkdownBlockCommitResult =
   | { status: 'applied'; content?: string }
   | { status: 'conflict'; currentSource: string }
+
+export interface MarkdownPreviewHandle {
+  scrollToLine: (line: number) => void
+  scrollToOffset: (offset: number) => void
+  getTopForLine: (line: number) => number | undefined
+}
 
 interface MarkdownPreviewProps {
   content: string
@@ -57,7 +66,7 @@ interface MarkdownPreviewProps {
 }
 
 interface ActiveBlockEdit {
-  block: MarkdownBlock
+  block: PreviewBlock
   documentKey: string
   documentVersion: number | string
   contentSnapshot: string
@@ -81,52 +90,69 @@ interface OptimisticPreviewContent {
 
 const ALT_CLICK_MOVE_THRESHOLD = 6
 
-function getNormalizedMarkdown(content: string): string {
-  const cached = normalizedMarkdownCache.get(content)
-  if (cached !== undefined) return cached
-
-  const normalized = normalizeLatexBlockDelimiters(content)
-  normalizedMarkdownCache.set(content, normalized)
-  if (normalizedMarkdownCache.size > NORMALIZED_MARKDOWN_CACHE_LIMIT) {
-    const oldest = normalizedMarkdownCache.keys().next().value
-    if (oldest !== undefined) normalizedMarkdownCache.delete(oldest)
-  }
-  return normalized
-}
-
-const StableMarkdownDocument = memo(function StableMarkdownDocument({
-  normalizedContent,
-  skipHtml,
-  rehypePlugins,
-  components,
-  fontSize,
-  lineHeight,
-}: {
-  normalizedContent: string
+interface StableMarkdownContentProps {
+  markdown: string
   skipHtml: boolean
   rehypePlugins: Options['rehypePlugins']
   components: Partial<Components>
-  fontSize: number
-  lineHeight: number
-}) {
+  baseLine: number
+}
+
+const StableMarkdownContent = memo(function StableMarkdownContent({
+  markdown,
+  skipHtml,
+  rehypePlugins,
+  components,
+  baseLine,
+}: StableMarkdownContentProps) {
   return (
-    <div
-      className="prose gm-markdown-preview max-w-none min-w-0 text-gm-text"
-      style={{ fontSize: `${fontSize}px`, lineHeight }}
-    >
+    <BlockLineBaseContext.Provider value={baseLine}>
       <ReactMarkdown
         skipHtml={skipHtml}
         remarkPlugins={MARKDOWN_REMARK_PLUGINS}
         rehypePlugins={rehypePlugins}
         components={components}
       >
-        {normalizedContent}
+        {markdown}
       </ReactMarkdown>
+    </BlockLineBaseContext.Provider>
+  )
+})
+
+interface StableMarkdownBlockProps extends StableMarkdownContentProps {
+  block: PreviewBlock
+  globalIndex: number
+  top: number
+  onElement: (index: number, element: HTMLDivElement | null) => void
+}
+
+const StableMarkdownBlock = memo(function StableMarkdownBlock({
+  block,
+  globalIndex,
+  top,
+  onElement,
+  ...contentProps
+}: StableMarkdownBlockProps) {
+  const setElement = useCallback((element: HTMLDivElement | null) => {
+    onElement(globalIndex, element)
+  }, [globalIndex, onElement])
+
+  return (
+    <div
+      ref={setElement}
+      data-md-block-index={globalIndex}
+      data-md-block-key={block.blockId}
+      data-md-block-type={block.type}
+      data-md-line={block.startLine}
+      data-md-end-line={block.endLine}
+      style={{ position: 'absolute', top, width: '100%' }}
+    >
+      <StableMarkdownContent {...contentProps} />
     </div>
   )
 })
 
-export const MarkdownPreview = memo(function MarkdownPreview({
+export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   content,
   filePath,
   fontSize = 14,
@@ -142,7 +168,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   onHeadingClick,
   onDraftStateChange,
   resource = 'preview',
-}: MarkdownPreviewProps) {
+}: MarkdownPreviewProps, ref: React.ForwardedRef<MarkdownPreviewHandle>) {
   const rootRef = useRef<HTMLDivElement>(null)
   const [activeEdit, setActiveEdit] = useState<ActiveBlockEdit | null>(null)
   const [overlayRect, setOverlayRect] = useState<{ top: number; left: number; width: number } | null>(null)
@@ -160,12 +186,45 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   const lifecycleMetadataRef = useRef({ documentKey, resource })
   const scrollRestoreRef = useRef<{ scrollTop: number; container: HTMLElement } | null>(null)
   const displayedContent = activeEdit?.contentSnapshot ?? optimisticContent?.content ?? content
-  const blocks = useMemo(() => parseMarkdownBlocks(displayedContent), [displayedContent])
-  const normalizedContent = useMemo(() => getNormalizedMarkdown(displayedContent), [displayedContent])
+  const model = useMemo(() => createMarkdownPreviewModel(displayedContent), [displayedContent])
+  const normalizedContent = model.normalizedContent
   const hasEmbeddedHtml = useMemo(() => EMBEDDED_HTML_PATTERN.test(normalizedContent), [normalizedContent])
+  const requiresWholeDocumentRender = hasEmbeddedHtml
+    || model.definitions.length > 0
+    || model.footnoteDefinitions.length > 0
   const [htmlRehypePlugins, setHtmlRehypePlugins] = useState<RehypePlugins | null>(null)
   const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
   const previewFontFamily = useSettingsStore((state) => state.editor.previewFontFamily)
+  const theme = useSettingsStore((state) => state.appearance.theme)
+  // Virtual scrolling state
+  const scrollContainerRef = useRef<HTMLElement | null>(null)
+  const measuredHeightsRef = useRef<Map<string, number>>(new Map())
+  const blockRefs = useRef<Map<number, HTMLDivElement | null>>(new Map())
+  const blockResizeObserverRef = useRef<ResizeObserver | null>(null)
+  const measurementKeyRef = useRef<{
+    content: string
+    fontSize: number
+    lineHeight: number
+    fontFamily: string
+    wordWrap: boolean
+    theme: string
+  } | null>(null)
+  const [scrollState, setScrollState] = useState<{ scrollTop: number; viewportHeight: number; viewportWidth: number }>({ scrollTop: 0, viewportHeight: 800, viewportWidth: 0 })
+  const overscanBlocks = 5
+
+  const measurementKey = measurementKeyRef.current
+  if (
+    !measurementKey
+    || measurementKey.content !== displayedContent
+    || measurementKey.fontSize !== fontSize
+    || measurementKey.lineHeight !== lineHeight
+    || measurementKey.fontFamily !== previewFontFamily
+    || measurementKey.wordWrap !== wordWrap
+    || measurementKey.theme !== theme
+  ) {
+    measuredHeightsRef.current = new Map()
+    measurementKeyRef.current = { content: displayedContent, fontSize, lineHeight, fontFamily: previewFontFamily, wordWrap, theme }
+  }
 
   activeEditRef.current = activeEdit
   optimisticContentRef.current = optimisticContent
@@ -227,12 +286,160 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     scrollRestoreRef.current = null
   }, [activeEdit, displayedContent])
 
+  // Observe parent scroll container
+  useEffect(() => {
+    const el = rootRef.current?.parentElement
+    if (!el) return
+    scrollContainerRef.current = el
+    const update = () => {
+      setScrollState((current) => {
+        if (current.viewportWidth !== el.clientWidth && current.viewportWidth !== 0) {
+          measuredHeightsRef.current = new Map()
+        }
+        return { scrollTop: el.scrollTop, viewportHeight: el.clientHeight, viewportWidth: el.clientWidth }
+      })
+    }
+    update()
+    const ro = new ResizeObserver(update)
+    const blockRo = new ResizeObserver((entries) => {
+      const estimateForObserver = (block: PreviewBlock) => estimatePreviewBlockHeight(block, fontSize, lineHeight)
+      const before = computeVisibleRange(
+        model,
+        el.scrollTop,
+        el.scrollTop + el.clientHeight,
+        measuredHeightsRef.current,
+        estimateForObserver,
+        0,
+      )
+      const anchorIndex = before.startIndex
+      const anchorTopBefore = before.blockTops[anchorIndex] ?? 0
+      let changed = false
+      for (const entry of entries) {
+        const element = entry.target as HTMLElement
+        const index = Number(element.dataset.mdBlockIndex)
+        const block = model.blocks[index]
+        const height = entry.borderBoxSize?.[0]?.blockSize ?? element.getBoundingClientRect().height
+        if (block && height > 0 && measuredHeightsRef.current.get(block.blockId) !== height) {
+          measuredHeightsRef.current.set(block.blockId, height)
+          changed = true
+        }
+      }
+      if (changed) {
+        const after = computeVisibleRange(
+          model,
+          el.scrollTop,
+          el.scrollTop + el.clientHeight,
+          measuredHeightsRef.current,
+          estimateForObserver,
+          0,
+        )
+        const anchorDelta = (after.blockTops[anchorIndex] ?? anchorTopBefore) - anchorTopBefore
+        if (anchorDelta !== 0) el.scrollTop += anchorDelta
+        setScrollState({ scrollTop: el.scrollTop, viewportHeight: el.clientHeight, viewportWidth: el.clientWidth })
+      }
+    })
+    blockResizeObserverRef.current = blockRo
+    for (const blockElement of blockRefs.current.values()) {
+      if (blockElement) blockRo.observe(blockElement)
+    }
+    ro.observe(el)
+    el.addEventListener('scroll', update, { passive: true })
+    return () => {
+      ro.disconnect()
+      blockRo.disconnect()
+      blockResizeObserverRef.current = null
+      el.removeEventListener('scroll', update)
+    }
+  }, [fontSize, lineHeight, model])
+
+  const setBlockElement = useCallback((index: number, element: HTMLDivElement | null) => {
+    const previous = blockRefs.current.get(index)
+    if (previous && previous !== element) blockResizeObserverRef.current?.unobserve(previous)
+    if (element) {
+      blockRefs.current.set(index, element)
+      blockResizeObserverRef.current?.observe(element)
+    } else {
+      blockRefs.current.delete(index)
+    }
+  }, [])
+
+  // Height estimation
+  const estimateBlockHeight = useCallback(
+    (block: PreviewBlock): number => estimatePreviewBlockHeight(block, fontSize, lineHeight),
+    [fontSize, lineHeight],
+  )
+
+  // Expose scrollToLine for EditorArea to use with TOC jumps
+  useImperativeHandle(ref, () => ({
+    getTopForLine(line: number) {
+      const container = scrollContainerRef.current
+      const target = rootRef.current?.querySelector<HTMLElement>(`[data-md-line="${line}"]`)
+      if (container && target) {
+        return target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+      }
+      return getEstimatedPreviewTopForLine(
+        model, line, estimateBlockHeight, measuredHeightsRef.current,
+      )
+    },
+    scrollToLine(line: number) {
+      const container = scrollContainerRef.current
+      if (!container) return
+      const target = rootRef.current?.querySelector<HTMLElement>(`[data-md-line="${line}"]`)
+      const top = target
+        ? target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+        : getEstimatedPreviewTopForLine(model, line, estimateBlockHeight, measuredHeightsRef.current)
+      if (typeof top === 'number') {
+        container.scrollTo({ top: Math.max(0, top - 24), behavior: 'smooth' })
+      }
+    },
+    scrollToOffset(offset: number) {
+      const index = findBlockIndexByOffset(model, offset)
+      const block = index >= 0 ? model.blocks[index] : undefined
+      if (!block) return
+      const localSource = model.rawContent.slice(block.startOffset, Math.max(block.startOffset, offset))
+      const line = block.startLine + (localSource.match(/\r\n|\r|\n/g)?.length ?? 0)
+      const container = scrollContainerRef.current
+      if (!container) return
+      const top = getEstimatedPreviewTopForLine(model, line, estimateBlockHeight, measuredHeightsRef.current)
+      if (typeof top === 'number') container.scrollTo({ top: Math.max(0, top - 24) })
+    },
+  }), [model, estimateBlockHeight])
+
+  // Visible range
+  const visible = useMemo(
+    () => requiresWholeDocumentRender
+      ? { startIndex: 0, endIndex: 0, blockTops: [] as number[], totalHeight: 0 }
+      : computeVisibleRange(
+          model, scrollState.scrollTop, scrollState.scrollTop + scrollState.viewportHeight,
+          measuredHeightsRef.current, estimateBlockHeight, overscanBlocks,
+        ),
+    [model, scrollState, estimateBlockHeight, requiresWholeDocumentRender],
+  )
+
+  // Measure real heights of mounted blocks
+  useLayoutEffect(() => {
+    let changed = false
+    for (let i = visible.startIndex; i < visible.endIndex; i += 1) {
+      const el = blockRefs.current.get(i)
+      const blk = model.blocks[i]
+      if (!el || !blk) continue
+      const h = el.getBoundingClientRect().height
+      if (h > 0 && measuredHeightsRef.current.get(blk.blockId) !== h) {
+        measuredHeightsRef.current.set(blk.blockId, h)
+        changed = true
+      }
+    }
+    if (changed) {
+      setScrollState((s) => ({ ...s }))
+    }
+  }, [visible.startIndex, visible.endIndex, model.blocks])
+
   const overlayRectRef = useRef<{ top: number; left: number; width: number } | null>(null)
 
   useLayoutEffect(() => {
     if (!activeEdit) return
     const target = rootRef.current?.querySelector<HTMLElement>(
-      `[data-md-block-key="${activeEdit.block.renderKey}"]`,
+      `[data-md-block-key="${activeEdit.block.blockId}"]`,
     )
     if (!target) return
     if (!target.hasAttribute('data-md-editing')) {
@@ -261,16 +468,16 @@ export const MarkdownPreview = memo(function MarkdownPreview({
         container: scrollContainer,
       }
     }
-    if (activeEditRef.current?.documentKey === edit.documentKey && activeEditRef.current.block.renderKey === edit.block.renderKey) {
+    if (activeEditRef.current?.documentKey === edit.documentKey && activeEditRef.current.block.blockId === edit.block.blockId) {
       activeEditRef.current = null
     }
     const prevTarget = rootRef.current?.querySelector<HTMLElement>(
-      `[data-md-block-key="${edit.block.renderKey}"]`,
+      `[data-md-block-key="${edit.block.blockId}"]`,
     )
     prevTarget?.removeAttribute('data-md-editing')
     setOverlayRect(null)
     setActiveEdit((current) => (
-      current?.documentKey === edit.documentKey && current.block.renderKey === edit.block.renderKey
+      current?.documentKey === edit.documentKey && current.block.blockId === edit.block.blockId
         ? null
         : current
     ))
@@ -291,7 +498,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     if (result.status === 'conflict') {
       if (mountedRef.current) {
         setActiveEdit((current) => (
-          current?.documentKey === edit.documentKey && current.block.renderKey === edit.block.renderKey
+          current?.documentKey === edit.documentKey && current.block.blockId === edit.block.blockId
             ? { ...current, conflict: true }
             : current
         ))
@@ -351,12 +558,12 @@ export const MarkdownPreview = memo(function MarkdownPreview({
 
   const beginEditing = useCallback(async (blockIndex: number, target: Element) => {
     if (!inlineEditEnabled || !documentKey || !onBlockCommit) return
-    const requestedBlock = blocks[blockIndex]
+    const requestedBlock = model.blocks[blockIndex]
     if (!requestedBlock) return
     const current = activeEditRef.current
     const lineElement = target.closest<HTMLElement>('[data-md-line]')
     const clickedLine = Number(lineElement?.dataset.mdLine)
-    if (current?.block.renderKey === requestedBlock.renderKey && current.documentKey === documentKey) return
+    if (current?.block.blockId === requestedBlock.blockId && current.documentKey === documentKey) return
 
     const blockWrapper = target.closest<HTMLElement>('[data-md-block-index]')
     let contentSnapshot = displayedContent
@@ -370,7 +577,9 @@ export const MarkdownPreview = memo(function MarkdownPreview({
           ? currentDraftLength - current.block.rawSource.length
           : 0
       )
-      block = findBlockAtOffset(parseMarkdownBlocks(contentSnapshot), adjustedStartOffset) ?? requestedBlock
+      const snapshotModel = createMarkdownPreviewModel(contentSnapshot)
+      const adjustedIdx = findBlockIndexByOffset(snapshotModel, adjustedStartOffset)
+      block = adjustedIdx >= 0 ? snapshotModel.blocks[adjustedIdx] : requestedBlock
     }
 
     const mappedClickedLine = Number.isFinite(clickedLine)
@@ -403,7 +612,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
         })
       }
     }
-  }, [blocks, content, displayedContent, documentKey, inlineEditEnabled, onBlockCommit, submitActiveEdit])
+  }, [model.blocks, content, displayedContent, documentKey, inlineEditEnabled, onBlockCommit, submitActiveEdit])
 
   const handlePointerDownCapture = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (!event.altKey || !inlineEditEnabled || activeEditRef.current && (event.target as Element).closest('.gm-inline-markdown-editor')) return
@@ -448,14 +657,16 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     event.stopPropagation()
   }, [])
 
-  const blockWrapperPlugin = useMemo(() => createMarkdownBlockWrapperPlugin(blocks), [blocks])
   const rehypePlugins = useMemo(
     () => [
       ...(!skipHtml && hasEmbeddedHtml && htmlRehypePlugins ? htmlRehypePlugins : []),
       ...MARKDOWN_REHYPE_PLUGINS,
-      blockWrapperPlugin,
     ],
-    [blockWrapperPlugin, hasEmbeddedHtml, htmlRehypePlugins, skipHtml],
+    [hasEmbeddedHtml, htmlRehypePlugins, skipHtml],
+  )
+  const wholeDocumentRehypePlugins = useMemo(
+    () => [...rehypePlugins, createMarkdownBlockWrapperPlugin(model.blocks)],
+    [model.blocks, rehypePlugins],
   )
 
   const components = useMemo<Partial<Components>>(() => {
@@ -482,7 +693,9 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             return <div {...props}>{children}</div>
           },
           h1: ({ children, node }) => {
-            const line = getNodeStartLine(node)
+            // eslint-disable-next-line react-hooks/rules-of-hooks
+            const base = useBlockLineBase()
+            const line = getNodeStartLine(node, base)
             const id = line ? `heading-${line}` : createHeadingId(getText(children), headingIds)
             return (
               <h1 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className="scroll-mt-6 font-bold mt-8 mb-4 text-gm-text border-b border-gm-border pb-3" style={{ fontSize: '2em' }}>
@@ -491,7 +704,9 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             )
           },
           h2: ({ children, node }) => {
-            const line = getNodeStartLine(node)
+            // eslint-disable-next-line react-hooks/rules-of-hooks
+            const base = useBlockLineBase()
+            const line = getNodeStartLine(node, base)
             const id = line ? `heading-${line}` : createHeadingId(getText(children), headingIds)
             return (
               <h2 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className="scroll-mt-6 font-bold mt-8 mb-4 text-gm-text" style={{ fontSize: '1.5em' }}>
@@ -500,7 +715,9 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             )
           },
           h3: ({ children, node }) => {
-            const line = getNodeStartLine(node)
+            // eslint-disable-next-line react-hooks/rules-of-hooks
+            const base = useBlockLineBase()
+            const line = getNodeStartLine(node, base)
             const id = line ? `heading-${line}` : createHeadingId(getText(children), headingIds)
             return (
               <h3 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className="scroll-mt-6 font-bold mt-6 mb-3 text-gm-text" style={{ fontSize: '1.25em' }}>
@@ -509,7 +726,9 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             )
           },
           h4: ({ children, node }) => {
-            const line = getNodeStartLine(node)
+            // eslint-disable-next-line react-hooks/rules-of-hooks
+            const base = useBlockLineBase()
+            const line = getNodeStartLine(node, base)
             const id = line ? `heading-${line}` : createHeadingId(getText(children), headingIds)
             return (
               <h4 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className="scroll-mt-6 font-bold mt-4 mb-2 text-gm-text" style={{ fontSize: '1.1em' }}>
@@ -517,9 +736,13 @@ export const MarkdownPreview = memo(function MarkdownPreview({
               </h4>
             )
           },
-          p: ({ children, node, ...props }) => (
-            <p {...props} className="my-3" data-md-line={getNodeStartLine(node)} data-md-end-line={getNodeEndLine(node)}>{children}</p>
-          ),
+          p: ({ children, node, ...props }) => {
+            // eslint-disable-next-line react-hooks/rules-of-hooks
+            const base = useBlockLineBase()
+            return (
+              <p {...props} className="my-3" data-md-line={getNodeStartLine(node, base)} data-md-end-line={getNodeEndLine(node, base)}>{children}</p>
+            )
+          },
           strong: ({ children }) => (
             <strong className="font-bold text-gm-text">{children}</strong>
           ),
@@ -527,15 +750,18 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             <em className="text-gm-text italic">{children}</em>
           ),
           code: ({ children, className, node }) => {
+            // eslint-disable-next-line react-hooks/rules-of-hooks
+            const base = useBlockLineBase()
+            const code = String(children)
             const language = className?.match(/language-([\w-]+)/)?.[1]
-            const isBlock = Boolean(language)
+            const isBlock = Boolean(language) || code.endsWith('\n')
             if (isBlock && language === 'mermaid') {
-              return <MermaidBlock code={String(children).replace(/\n$/, '')} startLine={getNodeStartLine(node)} endLine={getNodeEndLine(node)} />
+              return <MermaidBlock code={code.replace(/\n$/, '')} startLine={getNodeStartLine(node, base)} endLine={getNodeEndLine(node, base)} />
             }
             if (isBlock) {
               return (
-                <CodeBlock code={String(children).replace(/\n$/, '')} language={language} fontSize={fontSize} startLine={getNodeStartLine(node)} endLine={getNodeEndLine(node)}>
-                  {className && (
+                <CodeBlock code={code.replace(/\n$/, '')} language={language} fontSize={fontSize} startLine={getNodeStartLine(node, base)} endLine={getNodeEndLine(node, base)}>
+                  {language && (
                     <div className="px-4 py-1.5 border-b border-gm-border text-micro text-gm-text-secondary font-mono">
                       {language}
                     </div>
@@ -554,11 +780,15 @@ export const MarkdownPreview = memo(function MarkdownPreview({
               </code>
             )
           },
-          blockquote: ({ children, node }) => (
-            <blockquote className="pl-4 border-l-4 border-gm-primary rounded-r-lg py-3 text-gm-text-secondary italic my-4" data-md-line={getNodeStartLine(node)} data-md-end-line={getNodeEndLine(node)}>
-              {children}
-            </blockquote>
-          ),
+          blockquote: ({ children, node }) => {
+            // eslint-disable-next-line react-hooks/rules-of-hooks
+            const base = useBlockLineBase()
+            return (
+              <blockquote className="pl-4 border-l-4 border-gm-primary rounded-r-lg py-3 text-gm-text-secondary italic my-4" data-md-line={getNodeStartLine(node, base)} data-md-end-line={getNodeEndLine(node, base)}>
+                {children}
+              </blockquote>
+            )
+          },
           a: ({ href, children, node: _node, ...props }) => {
             const isHashLink = href?.startsWith('#')
             const isFootnoteBackref = 'data-footnote-backref' in props
@@ -582,11 +812,14 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             <ol className="my-3 pl-6 list-decimal">{children}</ol>
           ),
           li: ({ children, node, ...liProps }) => {
-            const line = node?.position?.start?.line
+            // eslint-disable-next-line react-hooks/rules-of-hooks
+            const base = useBlockLineBase()
+            const localLine = node?.position?.start?.line
+            const line = typeof localLine === 'number' ? localLine + base : undefined
             return (
               <li
-                data-md-line={typeof line === 'number' ? line : undefined}
                 {...liProps}
+                data-md-line={line}
                 style={{
                   ...(('style' in liProps && typeof liProps.style === 'object' && liProps.style) ? liProps.style : {}),
                   whiteSpace: 'normal',
@@ -596,14 +829,22 @@ export const MarkdownPreview = memo(function MarkdownPreview({
               </li>
             )
           },
-          hr: ({ node }) => <hr className="my-6 border-gm-border" data-md-line={getNodeStartLine(node)} />,
-          table: ({ children, node, ...props }) => (
-            <div className="my-4 overflow-x-auto rounded-xl border border-gm-border" data-md-line={getNodeStartLine(node)}>
-              <table {...props} className="w-full border-collapse">
-                {children}
-              </table>
-            </div>
-          ),
+          hr: ({ node }) => {
+            // eslint-disable-next-line react-hooks/rules-of-hooks
+            const base = useBlockLineBase()
+            return <hr className="my-6 border-gm-border" data-md-line={getNodeStartLine(node, base)} />
+          },
+          table: ({ children, node, ...props }) => {
+            // eslint-disable-next-line react-hooks/rules-of-hooks
+            const base = useBlockLineBase()
+            return (
+              <div className="my-4 overflow-x-auto rounded-xl border border-gm-border" data-md-line={getNodeStartLine(node, base)}>
+                <table {...props} className="w-full border-collapse">
+                  {children}
+                </table>
+              </div>
+            )
+          },
           thead: ({ children }) => (
             <thead className="bg-gm-surface-elevated">{children}</thead>
           ),
@@ -618,6 +859,8 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             </td>
           ),
           img: ({ src, alt, title, width, height, node }) => {
+            // eslint-disable-next-line react-hooks/rules-of-hooks
+            const base = useBlockLineBase()
             const resolvedSrc = resolveImageSrc(src, filePath)
             const altText = alt || ''
             return (
@@ -626,7 +869,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
                 className="gm-markdown-image my-4 block max-w-full cursor-zoom-in rounded-xl border border-gm-border bg-transparent p-0 text-left"
                 onClick={() => setZoomImage({ src: resolvedSrc, alt: altText })}
                 title="点击放大图片"
-                data-md-line={getNodeStartLine(node)}
+                data-md-line={getNodeStartLine(node, base)}
               >
                 <img
                   src={resolvedSrc}
@@ -686,14 +929,35 @@ export const MarkdownPreview = memo(function MarkdownPreview({
       onPointerUpCapture={handlePointerUpCapture}
       onClickCapture={handleClickCapture}
     >
-      <StableMarkdownDocument
-        normalizedContent={normalizedContent}
-        skipHtml={skipHtml || (hasEmbeddedHtml && !htmlRehypePlugins)}
-        rehypePlugins={rehypePlugins}
-        components={components}
-        fontSize={fontSize}
-        lineHeight={lineHeight}
-      />
+      {requiresWholeDocumentRender ? (
+        <StableMarkdownContent
+          baseLine={0}
+          markdown={normalizedContent}
+          skipHtml={skipHtml || (hasEmbeddedHtml && !htmlRehypePlugins)}
+          rehypePlugins={wholeDocumentRehypePlugins}
+          components={components}
+        />
+      ) : (
+        <div style={{ position: 'relative', height: visible.totalHeight, minHeight: visible.totalHeight > 0 ? undefined : '100%' }}>
+          {model.blocks.slice(visible.startIndex, visible.endIndex).map((block, index) => {
+            const globalIndex = visible.startIndex + index
+            return (
+              <StableMarkdownBlock
+                key={block.blockId}
+                block={block}
+                globalIndex={globalIndex}
+                top={visible.blockTops[globalIndex]}
+                onElement={setBlockElement}
+                baseLine={block.startLine - 1}
+                markdown={normalizedContent.slice(block.normalizedStartOffset, block.normalizedEndOffset)}
+                skipHtml={skipHtml || (hasEmbeddedHtml && !htmlRehypePlugins)}
+                rehypePlugins={rehypePlugins}
+                components={components}
+              />
+            )
+          })}
+        </div>
+      )}
       {activeEdit && overlayRect && (
         <div
           ref={overlayRef}
@@ -751,11 +1015,54 @@ export const MarkdownPreview = memo(function MarkdownPreview({
       )}
     </div>
   )
-})
+}))
 
 function handleHeadingClick(line: number | undefined, onHeadingClick?: (line: number) => void) {
   if (!onHeadingClick || typeof line !== 'number') return
   onHeadingClick(line)
+}
+
+function estimatePreviewBlockHeight(block: PreviewBlock, fontSize: number, lineHeight: number): number {
+  const baseLinePx = fontSize * lineHeight
+  const lines = Math.max(1, block.endLine - block.startLine + 1)
+  switch (block.type) {
+    case 'frontmatter':
+      return 0
+    case 'thematicBreak':
+      return 32
+    case 'heading': {
+      const level = block.heading?.level ?? 2
+      const multiplier = level === 1 ? 2 : level === 2 ? 1.6 : level === 3 ? 1.35 : 1.2
+      return Math.ceil(baseLinePx * multiplier * 1.4)
+    }
+    case 'code':
+    case 'mermaid': {
+      const codeLines = block.codeMeta?.lines ?? lines
+      return Math.max(40, codeLines * fontSize * 1.25 + 36)
+    }
+    case 'table': {
+      const rows = block.tableMeta?.rows ?? lines
+      return Math.max(48, rows * (baseLinePx + 8) + 32)
+    }
+    case 'list': {
+      const items = block.listItemCount ?? Math.max(1, Math.ceil(lines / 2))
+      return Math.max(24, items * baseLinePx * 1.2)
+    }
+    case 'image':
+      return 220
+    case 'math':
+      return Math.max(48, lines * baseLinePx * 1.3 + 24)
+    case 'html':
+      return Math.max(32, lines * baseLinePx * 1.5)
+    case 'definition':
+    case 'footnoteDefinition':
+      return Math.max(24, lines * baseLinePx * 1.1 + 8)
+    case 'blockquote':
+    case 'paragraph':
+    case 'unknown':
+    default:
+      return Math.max(20, lines * baseLinePx * 1.15 + 12)
+  }
 }
 
 function CodeBlock({
@@ -845,19 +1152,19 @@ function getText(node: React.ReactNode): string {
   return ''
 }
 
-function getNodeStartLine(node: unknown): number | undefined {
-  return getNodeLine(node, 'start')
+function getNodeStartLine(node: unknown, base = 0): number | undefined {
+  return getNodeLine(node, 'start', base)
 }
 
-function getNodeEndLine(node: unknown): number | undefined {
-  return getNodeLine(node, 'end')
+function getNodeEndLine(node: unknown, base = 0): number | undefined {
+  return getNodeLine(node, 'end', base)
 }
 
-function getNodeLine(node: unknown, edge: 'start' | 'end'): number | undefined {
+function getNodeLine(node: unknown, edge: 'start' | 'end', base = 0): number | undefined {
   if (!node || typeof node !== 'object') return undefined
   const position = (node as { position?: { start?: { line?: unknown }; end?: { line?: unknown } } }).position
   const line = position?.[edge]?.line
-  return typeof line === 'number' && Number.isFinite(line) ? line : undefined
+  return typeof line === 'number' && Number.isFinite(line) ? line + base : undefined
 }
 
 interface HastNode {
@@ -871,7 +1178,7 @@ interface HastNode {
   }
 }
 
-function createMarkdownBlockWrapperPlugin(blocks: MarkdownBlock[]) {
+function createMarkdownBlockWrapperPlugin(blocks: PreviewBlock[]) {
   return () => (tree: HastNode) => {
     if (!tree.children) return
     const output: HastNode[] = []
@@ -888,7 +1195,7 @@ function createMarkdownBlockWrapperPlugin(blocks: MarkdownBlock[]) {
         properties: {
           className: ['gm-markdown-block'],
           dataMdBlockIndex: currentIndex,
-          dataMdBlockKey: block.renderKey,
+          dataMdBlockKey: block.blockId,
           dataMdBlockType: block.type,
           dataMdLine: block.startLine,
           dataMdEndLine: block.endLine,
@@ -933,7 +1240,7 @@ function createMarkdownBlockWrapperPlugin(blocks: MarkdownBlock[]) {
   }
 }
 
-function getBlockOffsetForLine(block: MarkdownBlock, clickedLine: number): number {
+function getBlockOffsetForLine(block: PreviewBlock, clickedLine: number): number {
   if (clickedLine < block.startLine || clickedLine > block.endLine) return block.rawSource.length
   const localLine = clickedLine - block.startLine
   let offset = 0
@@ -943,10 +1250,6 @@ function getBlockOffsetForLine(block: MarkdownBlock, clickedLine: number): numbe
     offset += match.index + match[0].length
   }
   return offset
-}
-
-function findBlockAtOffset(blocks: MarkdownBlock[], offset: number): MarkdownBlock | undefined {
-  return blocks.find((block) => block.startOffset <= offset && offset < block.endOffset)
 }
 
 function MermaidBlock({ code, startLine, endLine }: { code: string; startLine?: number; endLine?: number }) {

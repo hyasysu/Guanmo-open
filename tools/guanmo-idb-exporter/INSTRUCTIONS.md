@@ -145,4 +145,4 @@ A: 可以。工具会自动检测已存在的数据，避免重复导入。
 
 ## 许可证
 
-ISC License
+MIT License（遵循仓库根目录 `LICENSE`）

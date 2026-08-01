@@ -7,7 +7,12 @@ import { invoke } from '@tauri-apps/api/core'
 import { getDatabase, isDatabaseReady } from './db'
 import type { Document, Chunk } from '@/services/rag/types'
 import { normalizeFilePath } from '@/services/pathIdentity'
-import { buildMemoryEmbeddingQuery, buildMemoryQuery, type MemoryQueryFilters } from './memoryQuery'
+import {
+  buildMemoryCountQuery,
+  buildMemoryEmbeddingQuery,
+  buildMemoryQuery,
+  type MemoryQueryFilters,
+} from './memoryQuery'
 
 interface DocumentRow {
   id: string
@@ -637,6 +642,28 @@ export async function loadMemories(options: LoadMemoryOptions = {}): Promise<Mem
   const query = buildMemoryQuery(options)
   const rows = await db.select<MemoryRow>(query.sql, query.params)
   return rows.map(mapMemoryRow)
+}
+
+export interface MemoryPage {
+  memories: Memory[]
+  total: number
+}
+
+export async function loadMemoryCount(options: LoadMemoryOptions = {}): Promise<number> {
+  if (!isDatabaseReady()) return 0
+  const query = buildMemoryCountQuery(options)
+  const rows = await getDatabase().select<{ total: number }>(query.sql, query.params)
+  return Number(rows[0]?.total) || 0
+}
+
+export async function loadMemoryPage(
+  options: LoadMemoryOptions & { limit: number; offset?: number }
+): Promise<MemoryPage> {
+  const [memories, total] = await Promise.all([
+    loadMemories({ ...options, includeEmbedding: false }),
+    loadMemoryCount(options),
+  ])
+  return { memories, total }
 }
 
 export async function loadAllMemories(category?: string, statuses?: MemoryStatus[]): Promise<Memory[]> {

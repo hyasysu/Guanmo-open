@@ -210,6 +210,7 @@ export const DEFAULT_AI_CONFIG: AiConfig = {
 export const SYSTEM_TEMPERATURE = {
   routing: 0,
   agentPlanning: 0.1,
+  agentAnswer: 0.3,
   ragRewrite: 0.1,
   memoryExtract: 0.1,
   editConfirm: 0.1,
@@ -251,11 +252,7 @@ export const AI_CHAT_PRESETS: AiPreset[] = [
   { key: 'coding-iflytek', label: 'Coding Plan · 讯飞星辰', protocol: 'openai-chat', provider: 'coding-plan', baseUrl: 'https://maas-coding-api.cn-huabei-1.xf-yun.com/v2', chatModel: 'xingchen-coding-plus' },
   { key: 'coding-tencent', label: 'Coding Plan · 腾讯云', protocol: 'openai-chat', provider: 'coding-plan', baseUrl: 'https://api.lkeap.cloud.tencent.com/coding/v3', chatModel: 'hunyuan-code' },
 
-  // ── Anthropic Messages (Provider 待实现) ──
-  { key: 'anthropic', label: 'Anthropic', protocol: 'anthropic-messages', provider: 'anthropic', baseUrl: 'https://api.anthropic.com', chatModel: 'claude-sonnet-4-20250514' },
-
-  // ── OpenAI Responses (Provider 待实现) ──
-  { key: 'openai-responses', label: 'OpenAI (Responses)', protocol: 'openai-responses', provider: 'openai', baseUrl: 'https://api.openai.com/v1', chatModel: 'gpt-4o-mini' },
+  // 原生 Anthropic Messages 与 OpenAI Responses 未实现前不提供系统预设。
 ]
 
 /** 用户自定义预设（持久化到 localStorage，apiKey 除外） */

@@ -57,16 +57,28 @@ function findMatches(doc: string, query: string, caseSensitive: boolean): { from
 interface SearchOverlayProps {
   onClose: () => void
   editorViewRef?: React.MutableRefObject<EditorView | null>
-  previewPanes?: React.RefObject<HTMLDivElement>[]
+  previewSources?: Array<{
+    content: string
+    paneRef: React.RefObject<HTMLDivElement | null>
+    previewRef: React.RefObject<{ scrollToOffset: (offset: number) => void } | null>
+  }>
 }
 
-export function SearchOverlay({ onClose, editorViewRef, previewPanes = [] }: SearchOverlayProps) {
+interface PreviewMatch {
+  sourceIndex: number
+  from: number
+  to: number
+}
+
+export function SearchOverlay({ onClose, editorViewRef, previewSources = [] }: SearchOverlayProps) {
   const isEditor = !!editorViewRef
   const [query, setQuery] = useState('')
   const [replaceText, setReplaceText] = useState('')
   const [matchCount, setMatchCount] = useState(0)
+  const [currentMatch, setCurrentMatch] = useState(0)
   const currentMatchRef = useRef(0)
   const matchesRef = useRef<{ from: number; to: number }[]>([])
+  const previewMatchesRef = useRef<PreviewMatch[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
 
   // Ensure searchField is in editor's extensions
@@ -120,6 +132,7 @@ export function SearchOverlay({ onClose, editorViewRef, previewPanes = [] }: Sea
     const matches = findMatches(doc, searchQuery, false)
     matchesRef.current = matches
     currentMatchRef.current = 0
+    setCurrentMatch(0)
     setMatchCount(matches.length)
 
     if (matches.length > 0) {
@@ -141,6 +154,7 @@ export function SearchOverlay({ onClose, editorViewRef, previewPanes = [] }: Sea
     if (matches.length === 0) return
     const next = (currentMatchRef.current + 1) % matches.length
     currentMatchRef.current = next
+    setCurrentMatch(next)
     view.dispatch({
       selection: { anchor: matches[next].from, head: matches[next].to },
       effects: setSearchQuery.of({ query, caseSensitive: false, currentMatch: next, matches }),
@@ -155,6 +169,7 @@ export function SearchOverlay({ onClose, editorViewRef, previewPanes = [] }: Sea
     if (matches.length === 0) return
     const prev = (currentMatchRef.current - 1 + matches.length) % matches.length
     currentMatchRef.current = prev
+    setCurrentMatch(prev)
     view.dispatch({
       selection: { anchor: matches[prev].from, head: matches[prev].to },
       effects: setSearchQuery.of({ query, caseSensitive: false, currentMatch: prev, matches }),
@@ -163,14 +178,14 @@ export function SearchOverlay({ onClose, editorViewRef, previewPanes = [] }: Sea
   }, [editorViewRef, query])
 
   // --- Preview search (CSS Highlight API) ---
-  const searchPreview = useCallback((searchQuery: string) => {
+  const highlightMountedPreviewMatches = useCallback((searchQuery: string) => {
     if (typeof CSS === 'undefined' || !CSS.highlights) return
     CSS.highlights.delete('search-highlight')
     CSS.highlights.delete('search-highlight-active')
-    if (!searchQuery) { setMatchCount(0); return }
+    if (!searchQuery) return
 
     const allRanges: globalThis.Range[] = []
-    for (const paneRef of previewPanes) {
+    for (const { paneRef } of previewSources) {
       const el = paneRef.current
       if (!el) continue
       const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
@@ -192,43 +207,44 @@ export function SearchOverlay({ onClose, editorViewRef, previewPanes = [] }: Sea
       CSS.highlights.set('search-highlight', new Highlight(...allRanges))
       CSS.highlights.set('search-highlight-active', new Highlight(allRanges[0]))
     }
-    setMatchCount(allRanges.length)
-  }, [previewPanes])
+  }, [previewSources])
+
+  const revealPreviewMatch = useCallback((match: PreviewMatch, searchQuery: string) => {
+    previewSources[match.sourceIndex]?.previewRef.current?.scrollToOffset(match.from)
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => highlightMountedPreviewMatches(searchQuery))
+    })
+  }, [highlightMountedPreviewMatches, previewSources])
+
+  const searchPreview = useCallback((searchQuery: string) => {
+    const matches = previewSources.flatMap((source, sourceIndex) => (
+      findMatches(source.content, searchQuery, false).map((match) => ({ ...match, sourceIndex }))
+    ))
+    previewMatchesRef.current = matches
+    currentMatchRef.current = 0
+    setCurrentMatch(0)
+    setMatchCount(matches.length)
+    if (!searchQuery) {
+      if (typeof CSS !== 'undefined' && CSS.highlights) {
+        CSS.highlights.delete('search-highlight')
+        CSS.highlights.delete('search-highlight-active')
+      }
+      return
+    }
+    if (matches[0]) revealPreviewMatch(matches[0], searchQuery)
+  }, [previewSources, revealPreviewMatch])
 
   const navigatePreview = useCallback((direction: 1 | -1) => {
-    if (typeof CSS === 'undefined' || !CSS.highlights || !query) return
-    const allRanges: globalThis.Range[] = []
-    for (const paneRef of previewPanes) {
-      const el = paneRef.current
-      if (!el) continue
-      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
-      let node: Text | null
-      while ((node = walker.nextNode() as Text)) {
-        const text = node.textContent || ''
-        const regex = new RegExp(escapeRegex(query), 'gi')
-        let match: RegExpExecArray | null
-        while ((match = regex.exec(text)) !== null) {
-          const range = document.createRange()
-          range.setStart(node, match.index)
-          range.setEnd(node, match.index + match[0].length)
-          allRanges.push(range)
-        }
-      }
-    }
-    if (allRanges.length === 0) return
-
-    const activeHighlight = CSS.highlights.get('search-highlight-active')
-    if (!activeHighlight) return
-    const currentActive = Array.from(activeHighlight)[0]
-    const currentIdx = currentActive ? allRanges.findIndex(
-      r => r.startContainer === currentActive.startContainer && r.startOffset === currentActive.startOffset
-    ) : -1
+    if (!query) return
+    const matches = previewMatchesRef.current
+    if (matches.length === 0) return
     const nextIdx = direction === 1
-      ? (currentIdx + 1) % allRanges.length
-      : (currentIdx - 1 + allRanges.length) % allRanges.length
-    CSS.highlights.set('search-highlight-active', new Highlight(allRanges[nextIdx]))
-    allRanges[nextIdx].startContainer.parentElement?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }, [query, previewPanes])
+      ? (currentMatchRef.current + 1) % matches.length
+      : (currentMatchRef.current - 1 + matches.length) % matches.length
+    currentMatchRef.current = nextIdx
+    setCurrentMatch(nextIdx)
+    revealPreviewMatch(matches[nextIdx], query)
+  }, [query, revealPreviewMatch])
 
   // --- Combined ---
   const doSearch = useCallback((q: string) => {
@@ -303,7 +319,7 @@ export function SearchOverlay({ onClose, editorViewRef, previewPanes = [] }: Sea
           </button>
           {query && (
             <span className="text-micro text-gm-text-tertiary whitespace-nowrap min-w-[40px] text-center">
-              {matchCount > 0 ? `${currentMatchRef.current + 1}/${matchCount}` : '无'}
+              {matchCount > 0 ? `${currentMatch + 1}/${matchCount}` : '无'}
             </span>
           )}
           <button onClick={onClose} className="p-1.5 rounded-lg text-gm-text-tertiary hover:text-gm-text hover:bg-gm-surface-hover transition-colors">

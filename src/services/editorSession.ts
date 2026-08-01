@@ -3,7 +3,7 @@ import type { ViewMode, ViewModeUsageStat } from '@/stores/editorStore'
 export const SCROLL_SYNC_LOCK_MS = 220
 export const MODE_PREWARM_IDLE_DELAY = 650
 export const MODE_PREWARM_ACTIVITY_PAUSE = 1200
-const MODE_PREWARM_HUGE_DOC_LENGTH = 100000
+export const MODE_PREWARM_HUGE_DOC_LENGTH = 100000
 const MODE_PREWARM_DIFF_LINE_LIMIT = 900
 
 // 资源策略常量
@@ -174,7 +174,12 @@ export function getNextPrewarmTarget({
   usage: Partial<Record<PrewarmTargetMode, ViewModeUsageStat>>
 }): PrewarmTargetMode | null {
   const extraCount = level === 'smart' ? 1 : 2
-  const targets: PrewarmTargetMode[] = ['preview']
+  const targets: PrewarmTargetMode[] = []
+  // turbo always includes preview; smart only includes preview for small docs
+  if (level === 'turbo' || contentLength < MODE_PREWARM_HUGE_DOC_LENGTH) {
+    targets.push('preview')
+  }
+  // extra modes (edit-preview, dual-preview, diff-preview) only for small docs
   if (contentLength < MODE_PREWARM_HUGE_DOC_LENGTH) {
     targets.push(...getFrequentPrewarmModes(usage).slice(0, extraCount))
   }

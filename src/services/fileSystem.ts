@@ -43,6 +43,7 @@ export async function openFile(): Promise<FileHandle | null> {
     }
     const content = await readFile(path)
     const name = path.split(/[/\\]/).pop() || 'untitled.md'
+    eventMarker.mark('open-file-read-complete', { fileKind: 'disk', charCount: content.length })
     eventMarker.mark('open-file-complete', { fileKind: 'disk' })
     return { path, name, content }
   }
@@ -63,6 +64,7 @@ export async function openFile(): Promise<FileHandle | null> {
         return
       }
       const content = await file.text()
+      eventMarker.mark('open-file-read-complete', { fileKind: 'browser', charCount: content.length })
       eventMarker.mark('open-file-complete', { fileKind: 'browser' })
       resolve({ path: file.name, name: file.name, content })
     }

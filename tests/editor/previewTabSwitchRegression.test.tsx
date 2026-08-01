@@ -161,13 +161,49 @@ afterEach(() => {
 })
 
 function getLeftPreviewContainer(container: HTMLElement): HTMLElement | null {
-  const all = container.querySelectorAll('.overflow-auto.select-text.bg-gm-surface')
+  const all = container.querySelectorAll('.select-text.bg-gm-surface')
   for (let i = 0; i < all.length; i++) {
     const el = all[i] as HTMLElement
     if (!el.classList.contains('hidden')) return el
   }
   return all[0] as HTMLElement | null
 }
+
+describe('preview horizontal overflow boundary', () => {
+  it('hides pane-wide horizontal overflow while preserving local scrollers', () => {
+    const content = [
+      '# 横向溢出边界',
+      '',
+      '```text',
+      'a'.repeat(200),
+      '```',
+      '',
+      '| 列一 | 列二 |',
+      '| --- | --- |',
+      `| ${'b'.repeat(120)} | 内容 |`,
+    ].join('\n')
+    const tabs = [
+      anonymousTab('tab-a', content),
+      anonymousTab('tab-b', content),
+    ]
+    setupEditor(tabs, 'tab-a', 'dual-preview')
+    useEditorStore.setState({
+      rightPaneTabId: 'tab-b',
+      rightPaneUserSelected: true,
+    })
+
+    const { container } = render(<EditorArea />)
+    const previewPanes = container.querySelectorAll(
+      '.overflow-y-auto.overflow-x-hidden.select-text.bg-gm-surface',
+    )
+
+    expect(previewPanes).toHaveLength(2)
+    previewPanes.forEach((pane) => {
+      expect(pane).not.toHaveClass('overflow-auto')
+    })
+    expect(container.querySelectorAll('pre.overflow-x-auto, div.overflow-x-auto').length).toBeGreaterThanOrEqual(4)
+  })
+})
 
 // ============================================================
 // CORE BUG: "Document switch" useEffect clears restoredPreviewKeysRef

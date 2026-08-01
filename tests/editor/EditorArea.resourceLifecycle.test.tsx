@@ -297,10 +297,10 @@ describe('Real component TTL lifecycle', () => {
 // 2. Real right preview pending/conflict integration
 // ============================================================
 describe('Right preview pending/conflict', () => {
-  /** Find a block in the right preview pane (second .overflow-auto.select-text in dual-preview). */
+  /** Find a block in the right preview pane (second scrollable preview in dual-preview). */
   function altClickRightBlock(container: HTMLElement, blockIndex: number) {
-    const panes = container.querySelectorAll('.overflow-auto.select-text.bg-gm-surface')
-    // In dual-preview mode the right pane is the second .overflow-auto.select-text
+    const panes = container.querySelectorAll('.overflow-y-auto.select-text.bg-gm-surface')
+    // In dual-preview mode the right pane is the second scrollable preview.
     const rightPane = panes[panes.length - 1] as HTMLElement | undefined
     if (!rightPane) throw new Error('Right preview pane not found')
     const wrapper = rightPane.querySelector(`[data-md-block-index="${blockIndex}"]`)
@@ -462,11 +462,11 @@ describe('Large document lifecycle balance', () => {
         act(() => vi.advanceTimersByTime(BALANCED_LARGE_DOC_TTL_MS + 100))
         act(() => vi.advanceTimersByTime(1))
 
-        // Balanced prewarm creates a preview candidate in non-preview modes,
-        // so left-preview is always 1 (active or prewarmed).
+        // Balanced smart + large doc: no hidden preview prewarm.
+        // left-preview is 1 only when visible (preview/edit-preview/dual-preview).
         const expected = {
           editor: modes[i] === 'edit' || modes[i] === 'edit-preview' ? 1 : 0,
-          'left-preview': 1,
+          'left-preview': modes[i] === 'preview' || modes[i] === 'edit-preview' || modes[i] === 'dual-preview' ? 1 : 0,
           'right-preview': modes[i] === 'dual-preview' ? 1 : 0,
           diff: modes[i] === 'diff-preview' ? 1 : 0,
         }
@@ -541,19 +541,20 @@ describe('Prewarm candidate lifecycle', () => {
   })
 
   it('turbo creates editor candidate based on usage', () => {
-    // speed policy keeps the hidden editor, so prewarm creates other candidates
-    // instead of recreating the editor.
+    // Preview mode: editor is not initially mounted (editorMounted=false).
+    // turbo prewarms edit-preview based on high usage, creating the editor.
     setup([anonymousTab('doc-a', '# A')], 'doc-a', 'preview', { modePerformancePolicy: 'speed' })
     useEditorStore.setState({
       viewModeUsage: { 'edit-preview': { count: 15, lastUsedAt: Date.now() } },
     })
     render(<EditorArea />)
 
-    const editorCreatesBefore = countEvent('editor-create')
+    // Editor not mounted initially in preview-only mode
+    expect(countEvent('editor-create')).toBe(0)
 
     act(() => vi.advanceTimersByTime(2500))
-    // speed keeps the editor, so no new editor-create; prewarm creates preview or edit-preview
-    expect(countEvent('editor-create')).toBe(editorCreatesBefore)
+    // turbo prewarms edit-preview (editor) based on usage
+    expect(countEvent('editor-create')).toBeGreaterThanOrEqual(1)
   })
 
   it('turbo creates right preview candidate', () => {
@@ -936,5 +937,176 @@ describe('Performance policy enforcement', () => {
 
     expect(countEvent('model-create')).toBe(createsAfter)
     expect(countEvent('model-dispose')).toBe(disposesAfter)
+  })
+})
+
+// ============================================================
+// 7. Smart large doc: no hidden preview prewarm
+// ============================================================
+describe('Smart large doc prewarm suppression', () => {
+  it('smart + 100000-char doc in edit mode does not create hidden preview', () => {
+    const content = 'x'.repeat(100000)
+    setup([anonymousTab('doc-a', content)], 'doc-a', 'edit', { modePerformancePolicy: 'balanced' })
+    render(<EditorArea />)
+
+    const modelCreatesBefore = countEvent('model-create')
+
+    // Wait for prewarm timer + idle callback
+    act(() => vi.advanceTimersByTime(2500))
+    act(() => vi.advanceTimersByTime(2500))
+
+    // No hidden preview should be created
+    expect(countEvent('model-create')).toBe(modelCreatesBefore)
+    expect(resourceBalance('left-preview')).toBe(0)
+  })
+
+  it('smart + 200000-char doc in edit mode does not create hidden preview', () => {
+    const content = 'x'.repeat(200000)
+    setup([anonymousTab('doc-a', content)], 'doc-a', 'edit', { modePerformancePolicy: 'balanced' })
+    render(<EditorArea />)
+
+    const modelCreatesBefore = countEvent('model-create')
+
+    act(() => vi.advanceTimersByTime(2500))
+    act(() => vi.advanceTimersByTime(2500))
+
+    expect(countEvent('model-create')).toBe(modelCreatesBefore)
+    expect(resourceBalance('left-preview')).toBe(0)
+  })
+
+  it('smart + small doc (50000 chars) still creates hidden preview', () => {
+    const content = 'x'.repeat(50000)
+    setup([anonymousTab('doc-a', content)], 'doc-a', 'edit', { modePerformancePolicy: 'balanced' })
+    render(<EditorArea />)
+
+    const modelCreatesBefore = countEvent('model-create')
+
+    act(() => vi.advanceTimersByTime(2500))
+    act(() => vi.advanceTimersByTime(2500))
+
+    // Small doc should still prewarm preview
+    expect(countEvent('model-create')).toBeGreaterThan(modelCreatesBefore)
+    expect(resourceBalance('left-preview')).toBe(1)
+  })
+
+  it('turbo + 100000-char doc still prewarms preview', () => {
+    const content = 'x'.repeat(100000)
+    setup([anonymousTab('doc-a', content)], 'doc-a', 'edit', { modePerformancePolicy: 'speed' })
+    render(<EditorArea />)
+
+    const modelCreatesBefore = countEvent('model-create')
+
+    act(() => vi.advanceTimersByTime(2500))
+    act(() => vi.advanceTimersByTime(2500))
+
+    // Turbo should still prewarm preview for large docs
+    expect(countEvent('model-create')).toBeGreaterThan(modelCreatesBefore)
+    expect(resourceBalance('left-preview')).toBe(1)
+  })
+})
+
+// ============================================================
+// 8. Preview mode: no hidden editor creation
+// ============================================================
+describe('Preview mode editor suppression', () => {
+  it('preview mode does not create editor instance', () => {
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'preview', { modePerformancePolicy: 'balanced' })
+    render(<EditorArea />)
+
+    // No editor should be created in preview-only mode
+    expect(countEvent('editor-create')).toBe(0)
+    expect(resourceBalance('editor')).toBe(0)
+  })
+
+  it('switching from preview to edit creates editor', () => {
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'preview', { modePerformancePolicy: 'balanced' })
+    render(<EditorArea />)
+
+    expect(countEvent('editor-create')).toBe(0)
+
+    act(() => useEditorStore.getState().setViewMode('edit'))
+
+    expect(countEvent('editor-create')).toBe(1)
+    expect(resourceBalance('editor')).toBe(1)
+  })
+
+  it('switching from preview to edit-preview creates editor and preview works', () => {
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'preview', { modePerformancePolicy: 'balanced' })
+    render(<EditorArea />)
+
+    act(() => useEditorStore.getState().setViewMode('edit-preview'))
+
+    expect(countEvent('editor-create')).toBe(1)
+    expect(resourceBalance('editor')).toBe(1)
+    expect(resourceBalance('left-preview')).toBe(1)
+  })
+
+  it('edit mode creates editor immediately', () => {
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'edit', { modePerformancePolicy: 'balanced' })
+    render(<EditorArea />)
+
+    expect(countEvent('editor-create')).toBe(1)
+    expect(resourceBalance('editor')).toBe(1)
+  })
+})
+
+// ============================================================
+// 9. First-visible events
+// ============================================================
+describe('First-visible events', () => {
+  it('emits editor-first-visible after editor mount in edit mode', () => {
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'edit', { modePerformancePolicy: 'balanced' })
+    render(<EditorArea />)
+
+    // Flush RAF to trigger first-visible event
+    act(() => vi.advanceTimersByTime(1))
+
+    const editorVisibleEvents = lifecycle.events.filter((e) => e.type === 'editor-first-visible')
+    expect(editorVisibleEvents.length).toBe(1)
+    expect(editorVisibleEvents[0].metadata).toMatchObject({
+      charCount: 3,
+      mode: 'edit',
+    })
+  })
+
+  it('emits preview-first-visible after preview mount', () => {
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'preview', { modePerformancePolicy: 'balanced' })
+    render(<EditorArea />)
+
+    act(() => vi.advanceTimersByTime(1))
+
+    const previewVisibleEvents = lifecycle.events.filter((e) => e.type === 'preview-first-visible')
+    expect(previewVisibleEvents.length).toBe(1)
+    expect(previewVisibleEvents[0].metadata).toMatchObject({
+      charCount: 3,
+      mode: 'preview',
+    })
+  })
+
+  it('first-visible events do not contain path or content', () => {
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'edit-preview', { modePerformancePolicy: 'balanced' })
+    render(<EditorArea />)
+
+    act(() => vi.advanceTimersByTime(1))
+
+    const allEvents = lifecycle.events.filter(
+      (e) => e.type === 'editor-first-visible' || e.type === 'preview-first-visible'
+    )
+    for (const event of allEvents) {
+      expect(event.metadata?.path).toBeUndefined()
+      expect(event.metadata?.content).toBeUndefined()
+      expect(event.metadata?.filePath).toBeUndefined()
+      expect(event.metadata?.fileName).toBeUndefined()
+    }
+  })
+
+  it('preview mode does not emit editor-first-visible', () => {
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'preview', { modePerformancePolicy: 'balanced' })
+    render(<EditorArea />)
+
+    act(() => vi.advanceTimersByTime(1))
+
+    const editorVisibleEvents = lifecycle.events.filter((e) => e.type === 'editor-first-visible')
+    expect(editorVisibleEvents.length).toBe(0)
   })
 })

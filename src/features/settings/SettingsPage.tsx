@@ -5,7 +5,16 @@ import appIcon from '@/assets/icon-settings.png'
 import { isTauri } from '@/hooks/useTauri'
 import { LIGHT_PALETTE_OPTIONS, useSettingsStore, type LightPalette } from '@/stores/settingsStore'
 import type { WebSearchConfig } from '@/services/webSearch'
-import { initAiClient, initEmbeddingClient, isLocalApi, testAiConnection, validateAiStatus } from '@/services/ai/aiClient'
+import {
+  CHAT_PROTOCOL_CAPABILITIES,
+  SUPPORTED_CHAT_PROTOCOLS,
+  getChatProtocolCapabilities,
+  initAiClient,
+  initEmbeddingClient,
+  isLocalApi,
+  testAiConnection,
+  validateAiStatus,
+} from '@/services/ai/aiClient'
 import { AI_CHAT_PRESETS, AI_EMBEDDING_PRESETS } from '@/services/ai/types'
 import type { AiConfig, ChatProtocol, CustomPreset, EmbeddingProtocol, ValidateResult } from '@/services/ai/types'
 import { testWebSearchConnection, updateSearchConfig } from '@/services/webSearch'
@@ -24,7 +33,8 @@ import {
   clearAllChatSessions,
   clearMemoriesByStatus,
   confirmMemoryCandidate,
-  loadAllMemories,
+  loadMemoryCount,
+  loadMemoryPage,
   removeMemory,
   toggleMemoryLocked,
   persistMemory,
@@ -49,6 +59,7 @@ import { useUpdateStore } from '@/stores/updateStore'
 import { listAuthorizedApiOrigins, revokeApiOrigin, type AuthorizedApiOrigin } from '@/services/externalHttp'
 import { LegacyMigrationEntry } from '@/components/legacy/LegacyMigrationEntry'
 import { KnowledgeBaseManager } from '@/features/settings/KnowledgeBaseManager'
+import { AiShortcutSettings } from '@/features/settings/AiShortcutSettings'
 
 const AI_ROUTING_GUIDE_URL = 'https://github.com/we-used-to-be/Guanmo-open/blob/main/docs/AI_ROUTING_GUIDE.md'
 
@@ -69,6 +80,7 @@ const TABS_CONFIG = [
   { key: 'ai', text: 'AI 模型' },
   { key: 'editor', text: '编辑器', children: <EditorSettings /> },
   { key: 'memory', text: '记忆', children: <MemorySettings /> },
+  { key: 'ai-shortcuts', text: '快捷操作', children: <AiShortcutSettings /> },
   { key: 'shortcuts', text: '快捷键', children: <ShortcutSettings /> },
   { key: 'general', text: '通用', children: <GeneralSettings /> },
 ]
@@ -448,9 +460,10 @@ function LightPaletteSegmented({
 }
 
 const CHAT_PROTOCOL_OPTIONS: { key: ChatProtocol; label: string }[] = [
-  { key: 'openai-chat', label: 'OpenAI Chat Completions' },
-  { key: 'anthropic-messages', label: 'Anthropic Messages' },
-  { key: 'openai-responses', label: 'OpenAI Responses' },
+  ...SUPPORTED_CHAT_PROTOCOLS.map((key) => ({
+    key,
+    label: CHAT_PROTOCOL_CAPABILITIES[key].label,
+  })),
 ]
 
 const EMB_PROTOCOL_OPTIONS: { key: EmbeddingProtocol; label: string }[] = [
@@ -515,6 +528,15 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
     setChatTesting(true)
     setChatTestResult(null)
     try {
+      const capabilities = getChatProtocolCapabilities(ai.protocol)
+      if (!capabilities.implemented) {
+        setChatTestResult({
+          ok: false,
+          error: 'config',
+          message: capabilities.unsupportedReason,
+        })
+        return
+      }
       const result = await testAiConnection(ai)
       setChatTestResult(result)
     } catch (err) {
@@ -602,7 +624,9 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
 
   // 按协议过滤系统预设 + 合并用户自定义预设
   const filteredSysChatPresets = AI_CHAT_PRESETS.filter((p) => p.key === 'custom' || p.protocol === ai.protocol)
-  const filteredCustomChatPresets = customChatPresets.filter((p) => p.protocol === ai.protocol)
+  const filteredCustomChatPresets = customChatPresets.filter(
+    (p) => p.protocol === ai.protocol && CHAT_PROTOCOL_CAPABILITIES[p.protocol as ChatProtocol]?.implemented
+  )
 
   const chatPresetOptions = [
     ...filteredCustomChatPresets.map((p) => ({ key: p.id, label: p.label })),
@@ -637,6 +661,7 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
       preset.baseUrl === ai.embedding.baseUrl &&
       preset.embeddingModel === ai.embedding.embeddingModel
     )?.key ?? 'custom'
+  const chatProtocolCapabilities = getChatProtocolCapabilities(ai.protocol)
 
   return (
     <div className="w-full pb-6">
@@ -708,7 +733,13 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
 
       {/* 测试连接 */}
       <div className="py-1 flex items-center gap-2">
-        <Button type="default" size="small" loading={chatTesting} onClick={handleChatTest}>
+        <Button
+          type="default"
+          size="small"
+          loading={chatTesting}
+          disabled={!chatProtocolCapabilities.implemented}
+          onClick={handleChatTest}
+        >
           测试连接
         </Button>
         {currentChatPreset !== 'custom' && customChatPresets.some(p => p.id === currentChatPreset) && (
@@ -1199,6 +1230,26 @@ function EditorSettings() {
       </SettingField>
       <Sep />
       <SectionTitle>行为</SectionTitle>
+      <SettingField label="默认打开模式" description="通过文件关联冷启动打开文件时，默认使用编辑或预览模式；已启动时不改变当前模式">
+        <div className="gm-default-mode-segmented" role="radiogroup" aria-label="默认打开模式">
+          {[
+            { key: 'edit', label: '编辑' },
+            { key: 'preview', label: '预览' },
+          ].map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              className="gm-default-mode-segmented__item"
+              data-active={editor.defaultOpenMode === option.key}
+              role="radio"
+              aria-checked={editor.defaultOpenMode === option.key}
+              onClick={() => updateEditorSettings({ defaultOpenMode: option.key as 'edit' | 'preview' })}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </SettingField>
       <SettingField label="自动换行" description="长行自动折行显示">
         <Switch checked={editor.wordWrap} onChange={(v) => updateEditorSettings({ wordWrap: v })} />
       </SettingField>
@@ -1277,7 +1328,15 @@ function ShortcutSettings() {
 }
 
 function GeneralSettings() {
-  const { appearance, updateAiConfig, updateEmbeddingConfig, updateEditorSettings, updateAppearanceSettings, updateWebSearchConfig } = useSettingsStore()
+  const {
+    appearance,
+    updateAiConfig,
+    updateEmbeddingConfig,
+    updateEditorSettings,
+    updateAppearanceSettings,
+    updateWebSearchConfig,
+    resetAiShortcutActions,
+  } = useSettingsStore()
   const [busy, setBusy] = useState(false)
   const [currentVersion, setCurrentVersion] = useState('—')
   const [loadingReleaseNotes, setLoadingReleaseNotes] = useState(false)
@@ -1365,9 +1424,11 @@ function GeneralSettings() {
       autoSendAiShortcut: true,
       inlinePreviewEdit: true,
       modePerformancePolicy: 'balanced',
+      defaultOpenMode: 'preview',
     })
     updateAppearanceSettings({ customCursorEnabled: true, aiMascotAvatarEnabled: false, theme: 'light', lightPalette: 'warm' })
     updateWebSearchConfig({ provider: 'duckduckgo', apiKey: '', maxResults: 5, customUrl: '' })
+    resetAiShortcutActions()
     toast.success('已恢复默认设置')
   }
 
@@ -1569,43 +1630,97 @@ const MEMORY_SOURCE_LABELS: Record<string, string> = {
   manual_created: '手动创建',
 }
 
-function MemorySettings() {
+const MEMORY_PAGE_SIZE = 20
+const CANDIDATE_PAGE_SIZE = 10
+
+export function MemorySettings() {
   const workspacePath = useAppStore((s) => s.workspacePath)
   const [memories, setMemories] = useState<Memory[]>([])
+  const [candidateMemories, setCandidateMemories] = useState<Memory[]>([])
+  const [memoryCounts, setMemoryCounts] = useState({ active: 0, candidate: 0, archived: 0 })
+  const [activeTotal, setActiveTotal] = useState(0)
+  const [candidateTotal, setCandidateTotal] = useState(0)
   const [filter, setFilter] = useState<string>('all')
   const [scopeFilter, setScopeFilter] = useState<'all' | 'global' | 'project'>('all')
+  const [activePage, setActivePage] = useState(0)
+  const [candidatePage, setCandidatePage] = useState(0)
+  const [refreshToken, setRefreshToken] = useState(0)
   const [loading, setLoading] = useState(false)
+  const [queryLoading, setQueryLoading] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [newContent, setNewContent] = useState('')
   const [newCategory, setNewCategory] = useState('preference')
-
-  const refresh = async () => {
-    const all = await loadAllMemories()
-    setMemories(all)
-  }
-
-  useEffect(() => { refresh() }, [])
-
-  const activeMemories = memories.filter((m) => m.status === 'active')
-  const allCandidateMemories = memories.filter((m) => m.status === 'candidate')
-  const archivedMemories = memories.filter((m) => m.status === 'archived' || m.status === 'superseded')
   const normalizedWorkspace = normalizeMemoryScopeKey('project', workspacePath)
-  const matchesScopeFilter = (memory: Memory) => {
-    if (scopeFilter === 'all') return true
-    if (scopeFilter === 'global') return memory.scopeType !== 'project'
-    return memory.scopeType === 'project' && memory.scopeKey === normalizedWorkspace
-  }
-  const candidateMemories = allCandidateMemories.filter(matchesScopeFilter)
-  const scopeFiltered = activeMemories.filter(matchesScopeFilter)
-  const filtered = filter === 'all'
-    ? scopeFiltered
-    : scopeFiltered.filter((m) => m.category === filter)
+
+  const scopeOptions = useMemo(() => {
+    if (scopeFilter === 'global') return { scopeType: 'global' as const }
+    if (scopeFilter === 'project') {
+      return {
+        scopeType: 'project' as const,
+        scopeKey: normalizedWorkspace,
+        includeGlobalForProject: false,
+      }
+    }
+    return {}
+  }, [normalizedWorkspace, scopeFilter])
+
+  useEffect(() => {
+    let cancelled = false
+    const loadPage = async () => {
+      setQueryLoading(true)
+      try {
+        const [activeResult, candidateResult, activeCount, candidateCount, archivedCount] = await Promise.all([
+          loadMemoryPage({
+            statuses: ['active'],
+            category: filter === 'all' ? undefined : filter,
+            ...scopeOptions,
+            limit: MEMORY_PAGE_SIZE,
+            offset: activePage * MEMORY_PAGE_SIZE,
+          }),
+          loadMemoryPage({
+            statuses: ['candidate'],
+            ...scopeOptions,
+            limit: CANDIDATE_PAGE_SIZE,
+            offset: candidatePage * CANDIDATE_PAGE_SIZE,
+          }),
+          loadMemoryCount({ statuses: ['active'] }),
+          loadMemoryCount({ statuses: ['candidate'] }),
+          loadMemoryCount({ statuses: ['archived', 'superseded'] }),
+        ])
+        if (cancelled) return
+
+        const lastActivePage = Math.max(0, Math.ceil(activeResult.total / MEMORY_PAGE_SIZE) - 1)
+        const lastCandidatePage = Math.max(0, Math.ceil(candidateResult.total / CANDIDATE_PAGE_SIZE) - 1)
+        if (activePage > lastActivePage || candidatePage > lastCandidatePage) {
+          setActivePage(Math.min(activePage, lastActivePage))
+          setCandidatePage(Math.min(candidatePage, lastCandidatePage))
+          return
+        }
+
+        setMemories(activeResult.memories)
+        setCandidateMemories(candidateResult.memories)
+        setActiveTotal(activeResult.total)
+        setCandidateTotal(candidateResult.total)
+        setMemoryCounts({
+          active: activeCount,
+          candidate: candidateCount,
+          archived: archivedCount,
+        })
+      } finally {
+        if (!cancelled) setQueryLoading(false)
+      }
+    }
+    void loadPage()
+    return () => { cancelled = true }
+  }, [activePage, candidatePage, filter, refreshToken, scopeOptions])
+
+  const refresh = () => setRefreshToken((current) => current + 1)
 
   const handleDelete = async (id: string) => {
     setLoading(true)
     try {
       await removeMemory(id)
-      await refresh()
+      refresh()
       toast.success('记忆已删除')
     } finally {
       setLoading(false)
@@ -1616,7 +1731,7 @@ function MemorySettings() {
     setLoading(true)
     try {
       await toggleMemoryLocked(id, !locked)
-      await refresh()
+      refresh()
     } finally {
       setLoading(false)
     }
@@ -1626,7 +1741,7 @@ function MemorySettings() {
     setLoading(true)
     try {
       await updateMemoryStatus(id, 'archived')
-      await refresh()
+      refresh()
       toast.success('记忆已归档')
     } finally {
       setLoading(false)
@@ -1636,22 +1751,19 @@ function MemorySettings() {
   const handleConfirmCandidate = async (id: string) => {
     setLoading(true)
     try {
-      const candidate = memories.find((memory) => memory.id === id)
+      const candidate = candidateMemories.find((memory) => memory.id === id)
       const confirmed = await confirmMemoryCandidate(id)
       if (!confirmed) {
-        await refresh()
+        refresh()
         toast.error('候选记忆确认失败：数据库中没有可确认的候选记录')
         return
       }
       if (candidate) {
-        setMemories((current) => current.map((memory) =>
-          memory.id === id
-            ? { ...memory, status: 'active', source: 'user_explicit', updatedAt: Date.now() }
-            : memory
-        ))
         setFilter(candidate.category || 'all')
+        setActivePage(0)
+        setCandidatePage(0)
       }
-      await refresh()
+      refresh()
       toast.success('候选记忆已确认并保存')
     } finally {
       setLoading(false)
@@ -1662,7 +1774,7 @@ function MemorySettings() {
     setLoading(true)
     try {
       await updateMemoryStatus(id, 'ignored')
-      await refresh()
+      refresh()
       toast.success('候选记忆已忽略')
     } finally {
       setLoading(false)
@@ -1692,7 +1804,8 @@ function MemorySettings() {
       setNewContent('')
       setNewCategory('preference')
       setShowForm(false)
-      await refresh()
+      setActivePage(0)
+      refresh()
       toast.success('记忆已添加')
     } finally {
       setLoading(false)
@@ -1713,10 +1826,10 @@ function MemorySettings() {
       )}
       <div className="flex items-center justify-between mb-3">
         <div className="text-caption text-gm-text-secondary">
-          共 {activeMemories.length} 条已保存记忆，{allCandidateMemories.length} 条候选记忆，{archivedMemories.length} 条已归档/替代
+          共 {memoryCounts.active} 条已保存记忆，{memoryCounts.candidate} 条候选记忆，{memoryCounts.archived} 条已归档/替代
         </div>
         <div className="flex items-center gap-2">
-          <Button type="text" size="small" onClick={refresh}>刷新</Button>
+          <Button type="text" size="small" onClick={refresh} disabled={queryLoading}>刷新</Button>
           <Button type="primary" size="small" onClick={() => setShowForm(!showForm)}>
             {showForm ? '取消' : '添加记忆'}
           </Button>
@@ -1756,7 +1869,7 @@ function MemorySettings() {
         </div>
       )}
 
-      {candidateMemories.length > 0 && (
+      {candidateTotal > 0 && (
         <div className="mb-5">
           <div className="flex items-center justify-between mb-2">
             <div>
@@ -1812,6 +1925,29 @@ function MemorySettings() {
               </div>
             ))}
           </div>
+          {candidateTotal > CANDIDATE_PAGE_SIZE && (
+            <div className="mt-3 flex items-center justify-end gap-2">
+              <Button
+                type="default"
+                size="small"
+                disabled={candidatePage === 0 || queryLoading}
+                onClick={() => setCandidatePage((page) => Math.max(0, page - 1))}
+              >
+                上一页
+              </Button>
+              <span className="text-caption text-gm-text-secondary">
+                候选第 {candidatePage + 1} / {Math.ceil(candidateTotal / CANDIDATE_PAGE_SIZE)} 页
+              </span>
+              <Button
+                type="default"
+                size="small"
+                disabled={(candidatePage + 1) * CANDIDATE_PAGE_SIZE >= candidateTotal || queryLoading}
+                onClick={() => setCandidatePage((page) => page + 1)}
+              >
+                下一页
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1827,7 +1963,11 @@ function MemorySettings() {
                 type="button"
                 key={scope}
                 aria-pressed={scopeFilter === scope}
-                onClick={() => setScopeFilter(scope)}
+                onClick={() => {
+                  setScopeFilter(scope)
+                  setActivePage(0)
+                  setCandidatePage(0)
+                }}
                 disabled={scope === 'project' && !workspacePath}
                 className={`min-h-8 rounded-lg border px-3 py-1.5 text-caption font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                   scopeFilter === scope
@@ -1852,7 +1992,10 @@ function MemorySettings() {
                 type="button"
                 key={cat}
                 aria-pressed={filter === cat}
-                onClick={() => setFilter(cat)}
+                onClick={() => {
+                  setFilter(cat)
+                  setActivePage(0)
+                }}
                 className={`min-h-8 rounded-lg border px-3 py-1.5 text-caption font-bold transition-colors ${
                   filter === cat
                     ? 'border-gm-primary bg-gm-primary/10 text-gm-primary'
@@ -1866,16 +2009,16 @@ function MemorySettings() {
         </div>
       </div>
 
-      {filtered.length === 0 ? (
+      {memories.length === 0 ? (
         <div className="text-center py-8 text-caption text-gm-text-tertiary">
-          {activeMemories.length === 0 ? '还没有已保存的长期记忆，可以手动添加或确认候选记忆' : '当前分类没有记忆'}
+          {memoryCounts.active === 0 ? '还没有已保存的长期记忆，可以手动添加或确认候选记忆' : '当前分类没有记忆'}
         </div>
       ) : (
         <Table
           rowKey="id"
           striped
           className="gm-animal-table"
-          dataSource={filtered.map((memory) => ({ ...memory }))}
+          dataSource={memories.map((memory) => ({ ...memory }))}
           columns={[
             {
               title: '记忆',
@@ -1959,6 +2102,29 @@ function MemorySettings() {
             },
           ]}
         />
+      )}
+      {activeTotal > MEMORY_PAGE_SIZE && (
+        <div className="mt-3 flex items-center justify-end gap-2">
+          <Button
+            type="default"
+            size="small"
+            disabled={activePage === 0 || queryLoading}
+            onClick={() => setActivePage((page) => Math.max(0, page - 1))}
+          >
+            上一页
+          </Button>
+          <span className="text-caption text-gm-text-secondary">
+            第 {activePage + 1} / {Math.ceil(activeTotal / MEMORY_PAGE_SIZE)} 页
+          </span>
+          <Button
+            type="default"
+            size="small"
+            disabled={(activePage + 1) * MEMORY_PAGE_SIZE >= activeTotal || queryLoading}
+            onClick={() => setActivePage((page) => page + 1)}
+          >
+            下一页
+          </Button>
+        </div>
       )}
     </div>
   )

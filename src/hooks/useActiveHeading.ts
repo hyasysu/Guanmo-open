@@ -32,8 +32,39 @@ export function useActiveHeading(
 
     if (!enabled) return
 
+    const updateActiveHeading = (clearWhenEmpty = false) => {
+      if (headingPositions.size === 0) {
+        if (clearWhenEmpty) setActiveId(null)
+        return
+      }
+
+      let closestId: string | null = null
+      let closestTop = -Infinity
+
+      headingPositions.forEach((top, id) => {
+        if (top >= 0 && (closestId === null || top < closestTop)) {
+          closestTop = top
+          closestId = id
+        }
+      })
+
+      if (closestId === null) {
+        let minDistance = Infinity
+        headingPositions.forEach((top, id) => {
+          const distance = Math.abs(top)
+          if (distance < minDistance) {
+            minDistance = distance
+            closestId = id
+          }
+        })
+      }
+
+      setActiveId(closestId)
+    }
+
     // 使用 rAF 循环检测容器是否已挂载
     let disposed = false
+    let removeScrollListener: (() => void) | null = null
 
     const tryObserve = () => {
       if (disposed) return
@@ -41,14 +72,18 @@ export function useActiveHeading(
       const container = containerRef.current
       if (!container) {
         // 容器还没挂载，下一帧再试
-        rafRef.current = requestAnimationFrame(tryObserve)
+        rafRef.current = requestAnimationFrame(() => {
+          rafRef.current = null
+          tryObserve()
+        })
         return
       }
 
       // 创建 IntersectionObserver
-      observerRef.current = new IntersectionObserver(
+      const observer = new IntersectionObserver(
         (entries) => {
           entries.forEach((entry) => {
+            if (!observedHeadings.has(entry.target)) return
             const id = entry.target.getAttribute('data-heading-id')
             if (!id) return
 
@@ -60,30 +95,7 @@ export function useActiveHeading(
           })
 
           // 选择最靠近视口顶部的标题
-          if (headingPositions.size > 0) {
-            let closestId: string | null = null
-            let closestTop = -Infinity
-
-            headingPositions.forEach((top, id) => {
-              if (top >= 0 && (closestId === null || top < closestTop)) {
-                closestTop = top
-                closestId = id
-              }
-            })
-
-            if (closestId === null) {
-              let minDistance = Infinity
-              headingPositions.forEach((top, id) => {
-                const distance = Math.abs(top)
-                if (distance < minDistance) {
-                  minDistance = distance
-                  closestId = id
-                }
-              })
-            }
-
-            setActiveId(closestId)
-          }
+          updateActiveHeading()
         },
         {
           root: container,
@@ -92,12 +104,44 @@ export function useActiveHeading(
           threshold: 0,
         }
       )
+      observerRef.current = observer
 
-      // 观察所有标题元素
-      const headings = container.querySelectorAll(headingSelector)
-      headings.forEach((heading) => {
-        observerRef.current?.observe(heading)
-      })
+      const observedHeadings = new Set<Element>()
+      const syncObservedHeadings = () => {
+        if (disposed) return
+
+        const currentHeadings = new Set(container.querySelectorAll(headingSelector))
+        let removedHeading = false
+
+        observedHeadings.forEach((heading) => {
+          if (currentHeadings.has(heading)) return
+          observer.unobserve(heading)
+          observedHeadings.delete(heading)
+          const id = heading.getAttribute('data-heading-id')
+          if (id) headingPositions.delete(id)
+          removedHeading = true
+        })
+
+        currentHeadings.forEach((heading) => {
+          if (observedHeadings.has(heading)) return
+          observedHeadings.add(heading)
+          observer.observe(heading)
+        })
+
+        if (removedHeading) updateActiveHeading(true)
+      }
+
+      syncObservedHeadings()
+      const scheduleHeadingSync = () => {
+        if (rafRef.current !== null) return
+        rafRef.current = requestAnimationFrame(() => {
+          rafRef.current = null
+          syncObservedHeadings()
+        })
+      }
+      container.addEventListener('scroll', scheduleHeadingSync, { passive: true })
+      removeScrollListener = () => container.removeEventListener('scroll', scheduleHeadingSync)
+      scheduleHeadingSync()
     }
 
     tryObserve()
@@ -112,6 +156,7 @@ export function useActiveHeading(
         observerRef.current.disconnect()
         observerRef.current = null
       }
+      removeScrollListener?.()
       headingPositions.clear()
     }
   }, [containerRef, headingSelector, trigger, enabled])

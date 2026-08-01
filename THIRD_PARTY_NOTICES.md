@@ -1,7 +1,7 @@
 # Third-party notices
 
 This repository includes third-party code and assets that are not covered by
-Guanmo's project-level MIT license.
+GuanMo's project-level MIT license.
 
 ## animal-island-ui
 
@@ -16,5 +16,5 @@ Nintendo art, code, or resource files. It also contains non-commercial-use
 notes that are more restrictive than the upstream MIT LICENSE. Review the
 upstream repository before commercial distribution.
 
-Guanmo is not an official Nintendo product and has no association,
+GuanMo is not an official Nintendo product and has no association,
 authorization, or cooperation with Nintendo Co., Ltd.

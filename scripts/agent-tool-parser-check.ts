@@ -241,6 +241,8 @@ const selectionContext = {
 assert.doesNotMatch(BASE_SYSTEM_PROMPT, /普通问答和简单解释/)
 assert.match(BASE_SYSTEM_PROMPT, /解释本轮 selection 内容时，回答深度应由选中内容决定/)
 assert.match(BASE_SYSTEM_PROMPT, /不得为了简短强行压缩为一句话，也不强制套用固定标题或章节/)
+assert.match(BASE_SYSTEM_PROMPT, /只是翻译本轮 selection 内容，应直接输出译文/)
+assert.match(BASE_SYSTEM_PROMPT, /明确要求替换、写回或修改原文时，翻译才属于文件修改/)
 const selectionExplanationHistory = [
   { role: 'user' as const, content: 'Node 为什么不适合 CPU 密集' },
   { role: 'assistant' as const, content: 'Node 的事件循环不适合长时间 CPU 计算。' },
@@ -265,12 +267,25 @@ for (const query of ['总结这段', '请解释这段内容', '解释一下这�
   assert.equal(classifySelectionRequest(query, selectionContext), 'fast', query)
   assert.deepEqual(detectIntentScores(query, selectionContext).candidates, [], query)
 }
-for (const query of ['翻译选中内容', '润色这段', '改写选区']) {
+for (const query of ['润色这段', '改写选区']) {
   assert.equal(classifySelectionRequest(query, selectionContext), 'fast', query)
   const result = detectIntentScores(query, selectionContext)
   assert.equal(result.candidates.includes('file_write'), true, query)
   assert.equal(result.candidates.includes('file_read'), false, query)
 }
+for (const query of ['翻译选中内容', '请翻译这段内容']) {
+  assert.equal(classifySelectionRequest(query, selectionContext), 'fast', query)
+  assert.equal(isDocumentRewriteIntent(query), false, query)
+  assert.deepEqual(detectIntentScores(query, selectionContext).candidates, [], query)
+  assert.equal(resolveAiAnswerMode(classifySelectionRequest(query, selectionContext), false), 'selection_direct', query)
+}
+for (const query of ['翻译并替换原文', '请把选中文本翻译后写回']) {
+  assert.equal(classifySelectionRequest(query, selectionContext), 'fast', query)
+  assert.equal(isDocumentRewriteIntent(query), true, query)
+  const result = detectIntentScores(query, selectionContext)
+  assert.deepEqual(result.candidates, ['file_write'], query)
+}
+assert.equal(isDocumentRewriteIntent('替换选中文本'), true)
 for (const query of ['结合上下文润色这段', '根据前后文改写选区', '优化标题层级']) {
   const result = detectIntentScores(query, selectionContext)
   assert.equal(result.candidates.includes('file_write'), true, query)

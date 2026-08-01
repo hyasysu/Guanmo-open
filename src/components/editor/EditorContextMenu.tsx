@@ -4,6 +4,8 @@ import { useEditorStore } from '@/stores/editorStore'
 import { addSelectionContextTag, setAiShortcutPrompt } from '@/services/aiContext'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { toast } from '@/services/toast'
+import { useSettingsStore } from '@/stores/settingsStore'
+import { AiShortcutMenuItems } from './AiShortcutMenuItems'
 
 interface MenuState {
   x: number
@@ -18,6 +20,7 @@ interface EditorContextMenuProps {
 export function EditorContextMenu({ viewRef }: EditorContextMenuProps) {
   const [menu, setMenu] = useState<MenuState | null>(null)
   const activeTab = useEditorStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
+  const hasEnabledAiShortcut = useSettingsStore((s) => s.aiShortcutActions.some((action) => action.enabled))
   const wrapperRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -161,14 +164,13 @@ export function EditorContextMenu({ viewRef }: EditorContextMenuProps) {
           <ContextMenuGroupTitle>基础操作</ContextMenuGroupTitle>
           <ContextMenuItem onClick={handleCopy}>复制</ContextMenuItem>
           <ContextMenuItem onClick={handleAddSelectionToAi}>添加到 AI 上下文</ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuGroupTitle>AI 助手</ContextMenuGroupTitle>
-          <ContextMenuItem onClick={() => handleAiAction('请解释这段内容')}>AI 解释这段</ContextMenuItem>
-          <ContextMenuItem onClick={() => handleAiAction('请结合上下文解释这段内容，优先读取选区附近内容，不要默认阅读全文')}>AI 结合上下文解释</ContextMenuItem>
-          <ContextMenuItem onClick={() => handleAiAction('请总结这段内容')}>AI 总结这段</ContextMenuItem>
-          <ContextMenuItem onClick={() => handleAiAction('请改写这段内容，使其更清晰')}>AI 改写这段</ContextMenuItem>
-          <ContextMenuItem onClick={() => handleAiAction('请优化选中文本的 Markdown 格式：可以调整标题、列表、引用、代码块、表格等 Markdown 标记；不得改变原文内容、语义和顺序，不得新增信息。')}>AI 优化格式</ContextMenuItem>
-          <ContextMenuItem onClick={() => handleAiAction('请翻译这段内容')}>AI 翻译</ContextMenuItem>
+          {hasEnabledAiShortcut && (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuGroupTitle>AI 助手</ContextMenuGroupTitle>
+              <AiShortcutMenuItems onAction={handleAiAction} />
+            </>
+          )}
           <ContextMenuSeparator />
           <ContextMenuGroupTitle>Markdown 格式</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => wrapSelection('**', '**')}>加粗</ContextMenuItem>

@@ -21,4 +21,25 @@ if (typeof window !== 'undefined') {
       dispatchEvent: () => false,
     }),
   })
+
+  if (typeof (window as unknown as { ResizeObserver?: unknown }).ResizeObserver !== 'function') {
+    class ResizeObserverStub {
+      private _cb: ResizeObserverCallback
+      private _targets = new Set<Element>()
+      constructor(cb: ResizeObserverCallback) { this._cb = cb }
+      observe(target: Element) {
+        this._targets.add(target)
+      }
+      unobserve(target: Element) {
+        this._targets.delete(target)
+      }
+      disconnect() {
+        this._targets.clear()
+      }
+    }
+    Object.defineProperty(window, 'ResizeObserver', {
+      writable: true,
+      value: ResizeObserverStub,
+    })
+  }
 }

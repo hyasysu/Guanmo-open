@@ -131,7 +131,7 @@ const SELECTION_EXPLICIT_LOOKUP_PATTERN = /(搜索|检索|查询|知识库|本�
 const SELECTION_CONTEXT_RISK_PATTERN = /(为什么|为何|怎么|如何|原因|理由|推导|证明|怎么算|哪里错|错在哪|是否正确|对不对|区别|对比|不同|联系|关系|改进|优化|改成)/i
 const SELECTION_QUESTION_PATTERN = /(为什么|为何|怎么|如何|原因|理由|推导|证明|怎么算|哪里错|错在哪|是否正确|对不对|区别|对比|不同|联系|关系)/i
 const SELECTION_FAST_PATTERN = /(总结|翻译|润色|改写|解释|说明|分析|整理|提炼|格式化|概述|归纳|含义|意思)/i
-const DOCUMENT_REWRITE_PATTERN = /(改写|润色|优化|重写|覆写|调整(?:结构|层级|语气|措辞|格式)?|扩写|缩写|精简|压缩|续写|翻译|格式化|优化\s*Markdown|Markdown\s*格式|标题层级|保留原意|语气|措辞|更(?:正式|自然|简洁|清晰|学术|口语|严谨|流畅)|改成|改为)/i
+const DOCUMENT_REWRITE_PATTERN = /(改写|润色|优化|重写|覆写|替换|写回|调整(?:结构|层级|语气|措辞|格式)?|扩写|缩写|精简|压缩|续写|格式化|优化\s*Markdown|Markdown\s*格式|标题层级|保留原意|语气|措辞|更(?:正式|自然|简洁|清晰|学术|口语|严谨|流畅)|改成|改为)/i
 const LOCAL_RESEARCH_PATTERN = /(研究|调研|综述|梳理|归纳|综合|对比|比较|分析).*(知识库|本地(?:知识|文档|资料)|文档库|资料库|笔记库|我的(?:文档|笔记|资料)|资料里|笔记里|文档里|已有资料|本地资料|本地知识库)|(?:知识库|本地(?:知识|文档|资料)|文档库|资料库|笔记库|我的(?:文档|笔记|资料)|资料里|笔记里|文档里|已有资料|本地资料|本地知识库).*(研究|调研|综述|梳理|归纳|综合|对比|比较|分析|有没有|是否|哪些|如何|为什么|结论|观点|证据)|(?:根据|基于|结合).*(知识库|本地(?:知识|文档|资料)|文档库|资料库|笔记库|我的(?:文档|笔记|资料)|已有资料|本地资料|本地知识库).*(回答|分析|归纳|综合|对比|比较|判断|说明)|资料里有没有|笔记里有没有|文档里有没有|根据知识库|结合我的笔记|结合我的资料/i
 const TOPIC_RESEARCH_PATTERN = /^(?:(?:请|帮我|麻烦)(?:先)?\s*)?(?:研究一下|调研一下|做个研究|做一份研究|做个调研|做一份调研|综述一下|梳理一下|归纳一下|综合分析一下|研究|调研|综述|梳理|归纳|综合分析)[\s：:，,]*(.+)$/i
 const SCOPED_TEXT_TARGET_PATTERN = /^(?:这个|这份|这篇|这段|当前|本轮|选中|上述|上面|以下|该(?:文件|文档|笔记|文章|内容|文本|选区))/i
@@ -340,14 +340,59 @@ export function detectIntentScores(
 }
 
 /**
- * 判断是否应该使用 Agent 模式
+ * 判断是否应该使用 Agent 模式（收紧弱信号）。
+ *
+ * 规则：
+ * - 无候选能力 → direct
+ * - 有强信号（strong keyword / regex / classifier / context）→ agent
+ * - 多个不同能力的弱信号（≥2 个不同 capability）→ agent
+ * - 单一弱关键词 → direct（这是收紧的核心）
  */
 export function shouldUseAgentMode(
   query: string,
   context: AppContext = {}
 ): boolean {
   const result = detectIntentScores(query, context)
-  return result.candidates.length > 0
+  if (result.candidates.length === 0) return false
+
+  // 有强依赖能力（score >= 4）→ agent
+  if (result.required.length > 0) return true
+
+  // 单一弱词（不含空格）不应被 regex 视为强信号
+  const isSingleWeakWord = !query.trim().includes(' ')
+
+  // 有非弱信号（strong / classifier / context，以及非单一弱词的 regex）→ agent
+  const hasStrongSignal = result.scores.some((s) =>
+    s.signals.some(
+      (sig) => {
+        if (sig.startsWith('strong:') || sig.startsWith('classifier:') || sig.startsWith('context:')) {
+          return true
+        }
+        // regex 信号：单一弱词不视为强信号
+        if (sig.startsWith('regex:') && !isSingleWeakWord) {
+          return true
+        }
+        return false
+      },
+    ),
+  )
+  if (hasStrongSignal) return true
+
+  // 多个不同弱关键词（≥2 个不同的弱关键词）→ agent
+  const weakKeywords = new Set<string>()
+  for (const s of result.scores) {
+    if (s.score > 0 && !s.isRequired) {
+      for (const sig of s.signals) {
+        if (sig.startsWith('weak:')) {
+          weakKeywords.add(sig.slice(5))
+        }
+      }
+    }
+  }
+  if (weakKeywords.size >= 2) return true
+
+  // 单一弱关键词 → direct
+  return false
 }
 
 /**

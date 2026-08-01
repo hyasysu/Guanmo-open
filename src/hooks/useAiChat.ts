@@ -3,38 +3,26 @@ import { useChatStore } from '@/stores/chatStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useAppStore } from '@/stores/appStore'
 import { getAiClient, getEmbeddingClient, getEmbeddingConfig, initAiClient, initEmbeddingClient, isAiReady, isEmbeddingReady, isLocalApi } from '@/services/ai/aiClient'
-import type { ChatMessage, ChatMessageSource } from '@/services/ai/types'
 import { SYSTEM_TEMPERATURE } from '@/services/ai/types'
-import { initAgent, runAgent, shouldUseAgent } from '@/services/agent'
-import { classifySelectionRequest, detectIntentScores, shouldIncludeFullDocumentContext, shouldAllowMemoryWrite } from '@/services/agent/intentDetector'
-import { buildCandidateTools } from '@/services/agent/toolSelector'
+import { initAgent, runAgent } from '@/services/agent'
+import { shouldIncludeFullDocumentContext } from '@/services/agent/intentDetector'
+import { makeRoutingDecision } from '@/services/agent/routingService'
 import type { AgentStep, AgentTaskContext } from '@/services/agent/types'
-import { createAgentTaskContext, decodeAgentStepEvent, decodeKnowledgeSearchOutcome, resolveAgentContextContinuation } from '@/services/agent/session'
+import { createAgentTaskContext, decodeAgentStepEvent, decodeKnowledgeSearchOutcome } from '@/services/agent/session'
 import type { ContextTag } from '@/types/contextTag'
 import { buildContextFromTags } from '@/services/contextBuilder'
 import { readFile as readTauriFile } from '@/hooks/useTauri'
-import { setAgentScopeContext, type AgentEditTarget } from '@/services/aiScope'
+import { setAgentScopeContext } from '@/services/aiScope'
 import { searchScopedKnowledge, shouldTriggerScopedRag, streamFinalAnswer } from '@/services/aiChatFlow'
-import { buildChatMessageTags, buildMessagesForModel, buildSupplementalAiContext, countRagSourcesInContext, createContextMeta, createUserChatMessage, prepareChatHistoryForModel, resolveAiAnswerMode } from '@/services/aiChatMessages'
-import { stripToolCallJson } from '@/services/agent/toolCallParser'
-import { buildMemoryContext, classifyMemoryRetrievalIntent, isPersonalizedRewriteMemoryIntent, processMemoryCandidateExtraction, searchMemories } from '@/services/memory/memoryService'
-import type { Memory } from '@/services/database/persistence'
+import { buildAgentFinalAnswerMessages, buildChatMessageTags, buildMessagesForModel, buildSupplementalAiContext, countRagSourcesInContext, createContextMeta, createUserChatMessage, prepareChatHistoryForModel, resolveAiAnswerMode } from '@/services/aiChatMessages'
+import { hideLikelyToolJsonPrefix, stripToolCallJson } from '@/services/agent/toolCallParser'
+import { buildMemoryContext, isPersonalizedRewriteMemoryIntent, processMemoryCandidateExtraction, searchMemories } from '@/services/memory/memoryService'
 import type { ManualCapability } from '@/components/ai/ManualToolToggle'
 import { hydrateSettingsSecrets } from '@/services/settingsSecrets'
 import { singletonManager, SINGLETON_IDS } from '@/services/singletonPromise'
 import { promoteTask } from '@/services/idleScheduler'
-
-function isCancelLastAppliedEdit(content: string, history: ChatMessage[]): boolean {
-  const text = content.trim()
-  if (!/^(算了|不改了|还是不改了|别改了|不用改了|先不改了|先别改了)/.test(text)) {
-    return false
-  }
-  return history.some((msg) =>
-    msg.content.includes('用户确认并应用了对文件') &&
-    msg.content.includes('原文：') &&
-    msg.content.includes('新文本：')
-  )
-}
+import { buildAgentRunRequest, buildRoutingAppContext } from '@/services/agent/requestBuilder'
+import { buildAgentResultPresentation, toLocalMessageSources } from '@/services/agent/sourceMetadata'
 
 function getAgentProgressText(step: AgentStep): string {
   if (step.type === 'progress') {
@@ -46,7 +34,11 @@ function getAgentProgressText(step: AgentStep): string {
     }[step.progressStage || 'rag_searching']
   }
   if (step.type === 'thought') return 'AI 正在判断下一步处理方式...'
-  if (step.type === 'observation') return '工具结果已返回，正在整理下一步...'
+  if (step.type === 'observation') {
+    return step.toolName
+      ? `${getAgentToolLabel(step.toolName)}已完成，正在整理下一步...`
+      : '工具结果已返回，正在整理下一步...'
+  }
 
   switch (step.toolName) {
     case 'search_knowledge':
@@ -74,96 +66,19 @@ function getAgentProgressText(step: AgentStep): string {
   }
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function sourceFileName(filePath: string, fallback?: string): string {
-  return filePath.split(/[/\\]/).pop() || fallback || filePath
-}
-
-function extractKnowledgeSourcesFromSteps(steps: AgentStep[]): ChatMessageSource[] {
-  const sources: ChatMessageSource[] = []
-  const seen = new Set<string>()
-
-  for (const step of steps) {
-    if (step.type !== 'observation') continue
-    try {
-      const parsed = JSON.parse(step.content)
-      if (!isPlainObject(parsed) || !Array.isArray(parsed.results)) continue
-
-      for (const item of parsed.results) {
-        if (!isPlainObject(item)) continue
-        if (
-          typeof item.filePath !== 'string'
-          || typeof item.startLine !== 'number'
-          || typeof item.endLine !== 'number'
-        ) {
-          continue
-        }
-
-        const key = `${item.filePath}:${item.startLine}:${item.endLine}`
-        if (seen.has(key)) continue
-        seen.add(key)
-
-        sources.push({
-          kind: 'local',
-          filePath: item.filePath,
-          fileName: sourceFileName(item.filePath, typeof item.title === 'string' ? item.title : undefined),
-          titlePath: Array.isArray(item.titlePath)
-            ? item.titlePath.filter((part): part is string => typeof part === 'string')
-            : undefined,
-          heading: typeof item.heading === 'string' ? item.heading : undefined,
-          startLine: item.startLine,
-          endLine: item.endLine,
-        })
-      }
-    } catch {
-      // Non-JSON observations are normal for other tools.
-    }
-  }
-
-  return sources
-}
-
-function buildEditTargets(tags: ContextTag[] = []): AgentEditTarget[] {
-  return tags
-    .filter((tag) =>
-      (tag.type === 'selection' || tag.type === 'file')
-      && typeof tag.filePath === 'string'
-      && tag.filePath.trim().length > 0
-    )
-    .map((tag, index) => ({
-      id: `edit-target-${index + 1}`,
-      type: tag.type as 'selection' | 'file',
-      title: tag.title,
-      filePath: tag.filePath as string,
-      selectionFrom: tag.selectionFrom,
-      selectionTo: tag.selectionTo,
-    }))
-}
-
-function buildEditTargetsContext(editTargets: AgentEditTarget[]): string {
-  if (editTargets.length === 0) {
-    return [
-      '【本轮可编辑目标】',
-      '无。本轮没有新的 selection 或 file 标签；如用户要求修改文本，只能提示重新添加目标标签。',
-    ].join('\n')
-  }
-
-  return [
-    '【本轮可编辑目标】',
-    '以下 targetId 由系统根据本轮新增标签生成，是本轮唯一可用于文本修改确认卡的写授权。需要修改时调用 replace_current_tab_text，并优先传 targetId。',
-    ...editTargets.map((target) => [
-      `- targetId: ${target.id}`,
-      `  type: ${target.type}`,
-      `  path: ${target.filePath}`,
-      `  title: ${target.title}`,
-      typeof target.selectionFrom === 'number' && typeof target.selectionTo === 'number'
-        ? `  selectionRange: ${target.selectionFrom}-${target.selectionTo}`
-        : '',
-    ].filter(Boolean).join('\n')),
-  ].join('\n')
+function getAgentToolLabel(toolName: string): string {
+  return {
+    search_knowledge: '本地知识库检索',
+    search_memory: '长期记忆读取',
+    list_database_contents: '知识库索引概览读取',
+    list_memories: '记忆库概览读取',
+    web_search: '联网搜索',
+    save_memory: '长期记忆写入',
+    read_context_file: '授权文件读取',
+    read_selection_context: '上下文读取',
+    replace_current_tab_text: '修改确认卡片生成',
+    get_current_time: '系统时间读取',
+  }[toolName] || `工具 ${toolName}`
 }
 
 export function useAiChat() {
@@ -327,79 +242,40 @@ export function useAiChat() {
       }
       updateRequestMessage('正在初始化模型连接...')
 
-      // Agent 自动切换：意图检测 + 工具裁剪
+      // Agent 自动切换：统一路由决策
       const tagCount = contextTags?.length || 0
       const latestVisibleAssistant = [...messages].reverse().find(
         (msg) => msg.role === 'assistant' && !msg.hidden && !msg.sessionId
       )
       const hasRecentEditContext = Boolean(latestVisibleAssistant?.editConfirmation)
 
-      // 构建应用上下文
-      const appContext = {
-        hasRecentEdit: hasRecentEditContext,
-        hasOpenFile: Boolean(contextTags?.some((tag) => tag.type === 'file')),
-        hasSelection: Boolean(contextTags?.some((tag) => tag.type === 'selection')),
-        hasContextTags: tagCount > 0,
-      }
+      const appContext = buildRoutingAppContext(contextTags, hasRecentEditContext)
 
-      // 意图检测
-      const intentResult = detectIntentScores(content.trim(), appContext)
-      const inheritedAgentContext = resolveAgentContextContinuation(content.trim(), agentTaskContext)
-      const selectionRequestKind = classifySelectionRequest(content.trim(), appContext)
+      // 统一路由决策（一次性生成，消除 useAiChat 与 executor 的重复判断）
+      const routingDecision = makeRoutingDecision(content.trim(), appContext, {
+        forceAgent,
+        manualCapabilities,
+        agentTaskContext,
+        hasRecentEditContext,
+        contextTagCount: tagCount,
+        messages,
+      })
 
-      // 合并手动选择的 capabilities
-      const manualCapabilitiesSet = new Set(manualCapabilities || [])
-      const mergedCandidates = Array.from(new Set([
-        ...manualCapabilitiesSet,
-        ...(inheritedAgentContext?.intent || []),
-        ...intentResult.candidates,
-      ]))
-      const mergedRequired = Array.from(new Set([
-        ...manualCapabilitiesSet,
-        ...(inheritedAgentContext?.requiredCapabilities || []),
-        ...intentResult.required,
-      ]))
+      const selectionRequestKind = routingDecision.selectionRequestKind
+      const candidateToolNames = routingDecision.candidateTools
+      const mergedCandidates = routingDecision.candidates
+      const mergedRequired = routingDecision.required
+      const useAgentMode = routingDecision.mode === 'agent'
 
-      // 构建候选工具
-      let candidateToolNames = inheritedAgentContext
-        ? [...inheritedAgentContext.toolNames]
-        : buildCandidateTools(mergedCandidates)
-      const currentEditTargets = buildEditTargets(contextTags || [])
-      if (currentEditTargets.length > 0 && candidateToolNames.includes('replace_current_tab_text')) {
-        candidateToolNames.unshift('list_current_edit_targets')
-      }
-      if (candidateToolNames.includes('read_selection_context')) {
-        candidateToolNames = [
-          'read_selection_context',
-          ...candidateToolNames.filter((name) => name !== 'read_selection_context'),
-        ]
-      }
-
-      // 检查是否需要记忆写入
-      const explicitMemoryWriteIntent = shouldAllowMemoryWrite(content.trim())
-      if (explicitMemoryWriteIntent && !candidateToolNames.includes('save_memory')) {
-        candidateToolNames.push('save_memory', 'list_memories')
-      }
-      candidateToolNames = Array.from(new Set(candidateToolNames))
-
-      // 判断是否使用 Agent 模式
-      const matchesAgentRule = candidateToolNames.length > 0 || isCancelLastAppliedEdit(content, messages)
-      const useAgentMode = forceAgent === true || matchesAgentRule
-
-      // --- 预检索优化：并行执行记忆检索和知识库检索 ---
+      // --- 记忆预检索 ---
       let memoryContext = ''
       let memoryLookupAttempted = false
-      const memoryIntent = classifyMemoryRetrievalIntent(content.trim())
+      const memoryIntent = routingDecision.memoryIntent
       const personalizedRewriteMemory = isPersonalizedRewriteMemoryIntent(content.trim())
-      const shouldLookupMemory = memoryIntent !== 'none'
-      const shouldLookupKnowledge = mergedCandidates.includes('knowledge')
+      const shouldLookupMemory = routingDecision.shouldLookupMemory
 
       clearAgentSteps()
 
-      // 并行执行预检索
-      const prefetchTasks: Array<Promise<{ type: string; result: unknown }>> = []
-
-      // 记忆预检索
       if (shouldLookupMemory) {
         updateRequestMessage('正在检查长期记忆...')
         addAgentStep({
@@ -410,69 +286,24 @@ export function useAiChat() {
           timestamp: Date.now(),
         })
 
-        prefetchTasks.push(
-          (async () => {
-            try {
-              const embeddingClient = isEmbeddingReady() ? getEmbeddingClient() : null
-              const embedding = embeddingClient
-                ? async (text: string, signal?: AbortSignal) => (await embeddingClient.embedding(text, signal)).embedding
-                : undefined
-              const batchEmbedding = embeddingClient
-                ? async (texts: string[], signal?: AbortSignal) => embeddingClient.batchEmbedding(texts, signal)
-                : undefined
-              const memories = await searchMemories(content.trim(), {
-                mode: memoryIntent === 'strong' ? 'strong' : 'light',
-                embedding,
-                batchEmbedding,
-                scopeType: workspacePath ? 'project' : 'global',
-                scopeKey: workspacePath,
-                embeddingModel: getEmbeddingConfig()?.embeddingModel,
-                categories: personalizedRewriteMemory ? ['preference', 'instruction'] : undefined,
-                signal: requestController.signal,
-              })
-              return { type: 'memory', result: memories }
-            } catch (err) {
-              console.warn('[Memory] retrieval failed:', err)
-              return { type: 'memory', result: [] }
-            }
-          })()
-        )
-      }
-
-      // 知识库预检索（如果需要）
-      if (shouldLookupKnowledge && useAgentMode) {
-        addAgentStep({
-          type: 'action',
-          content: '预检索本地知识库',
-          toolName: 'search_knowledge',
-          toolArgs: { query: content.trim(), topK: 5 },
-          timestamp: Date.now(),
-        })
-
-        prefetchTasks.push(
-          (async () => {
-            try {
-              // 这里可以添加知识库预检索逻辑
-              // 目前知识库检索在Agent模式中执行
-              return { type: 'knowledge', result: null }
-            } catch (err) {
-              console.warn('[Knowledge] prefetch failed:', err)
-              return { type: 'knowledge', result: null }
-            }
-          })()
-        )
-      }
-
-      // 等待所有预检索完成
-      if (prefetchTasks.length > 0) {
-        const prefetchResults = await Promise.allSettled(prefetchTasks)
-
-        // 处理记忆预检索结果
-        const memoryResult = prefetchResults.find(
-          r => r.status === 'fulfilled' && r.value.type === 'memory'
-        )
-        if (memoryResult && memoryResult.status === 'fulfilled') {
-          const memories = memoryResult.value.result as Memory[]
+        try {
+          const embeddingClient = isEmbeddingReady() ? getEmbeddingClient() : null
+          const embedding = embeddingClient
+            ? async (text: string, signal?: AbortSignal) => (await embeddingClient.embedding(text, signal)).embedding
+            : undefined
+          const batchEmbedding = embeddingClient
+            ? async (texts: string[], signal?: AbortSignal) => embeddingClient.batchEmbedding(texts, signal)
+            : undefined
+          const memories = await searchMemories(content.trim(), {
+            mode: memoryIntent === 'strong' ? 'strong' : 'light',
+            embedding,
+            batchEmbedding,
+            scopeType: workspacePath ? 'project' : 'global',
+            scopeKey: workspacePath,
+            embeddingModel: getEmbeddingConfig()?.embeddingModel,
+            categories: personalizedRewriteMemory ? ['preference', 'instruction'] : undefined,
+            signal: requestController.signal,
+          })
           if (!isCurrentRequest()) return
           memoryContext = buildMemoryContext(memories)
           memoryLookupAttempted = memoryIntent === 'strong' || Boolean(memoryContext)
@@ -486,6 +317,18 @@ export function useAiChat() {
               : '未检索到相关长期记忆',
             timestamp: Date.now(),
           })
+        } catch (err) {
+          console.warn('[Memory] retrieval failed:', err)
+          if (!isCurrentRequest()) return
+          if (memoryIntent === 'strong') {
+            memoryContext = '系统已按需检索长期记忆：未找到相关长期记忆。'
+            memoryLookupAttempted = true
+          }
+          addAgentStep({
+            type: 'observation',
+            content: '未检索到相关长期记忆',
+            timestamp: Date.now(),
+          })
         }
       }
 
@@ -496,11 +339,15 @@ export function useAiChat() {
         addTimelineItem({ type: 'local_search_start', label: 'Agent 开始规划工具链路' })
         let pendingEditCount = 0
         let liveAgentStepCount = 0
+        let hasVisibleStreamContent = false
         const handleAgentStep = (step: AgentStep) => {
           if (!isCurrentRequest()) return
           liveAgentStepCount++
           addAgentStep(step)
-          updateRequestMessage(getAgentProgressText(step))
+          if (step.type !== 'thought' || !hasVisibleStreamContent) {
+            updateRequestMessage(getAgentProgressText(step))
+          }
+          if (step.type !== 'thought') hasVisibleStreamContent = false
           const event = decodeAgentStepEvent(step)
           const knowledgeOutcome = decodeKnowledgeSearchOutcome(event)
           if (event.type === 'progress') {
@@ -539,8 +386,13 @@ export function useAiChat() {
             addTimelineItem({ type: 'local_search_start', label: '查看知识库索引概览' })
           } else if (event.type === 'action' && event.toolName === 'list_memories') {
             addTimelineItem({ type: 'local_search_start', label: '查看记忆库概览' })
+          } else if (event.type === 'action' && event.toolName) {
+            addTimelineItem({ type: 'local_search_start', label: `执行${getAgentToolLabel(event.toolName)}` })
           } else if (event.type === 'observation') {
-            addTimelineItem({ type: 'web_search_done', label: '工具结果已返回' })
+            addTimelineItem({
+              type: 'web_search_done',
+              label: event.toolName ? `${getAgentToolLabel(event.toolName)}已完成` : '工具结果已返回',
+            })
             if (!event.pendingEdit) return
             const targetMessageId = pendingEditCount === 0
               ? assistantMessageId
@@ -558,36 +410,33 @@ export function useAiChat() {
           }
         }
 
-        // Agent 查询复用本轮预检索到的只读记忆上下文，避免普通转 Agent 后重复检索。
-        const editTargets = currentEditTargets
-        const editTargetsContext = buildEditTargetsContext(editTargets)
-        const agentContext = [tagContext, editTargetsContext, memoryContext].filter(Boolean).join('\n\n')
-        const currentUserIntent = explicitMemoryWriteIntent
-          ? `记住：${content.trim()}`
-          : content.trim()
-        const normalizedUserIntent = inheritedAgentContext?.query || currentUserIntent
-        const agentUserQuery = inheritedAgentContext?.query || content.trim() || '请根据我提供的上下文继续。'
-        const contextOriginalRequest = inheritedAgentContext?.originalRequest || content.trim()
+        const agentRequest = buildAgentRunRequest({
+          content,
+          messages,
+          contextTags,
+          tagContext,
+          memoryContext,
+          routingDecision,
+          hasRecentEditContext,
+          hasPrefetchedMemoryLookup: memoryLookupAttempted,
+          signal: requestController.signal,
+          temperature: SYSTEM_TEMPERATURE.agentPlanning,
+          onStep: handleAgentStep,
+          onStreamContent: (streamedContent) => {
+            if (!isCurrentRequest()) return
+            const visibleContent = hideLikelyToolJsonPrefix(streamedContent)
+            if (!visibleContent) return
+            hasVisibleStreamContent = true
+            updateRequestMessage(visibleContent)
+          },
+          customPreferencePrompt: ai.customPreferencePrompt,
+          streamEnabled: ai.streamEnabled,
+        })
+        const { editTargets, originalRequest: contextOriginalRequest } = agentRequest
 
         try {
           setAgentScopeContext({ contextTags: contextTags || [], editTargets })
-          const result = await runAgent({
-            query: agentUserQuery,
-            chatHistory: prepareChatHistoryForModel(messages),
-            rawQuery: normalizedUserIntent,
-            hasRecentEditContext,
-            hasCurrentEditTarget: Boolean(contextTags?.some((tag) => tag.type === 'selection' || tag.type === 'file')),
-            currentEditTargetCount: contextTags?.filter((tag) => tag.type === 'selection' || tag.type === 'file').length || 0,
-            candidateToolNames,
-            hasPrefetchedMemoryLookup: memoryLookupAttempted,
-            signal: requestController.signal,
-            temperature: SYSTEM_TEMPERATURE.agentPlanning,
-            onStep: handleAgentStep,
-            requiredCapabilities: mergedRequired,
-            untrustedContext: agentContext,
-            customPreferencePrompt: ai.customPreferencePrompt,
-            streamEnabled: ai.streamEnabled,
-          })
+          const result = await runAgent(agentRequest.request)
           if (!isCurrentRequest()) return
           if (candidateToolNames.length > 0) {
             setAgentTaskContext(createAgentTaskContext({
@@ -602,29 +451,18 @@ export function useAiChat() {
             if (!isCurrentRequest()) return
             handleAgentStep(step)
           }
-          const agentSources = result.sources?.length
-            ? result.sources
-            : extractKnowledgeSourcesFromSteps(result.steps)
+          const presentation = buildAgentResultPresentation(result, tagMetadata.length)
           const updateAgentSourceMetadata = () => {
             if (!isCurrentRequest()) return
-            const filteredSources = agentSources
-            updateMessageContextMeta(assistantMessageId, createContextMeta({
-              tagCount: tagMetadata.length,
-              ragSourceCount: filteredSources.length,
-              webSearchUsed: result.steps.some((s) => s.type === 'action' && s.toolName === 'web_search'),
-            }))
-            if (filteredSources.length > 0) updateMessageSources(assistantMessageId, filteredSources)
+            updateMessageContextMeta(assistantMessageId, presentation.contextMeta)
+            if (presentation.sources.length > 0) {
+              updateMessageSources(assistantMessageId, presentation.sources)
+            }
           }
 
           if (result.finalMessages) {
             const client = getAiClient()
-            const finalAnswerMessages = [
-              ...result.finalMessages,
-              {
-                role: 'user' as const,
-                content: '如果工具结果不足、记忆不确定、数据不存在或证据太弱，必须明确说不确定或当前信息不足，禁止脑补。',
-              },
-            ]
+            const finalAnswerMessages = buildAgentFinalAnswerMessages(result.finalMessages)
             updateRequestMessage('正在生成最终回答...')
             addTimelineItem({ type: 'answer_streaming', label: '生成最终回答' })
 
@@ -636,7 +474,7 @@ export function useAiChat() {
               isCancelled: () => !isCurrentRequest(),
               filterToolJson: true,
               signal: requestController.signal,
-              temperature: SYSTEM_TEMPERATURE.agentPlanning,
+              temperature: SYSTEM_TEMPERATURE.agentAnswer,
               reasoningMode,
             })
 
@@ -646,9 +484,7 @@ export function useAiChat() {
             }
             updateAgentSourceMetadata()
           } else {
-            // 过滤工具调用 JSON 后再存入消息
-            const cleanAnswer = stripToolCallJson(result.answer)
-            updateRequestMessage(cleanAnswer || '已生成修改确认卡片，请在下方确认。')
+            updateRequestMessage(presentation.answer)
             updateAgentSourceMetadata()
           }
           addTimelineItem({ type: 'done', label: '生成回答完成' })
@@ -787,15 +623,7 @@ export function useAiChat() {
         webSearchUsed: false,
       })
       if (isCurrentRequest()) updateMessageContextMeta(assistantMessageId, contextMeta)
-      const messageSources = useChatStore.getState().ragSources.map((source) => ({
-        kind: 'local' as const,
-        filePath: source.filePath,
-        fileName: source.fileName,
-        titlePath: source.titlePath,
-        heading: source.heading,
-        startLine: source.startLine,
-        endLine: source.endLine,
-      }))
+      const messageSources = toLocalMessageSources(useChatStore.getState().ragSources)
       if (isCurrentRequest() && messageSources.length > 0) {
         updateMessageSources(assistantMessageId, messageSources)
       }

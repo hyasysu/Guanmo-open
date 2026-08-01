@@ -86,7 +86,7 @@ export function parseMarkdownBlocks(content: string): MarkdownBlock[] {
 
 export function replaceMarkdownBlock(
   content: string,
-  block: Pick<MarkdownBlock, 'startOffset' | 'endOffset' | 'rawSource'>,
+  block: { startOffset: number; endOffset: number; rawSource: string },
   draft: string
 ):
   | { status: 'applied'; content: string }

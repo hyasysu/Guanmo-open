@@ -5,11 +5,11 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirro
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { bracketMatching, syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language'
 import { editorCodeLanguages } from '@/services/editorCodeLanguages'
-import type { MarkdownBlock } from '@/services/markdownBlocks'
+import type { PreviewBlock } from '@/services/markdownPreviewModel'
 import { buildMarkdownEditorTheme, markdownHighlightStyle } from './CodeMirrorEditor'
 
 interface InlineMarkdownBlockEditorProps {
-  block: MarkdownBlock
+  block: PreviewBlock
   initialCursor: number
   fontSize: number
   lineHeight: number
@@ -103,7 +103,7 @@ export function InlineMarkdownBlockEditor({
       viewRef.current = null
     }
   // 编辑器在同一块内保持挂载，避免输入法组合期间因外部主题或字号变化重建。
-  }, [block.renderKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [block.blockId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className={`gm-inline-markdown-editor ${conflict ? 'gm-inline-markdown-editor--conflict' : ''}`}>

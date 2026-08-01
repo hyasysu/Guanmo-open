@@ -2,7 +2,7 @@ export { initAgent, runAgent, selectAgentToolNames, shouldUseAgent } from './exe
 export { registerTool, getTool, getAllTools, getToolDescriptions, getToolsForLLM } from './toolRegistry'
 export { registerBuiltinTools } from './tools'
 export type { ToolDefinition, ToolParameter, AgentStep, AgentResult, AgentResultReason, AgentConfig } from './types'
-export type { AgentRunRequest } from './types'
+export type { AgentRunRequest, RoutingDecision, RoutingMode, RoutingReasonCode } from './types'
 export { decodeAgentStepEvent, reduceAgentSession } from './session'
 export type { AgentSessionEvent, AgentSessionState } from './session'
 
@@ -11,3 +11,6 @@ export { detectIntentScores, shouldAllowMemoryWrite, isImplicitEditContinuation,
 export type { Capability, IntentScore, IntentDetectionResult, AppContext } from './intentDetector'
 export { buildCandidateTools, checkRequiredCapabilities, getRepairTools, isWriteTool, isReadTool } from './toolSelector'
 export type { AgentToolName } from './toolSelector'
+
+// 导出统一路由决策服务
+export { makeRoutingDecision } from './routingService'

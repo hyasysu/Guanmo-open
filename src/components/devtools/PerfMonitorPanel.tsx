@@ -108,6 +108,9 @@ const EVENT_LABELS: Record<PerfEvent['type'], string> = {
   'prewarm-create': '预热创建请求',
   'prewarm-cancel': '预热取消',
   'resource-release': '资源回收请求',
+  'open-file-read-complete': '文件读取完成',
+  'editor-first-visible': '编辑器首帧可见',
+  'preview-first-visible': '预览首帧可见',
 }
 
 function formatKb(kb: number) {

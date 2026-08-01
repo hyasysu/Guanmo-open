@@ -300,4 +300,4 @@ node index.js migrate --output ./test-migrated.db
 
 ## 许可证
 
-ISC License
+MIT License（遵循仓库根目录 `LICENSE`）

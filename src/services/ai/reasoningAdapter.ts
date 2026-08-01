@@ -14,6 +14,8 @@ export type ReasoningSupport = true | false | 'unknown'
 interface ReasoningAdapter {
   /** 判断模型是否支持推理 */
   supportsReasoning(model: string): ReasoningSupport
+  /** 用户显式开启时，是否允许通过真实请求探测支持情况 */
+  probeWhenRequested: boolean
   /** 将 reasoningMode 转换为厂商特有参数并应用到请求体 */
   applyReasoning(body: Record<string, unknown>, mode: 'off' | 'on', model: string): void
   /** 移除请求体中的推理参数（用于失败重试） */
@@ -27,6 +29,7 @@ const deepseekAdapter: ReasoningAdapter = {
     if (model.includes('v4') || model.includes('reasoner')) return true
     return 'unknown'
   },
+  probeWhenRequested: true,
   applyReasoning(body, mode, _model) {
     body.thinking = { type: mode === 'on' ? 'enabled' : 'disabled' }
   },
@@ -42,6 +45,7 @@ const openaiAdapter: ReasoningAdapter = {
     if (model.startsWith('o1') || model.startsWith('o3')) return true
     return 'unknown'
   },
+  probeWhenRequested: true,
   applyReasoning(body, mode, _model) {
     if (mode === 'on') {
       body.reasoning_effort = 'medium'
@@ -63,6 +67,7 @@ const anthropicAdapter: ReasoningAdapter = {
     if (model.includes('claude')) return true
     return 'unknown'
   },
+  probeWhenRequested: false,
   applyReasoning(body, mode, _model) {
     body.thinking = { type: mode === 'on' ? 'enabled' : 'disabled' }
   },
@@ -78,6 +83,7 @@ const geminiAdapter: ReasoningAdapter = {
     if (model.includes('thinking')) return true
     return 'unknown'
   },
+  probeWhenRequested: true,
   applyReasoning(body, mode, _model) {
     if (mode === 'on') {
       body.thinkingConfig = { thinkingBudget: 1024 }
@@ -97,6 +103,7 @@ const qwenAdapter: ReasoningAdapter = {
     if (model.includes('qwen')) return true
     return 'unknown'
   },
+  probeWhenRequested: true,
   applyReasoning(body, mode, _model) {
     body.enable_thinking = mode === 'on'
   },
@@ -110,6 +117,7 @@ const glmAdapter: ReasoningAdapter = {
   supportsReasoning() {
     return 'unknown'
   },
+  probeWhenRequested: false,
   applyReasoning(_body, _mode, _model) {
     // GLM 暂不支持思考模式
   },
@@ -123,6 +131,7 @@ const defaultAdapter: ReasoningAdapter = {
   supportsReasoning() {
     return 'unknown'
   },
+  probeWhenRequested: false,
   applyReasoning(_body, _mode, _model) {
     // 未知模型不添加参数
   },
@@ -167,7 +176,7 @@ export function supportsReasoning(provider: ProviderId, model: string): Reasonin
 /**
  * 将 reasoningMode 应用到请求体
  *
- * @returns 是否成功应用（true 表示已添加参数，false 表示模型不支持或 unknown）
+ * @returns 是否已添加参数；unknown 模型仅由可探测的适配器发起真实请求验证
  */
 export function applyReasoningMode(
   provider: ProviderId,
@@ -180,11 +189,10 @@ export function applyReasoningMode(
   // false: 明确不支持，忽略
   if (support === false) return false
 
-  // unknown: 默认不添加参数，保持兼容
-  if (support === 'unknown') return false
-
-  // true: 根据 Provider Adapter 添加思考参数
   const adapter = getAdapter(provider)
+  if (support === 'unknown' && (mode !== 'on' || !adapter.probeWhenRequested)) return false
+
+  // 已知支持，或用户显式开启后允许通过 400/422 响应安全探测
   adapter.applyReasoning(body, mode, model)
   return true
 }

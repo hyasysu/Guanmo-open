@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   decideResource,
+  getNextPrewarmTarget,
+  MODE_PREWARM_HUGE_DOC_LENGTH,
   BALANCED_LARGE_DOC_THRESHOLD,
   BALANCED_SMALL_DOC_TTL_MS,
   BALANCED_LARGE_DOC_TTL_MS,
   type ResourceDecisionInput,
+  type PrewarmTargetMode,
 } from '@/services/editorSession'
 
 function baseInput(overrides: Partial<ResourceDecisionInput> = {}): ResourceDecisionInput {
@@ -127,5 +130,104 @@ describe('decideResource', () => {
       const result = decideResource(baseInput({ policy: 'speed' }))
       expect(result).toEqual({ action: 'keep' })
     })
+  })
+})
+
+describe('getNextPrewarmTarget', () => {
+  function basePrewarmInput(overrides: Partial<{
+    activeMode: 'edit' | 'preview' | 'edit-preview'
+    contentLength: number
+    diffLineCount: number
+    level: 'smart' | 'turbo'
+    usage: Partial<Record<PrewarmTargetMode, { count: number; lastUsedAt: number }>>
+  }> = {}) {
+    return {
+      activeMode: 'edit' as const,
+      contentLength: 5000,
+      diffLineCount: 0,
+      level: 'smart' as const,
+      resolveKey: (mode: PrewarmTargetMode) => `key-${mode}`,
+      warmedKeys: new Set<string>(),
+      usage: {},
+      ...overrides,
+    }
+  }
+
+  it('smart + 小文档返回 preview 预热目标', () => {
+    const result = getNextPrewarmTarget(basePrewarmInput({
+      contentLength: 50000,
+      level: 'smart',
+    }))
+    expect(result).toBe('preview')
+  })
+
+  it('smart + 大文档（>= 10万）不返回 preview 预热目标', () => {
+    const result = getNextPrewarmTarget(basePrewarmInput({
+      contentLength: MODE_PREWARM_HUGE_DOC_LENGTH,
+      level: 'smart',
+    }))
+    expect(result).toBeNull()
+  })
+
+  it('smart + 20万字符不返回 preview 预热目标', () => {
+    const result = getNextPrewarmTarget(basePrewarmInput({
+      contentLength: 200000,
+      level: 'smart',
+    }))
+    expect(result).toBeNull()
+  })
+
+  it('turbo + 大文档仍返回 preview 预热目标', () => {
+    const result = getNextPrewarmTarget(basePrewarmInput({
+      contentLength: 200000,
+      level: 'turbo',
+    }))
+    expect(result).toBe('preview')
+  })
+
+  it('turbo + 小文档返回 preview 预热目标', () => {
+    const result = getNextPrewarmTarget(basePrewarmInput({
+      contentLength: 50000,
+      level: 'turbo',
+    }))
+    expect(result).toBe('preview')
+  })
+
+  it('smart + 小文档在 preview 已预热时返回下一候选', () => {
+    const result = getNextPrewarmTarget(basePrewarmInput({
+      contentLength: 50000,
+      level: 'smart',
+      warmedKeys: new Set(['key-preview']),
+    }))
+    // preview is warmed, fallback to next frequent mode
+    expect(result).toBe('edit-preview')
+  })
+
+  it('smart + 小文档在所有候选已预热时返回 null', () => {
+    const result = getNextPrewarmTarget(basePrewarmInput({
+      contentLength: 50000,
+      level: 'smart',
+      warmedKeys: new Set(['key-preview', 'key-edit-preview', 'key-dual-preview', 'key-diff-preview']),
+    }))
+    expect(result).toBeNull()
+  })
+
+  it('smart + 小文档返回高频使用模式作为额外预热目标', () => {
+    const result = getNextPrewarmTarget(basePrewarmInput({
+      contentLength: 50000,
+      level: 'smart',
+      usage: { 'edit-preview': { count: 10, lastUsedAt: Date.now() } },
+    }))
+    // preview is first, edit-preview is second. Since preview is not warmed, it's returned first.
+    expect(result).toBe('preview')
+  })
+
+  it('smart + 大文档跳过所有额外预热模式', () => {
+    const result = getNextPrewarmTarget(basePrewarmInput({
+      contentLength: 200000,
+      level: 'smart',
+      usage: { 'edit-preview': { count: 10, lastUsedAt: Date.now() } },
+    }))
+    expect(result).toBeNull()
   })
 })

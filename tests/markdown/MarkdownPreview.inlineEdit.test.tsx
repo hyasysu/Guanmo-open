@@ -1,8 +1,8 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { StrictMode, useRef, useState } from 'react'
+import { StrictMode, createRef, useRef, useState } from 'react'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import { MarkdownPreview, type MarkdownBlockCommitRequest } from '@/components/editor/MarkdownPreview'
+import { MarkdownPreview, type MarkdownBlockCommitRequest, type MarkdownPreviewHandle } from '@/components/editor/MarkdownPreview'
 import { replaceMarkdownBlock } from '@/services/markdownBlocks'
 
 const hoisted = vi.hoisted(() => {
@@ -108,6 +108,18 @@ function StatefulDelayedPreview({ onCommit }: { onCommit: () => void }) {
 }
 
 describe('MarkdownPreview 预览内源码编辑', () => {
+  it('有无语言标识的围栏代码块使用同款代码框', () => {
+    const { container } = renderPreview({
+      content: '```\nplain text\n```\n\n```txt\nlabeled text\n```',
+    })
+    const codeBlocks = container.querySelectorAll('.gm-code-block')
+
+    expect(codeBlocks).toHaveLength(2)
+    expect(codeBlocks[0]).toHaveTextContent('plain text')
+    expect(codeBlocks[1]).toHaveTextContent('txt')
+    expect(codeBlocks[1]).toHaveTextContent('labeled text')
+  })
+
   it('Front Matter 的多个渲染节点仍归属同一个源码块', () => {
     const { container } = renderPreview({ content: '---\ntitle: 示例\n---\n\n正文' })
     const wrappers = container.querySelectorAll('[data-md-block-index]')
@@ -146,6 +158,49 @@ describe('MarkdownPreview 预览内源码编辑', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /图片/ }))
     expect(screen.getByRole('button', { name: '关闭' })).toBeInTheDocument()
+  })
+
+  it('分块渲染保留跨块 reference link 与 footnote 定义', () => {
+    renderPreview({
+      content: [
+        '正文包含 [参考链接][guide] 与脚注 [^note]。',
+        '',
+        '中间段落。',
+        '',
+        '[guide]: https://example.com/guide "指南"',
+        '',
+        '[^note]: 匿名脚注内容。',
+      ].join('\n'),
+    })
+
+    expect(screen.getByRole('link', { name: '参考链接' })).toHaveAttribute('href', 'https://example.com/guide')
+    expect(screen.getByText('匿名脚注内容。')).toBeInTheDocument()
+  })
+
+  it('大文档首屏只挂载有限数量的顶层块', () => {
+    const content = Array.from({ length: 2000 }, (_, index) => `段落 ${index + 1}`).join('\n\n')
+    const { container } = renderPreview({ content })
+
+    expect(container.querySelectorAll('[data-md-block-index]').length).toBeLessThanOrEqual(12)
+  })
+
+  it('可按全文 offset 定位尚未挂载的预览块', () => {
+    const previewRef = createRef<MarkdownPreviewHandle>()
+    const scrollTo = vi.fn()
+    const host = document.createElement('div')
+    Object.defineProperties(host, {
+      clientHeight: { configurable: true, value: 800 },
+      clientWidth: { configurable: true, value: 1000 },
+      scrollTo: { configurable: true, value: scrollTo },
+    })
+    const content = Array.from({ length: 200 }, (_, index) => `段落 ${index + 1}`).join('\n\n')
+
+    render(<MarkdownPreview ref={previewRef} content={content} />, { container: host })
+    act(() => previewRef.current?.scrollToOffset(content.lastIndexOf('段落 200')))
+
+    expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: expect.any(Number) }))
+    expect(scrollTo.mock.calls[0][0].top).toBeGreaterThan(0)
+    expect(previewRef.current?.getTopForLine(399)).toBeGreaterThan(0)
   })
 
   it.each([

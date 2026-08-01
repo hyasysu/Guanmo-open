@@ -1,4 +1,4 @@
-import type { AgentConfig, AgentProgressStage, AgentStep, AgentResult, AgentRunRequest } from './types'
+import type { AgentConfig, AgentProgressStage, AgentStep, AgentResult, AgentRunRequest, RoutingDecision } from './types'
 import type { ChatMessage, ChatMessageSource } from '@/services/ai/types'
 import { getAiClient, isAiReady } from '@/services/ai/aiClient'
 import { getAllTools, getTool, getToolDescriptions, getToolsForLLM } from './toolRegistry'
@@ -27,6 +27,11 @@ import {
 } from './toolSelector'
 import { getAgentScopeContext } from '@/services/aiScope'
 import { BASE_SYSTEM_PROMPT, CONTEXT_SAFETY_PROMPT, CUSTOM_PROMPT_POLICY, buildUntrustedContextMessage } from '@/services/ai/systemPrompts'
+import {
+  FILE_SUMMARY_ANSWER_PROMPT,
+  LOCAL_RESEARCH_ANSWER_PROMPT,
+  WEB_COMPARISON_ANSWER_PROMPT,
+} from './answerInstructions'
 
 let toolsRegistered = false
 
@@ -41,6 +46,7 @@ function isPendingEditResult(text: string): boolean {
 
 const DEFAULT_CONFIG: AgentConfig = {
   maxSteps: 6,
+  maxToolCalls: 8,
   stepTimeout: 30000,
   systemPrompt: `${BASE_SYSTEM_PROMPT}
 
@@ -148,52 +154,6 @@ function truncate(text: string, maxLen: number): string {
   return text.slice(0, maxLen) + `\n... (已截断，共 ${text.length} 字符)`
 }
 
-const LOCAL_RESEARCH_ANSWER_PROMPT = `本轮是本地阅读研究问题。必须基于已调用的本地资料工具结果回答，不能接 Web 搜索，不能编造未检索到的资料。
-
-回答结构必须包含：
-1. 结论摘要
-2. 主要依据
-3. 来源列表
-4. 推断部分
-5. 信息不足 / 需要补充的资料
-
-要求：
-- 每条关键结论都要能回到本地来源；来源至少写出文件名、标题路径或 heading、行号范围。
-- 多个来源冲突、片段不足或覆盖不完整时，必须明确说明冲突或缺口，不能强行下结论。
-- “推断部分”只能写从来源合理推出的内容，并标明它不是原文直接结论。
-- 如果 search_knowledge 返回空结果或只有弱相关片段，回答重点应是信息缺口，不要套用确定性结论。`
-
-const WEB_COMPARISON_ANSWER_PROMPT = `本轮是“Web + 本地资料对照”问题。必须区分本地知识库结果与 Web 搜索结果，不得把 Web 结果写成本地资料事实，也不得把本地片段当作最新外部事实。
-回答结构优先包含：
-1. 本地资料结论
-2. Web 资料结论
-3. 一致点
-4. 冲突点
-5. 补充点
-6. 无法确认 / 仍需人工判断
-
-要求：
-- 本地来源写出文件名、标题路径或 heading、行号范围。
-- Web 来源写出标题、URL、站点名或发布日期（如有）。
-- 如果本地资料为空但 Web 有结果，明确说明“未找到本地依据，仅基于外部资料”。
-- 如果 Web 搜索关闭、未配置、失败或为空，降级为本地研究回答，并明确说明未完成外部对照。
-- 多个来源冲突或覆盖不完整时，只能说明冲突、缺口和可推断范围，不能强行下结论。`
-
-const FILE_SUMMARY_ANSWER_PROMPT = `本轮是单文件总结。必须优先基于 read_context_file 返回的已授权文件内容回答；只有文件读取失败或内容不足时，才可用 search_knowledge 片段补充，并明确标注范围。
-
-回答必须是结构化文件总结，不能只输出泛泛一段话。先判断文档类型，并采用对应结构：
-- 学习笔记：核心概念、重点、易错点、复习问题
-- 会议/记录：结论、待办、负责人、风险
-- 项目文档：目标、方案、接口/约束、未决问题
-- 普通文章：摘要、主要观点、关键细节、可追问方向
-
-所有类型都必须补充：
-1. 来源依据：写出文件名、heading 或标题路径、行号范围；不得伪造来源。
-2. 信息缺口：内容不足、读取失败、截断、缺少负责人/接口/结论等都要明确说明。
-3. 后续操作建议：只给可追问或可继续阅读的建议，不要自动写回文档、保存记忆或更新知识库。
-
-如果 read_context_file 返回内容被截断，不得声称已覆盖全文；必须说明“当前总结基于已读取范围”。`
-
 function buildFinalAnswerMessages(messages: ChatMessage[], finalInstruction?: string): ChatMessage[] {
   return [
     ...messages,
@@ -210,6 +170,13 @@ function buildFinalAnswerMessages(messages: ChatMessage[], finalInstruction?: st
 interface ToolExecutionResult {
   result: string
   rawResult: string
+}
+
+function buildToolCallKey(name: string, args: Record<string, unknown>): string {
+  return JSON.stringify([
+    name,
+    Object.keys(args).sort().map((key) => [key, args[key]]),
+  ])
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -433,7 +400,10 @@ async function executeToolCalls(
   signal?: AbortSignal,
   selectionContextReadLevels?: Map<string, 1 | 2>,
   onProgress?: (stage: AgentProgressStage) => void,
-): Promise<Array<{ name: string; result: string; rawResult?: string; executed?: boolean }>> {
+  readResultCache?: Map<string, Promise<ToolExecutionResult>>,
+  maxNewToolCalls = Number.POSITIVE_INFINITY,
+  allowWriteBeyondBudget = false,
+): Promise<Array<{ name: string; result: string; rawResult?: string; executed?: boolean; reused?: boolean }>> {
   // 分离读取类和写入类工具
   const readCalls = toolCalls.filter(tc => isReadTool(tc.name))
   const writeCalls = toolCalls.filter(tc => isWriteTool(tc.name))
@@ -442,12 +412,35 @@ async function executeToolCalls(
 
   const regularReadCalls = readCalls.filter((call) => call.name !== 'read_selection_context')
   const selectionContextCalls = readCalls.filter((call) => call.name === 'read_selection_context')
+  let remainingNewToolCalls = maxNewToolCalls
 
   // 普通读类工具并行执行；selectionContext 需要按层级串行执行。
   if (regularReadCalls.length > 0) {
     const readResults = await Promise.allSettled(
       regularReadCalls.map(async tc => {
-        const executed = await executeTool(tc.name, tc.args, timeout, userIntent, signal, onProgress)
+        const cacheKey = buildToolCallKey(tc.name, tc.args)
+        const cached = readResultCache?.get(cacheKey)
+        if (cached) {
+          const reused = await cached
+          return {
+            name: tc.name,
+            result: reused.result,
+            rawResult: reused.rawResult,
+            executed: false,
+            reused: true,
+          }
+        }
+        if (remainingNewToolCalls <= 0) {
+          return {
+            name: tc.name,
+            result: '系统已达到本轮工具调用上限，未执行新的工具调用。请基于已有结果回答，并明确说明信息可能不完整。',
+            executed: false,
+          }
+        }
+        remainingNewToolCalls--
+        const pending = executeTool(tc.name, tc.args, timeout, userIntent, signal, onProgress)
+        readResultCache?.set(cacheKey, pending)
+        const executed = await pending
         return {
           name: tc.name,
           result: executed.result,
@@ -469,6 +462,14 @@ async function executeToolCalls(
   }
 
   for (const call of selectionContextCalls) {
+    if (remainingNewToolCalls <= 0) {
+      results.push({
+        name: call.name,
+        result: '系统已达到本轮工具调用上限，未执行新的工具调用。请基于已有结果回答，并明确说明信息可能不完整。',
+        executed: false,
+      })
+      continue
+    }
     const level: 1 | 2 = call.args.level === 2 ? 2 : 1
     const selectionTargets = getAgentScopeContext()?.editTargets?.filter((target) => target.type === 'selection') || []
     const targetId = typeof call.args.targetId === 'string'
@@ -481,6 +482,7 @@ async function executeToolCalls(
       continue
     }
 
+    remainingNewToolCalls--
     const executed = await executeTool(call.name, call.args, timeout, userIntent, signal, onProgress)
     let succeeded = false
     try {
@@ -503,8 +505,17 @@ async function executeToolCalls(
   // 写入类工具本轮只允许执行第一个，避免多个确认卡片之间出现授权范围错配。
   const firstWriteCall = writeCalls[0]
   if (firstWriteCall) {
-    const executed = await executeTool(firstWriteCall.name, firstWriteCall.args, timeout, userIntent, signal, onProgress)
-    results.push({ name: firstWriteCall.name, result: executed.result, rawResult: executed.rawResult })
+    if (remainingNewToolCalls <= 0 && !allowWriteBeyondBudget) {
+      results.push({
+        name: firstWriteCall.name,
+        result: '系统已达到本轮工具调用上限，未执行新的工具调用。请基于已有结果回答，并明确说明信息可能不完整。',
+        executed: false,
+      })
+    } else {
+      if (remainingNewToolCalls > 0) remainingNewToolCalls--
+      const executed = await executeTool(firstWriteCall.name, firstWriteCall.args, timeout, userIntent, signal, onProgress)
+      results.push({ name: firstWriteCall.name, result: executed.result, rawResult: executed.rawResult })
+    }
   }
   for (const tc of writeCalls.slice(1)) {
     results.push({
@@ -544,10 +555,12 @@ export async function runAgent({
   signal,
   temperature,
   onStep,
+  onStreamContent,
   requiredCapabilities,
   untrustedContext,
   customPreferencePrompt,
   streamEnabled = true,
+  routingDecision,
 }: AgentRunRequest): Promise<AgentResult> {
   initAgent()
 
@@ -564,45 +577,65 @@ export async function runAgent({
   const client = getAiClient()
   const userIntent = rawQuery || query
 
-  // 构建应用上下文
-  const appContext: AppContext = {
+  // 使用统一路由决策或回退到旧逻辑
+  const rd: RoutingDecision | undefined = routingDecision
+
+  // 回退时构建 appContext 和 intentResult（仅当 rd 不存在时使用）
+  const fallbackAppContext = (): AppContext => ({
     hasRecentEdit: hasRecentEditContext,
     hasOpenFile: hasCurrentEditTarget,
     hasSelection: Boolean(getAgentScopeContext()?.contextTags.some((tag) => tag.type === 'selection')),
     hasContextTags: currentEditTargetCount > 0,
-  }
+  })
 
-  // 意图检测
-  const intentResult = detectIntentScores(userIntent, appContext)
-  const isDocumentRewrite = isDocumentRewriteIntent(userIntent)
-  const isWebComparison = isWebComparisonIntent(userIntent)
-  const isLocalResearch = !isWebComparison && isLocalResearchIntent(userIntent)
-  const isFileSummary = !isWebComparison && isFileSummaryIntent(userIntent, appContext)
-  const answerInstruction = isWebComparison
-    ? WEB_COMPARISON_ANSWER_PROMPT
-    : isFileSummary ? FILE_SUMMARY_ANSWER_PROMPT
-    : isLocalResearch ? LOCAL_RESEARCH_ANSWER_PROMPT : undefined
+  // 意图检测 — 优先使用统一路由决策
+  const isDocumentRewrite = rd?.isDocumentRewrite ?? isDocumentRewriteIntent(userIntent)
+  const isWebComparison = rd?.isWebComparison ?? isWebComparisonIntent(userIntent)
+  const isLocalResearch = rd?.isLocalResearch ?? (!isWebComparison && isLocalResearchIntent(userIntent))
+  const isFileSummary = rd?.isFileSummary ?? (!isWebComparison && isFileSummaryIntent(userIntent, fallbackAppContext()))
+  const answerInstruction = rd?.answerInstruction ?? (
+    isWebComparison
+      ? WEB_COMPARISON_ANSWER_PROMPT
+      : isFileSummary ? FILE_SUMMARY_ANSWER_PROMPT
+      : isLocalResearch ? LOCAL_RESEARCH_ANSWER_PROMPT : undefined
+  )
 
   // 合并外部传入的 requiredCapabilities
-  const mergedRequired = requiredCapabilities && requiredCapabilities.length > 0
-    ? Array.from(new Set([...requiredCapabilities, ...intentResult.required]))
-    : intentResult.required
+  const mergedRequired = rd
+    ? (requiredCapabilities && requiredCapabilities.length > 0
+      ? Array.from(new Set([...requiredCapabilities, ...rd.required]))
+      : rd.required)
+    : (() => {
+        const intentResult = detectIntentScores(userIntent, fallbackAppContext())
+        return requiredCapabilities && requiredCapabilities.length > 0
+          ? Array.from(new Set([...requiredCapabilities, ...intentResult.required]))
+          : intentResult.required
+      })()
 
-  // 构建候选工具
-  const candidateTools = candidateToolNames && candidateToolNames.length > 0
-    ? [...candidateToolNames] as AgentToolName[]
-    : buildCandidateTools(intentResult.candidates)
-  if (
-    isDocumentRewrite
-    && appContext.hasSelection
-    && intentResult.candidates.includes('selection_context')
-    && !candidateTools.includes('read_selection_context')
-  ) {
-    candidateTools.unshift('read_selection_context')
+  // 构建候选工具 — 优先使用统一路由决策
+  const candidateTools = rd
+    ? rd.candidateTools
+    : (candidateToolNames && candidateToolNames.length > 0
+      ? [...candidateToolNames] as AgentToolName[]
+      : buildCandidateTools(detectIntentScores(userIntent, fallbackAppContext()).candidates))
+
+  // 工具列表调整（rd 已包含调整，回退时需手动调整）
+  if (!rd) {
+    const fbCtx = fallbackAppContext()
+    const fbIntent = detectIntentScores(userIntent, fbCtx)
+    if (
+      isDocumentRewrite
+      && fbCtx.hasSelection
+      && fbIntent.candidates.includes('selection_context')
+      && !candidateTools.includes('read_selection_context')
+    ) {
+      candidateTools.unshift('read_selection_context')
+    }
+    if (isFileSummary && !candidateTools.includes('read_context_file')) {
+      candidateTools.unshift('read_context_file')
+    }
   }
-  if (isFileSummary && !candidateTools.includes('read_context_file')) {
-    candidateTools.unshift('read_context_file')
-  }
+
   if (isDocumentRewrite && currentEditTargetCount === 0) {
     return {
       answer: '本轮没有可修改的 selection 或 file 标签。请重新框选要改写的文本，或把要整体改写的文件添加为 tag 后再发起请求。',
@@ -612,10 +645,12 @@ export async function runAgent({
     }
   }
 
-  // 判断是否需要编辑确认
-  const requiresEditConfirmation = hasCurrentEditTarget && (
-    intentResult.candidates.includes('file_write')
-    || (hasRecentEditContext && isImplicitEditContinuation(userIntent))
+  // 判断是否需要编辑确认 — 优先使用统一路由决策
+  const requiresEditConfirmation = rd?.requiresEditConfirmation ?? (
+    hasCurrentEditTarget && (
+      detectIntentScores(userIntent, fallbackAppContext()).candidates.includes('file_write')
+      || (hasRecentEditContext && isImplicitEditContinuation(userIntent))
+    )
   )
 
   if (requiresEditConfirmation && currentEditTargetCount > 1) {
@@ -647,6 +682,7 @@ export async function runAgent({
   const knowledgeSources: ChatMessageSource[] = []
   const calledToolNames: string[] = []
   const selectionContextReadLevels = new Map<string, 1 | 2>()
+  const readResultCache = new Map<string, Promise<ToolExecutionResult>>()
   if (hasPrefetchedMemoryLookup) {
     calledToolNames.push('search_memory')
   }
@@ -695,6 +731,7 @@ export async function runAgent({
       }
       if (chunk.content) {
         content += chunk.content
+        onStreamContent?.(content)
       }
       if (chunk.done) break
     }
@@ -763,12 +800,17 @@ export async function runAgent({
       signal,
       selectionContextReadLevels,
       pushToolProgress,
+      readResultCache,
+      Math.max(0, mergedConfig.maxToolCalls - toolCalls),
+      false,
     )
 
-    for (const { name, result, rawResult } of repairResults) {
-      addUniqueSources(knowledgeSources, extractSourcesFromToolResult(name, rawResult || result))
-      calledToolNames.push(name)
-      toolCalls++
+    for (const { name, result, rawResult, executed } of repairResults) {
+      if (executed !== false) {
+        addUniqueSources(knowledgeSources, extractSourcesFromToolResult(name, rawResult || result))
+        calledToolNames.push(name)
+        toolCalls++
+      }
       pushStep({
         type: 'observation',
         content: result,
@@ -822,6 +864,19 @@ export async function runAgent({
   for (let i = 0; i < mergedConfig.maxSteps; i++) {
     if (signal?.aborted) {
       return { answer: '已取消本次 Agent 请求。', steps, toolCalls, reason: 'error', sources: knowledgeSources }
+    }
+    if (toolCalls >= mergedConfig.maxToolCalls && (!requiresEditConfirmation || editToolCalls > 0)) {
+      return {
+        answer: '',
+        steps,
+        toolCalls,
+        reason: 'max_tool_calls',
+        finalMessages: buildFinalAnswerMessages(
+          messages,
+          '本轮已达到工具调用上限。请仅基于已有结果给出当前可确认的结论，并明确说明仍缺少的信息。',
+        ),
+        sources: knowledgeSources,
+      }
     }
 
     // Get AI response with timeout
@@ -910,11 +965,10 @@ export async function runAgent({
       const cleanAnswer = stripToolCallJson(content)
       if (cleanAnswer || content) {
         return {
-          answer: '',
+          answer: cleanAnswer || content,
           steps,
           toolCalls,
           reason: 'completed',
-          finalMessages: buildFinalAnswerMessages(messages, answerInstruction),
           sources: knowledgeSources,
         }
       }
@@ -934,13 +988,15 @@ export async function runAgent({
     }
 
     // 执行工具调用
-    pushStep({
-      type: 'action',
-      content: `调用工具: ${parsedToolCalls.map(tc => tc.name).join(', ')}`,
-      toolName: parsedToolCalls[0].name,
-      toolArgs: parsedToolCalls[0].args,
-      timestamp: Date.now(),
-    })
+    for (const toolCall of parsedToolCalls) {
+      pushStep({
+        type: 'action',
+        content: `调用工具: ${toolCall.name}`,
+        toolName: toolCall.name,
+        toolArgs: toolCall.args,
+        timestamp: Date.now(),
+      })
+    }
 
     const toolResults = await executeToolCalls(
       parsedToolCalls.map(tc => ({ name: tc.name, args: tc.args })),
@@ -949,6 +1005,9 @@ export async function runAgent({
       signal,
       selectionContextReadLevels,
       pushToolProgress,
+      readResultCache,
+      Math.max(0, mergedConfig.maxToolCalls - toolCalls),
+      requiresEditConfirmation && editToolCalls === 0,
     )
 
     // 记录调用的工具
@@ -968,7 +1027,7 @@ export async function runAgent({
     }
 
     // 添加工具结果到消息
-    for (const { name, result, executed } of toolResults) {
+    for (const { name, result, executed, reused } of toolResults) {
       pushStep({
         type: 'observation',
         content: result,
@@ -976,7 +1035,10 @@ export async function runAgent({
         timestamp: Date.now(),
       })
 
-      messages.push({ role: 'assistant', content: executed === false ? `未执行工具: ${name}` : `调用工具: ${name}` })
+      messages.push({
+        role: 'assistant',
+        content: reused ? `复用本轮工具结果: ${name}` : executed === false ? `未执行工具: ${name}` : `调用工具: ${name}`,
+      })
       messages.push({
         role: 'user',
         content: name === 'read_selection_context'

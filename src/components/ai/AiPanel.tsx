@@ -497,6 +497,20 @@ export const ChatBubble = memo(function ChatBubble({
   const isUser = role === 'user'
   const isEmpty = !content && isLast && streaming
   const isAssistantStreaming = !isUser && isLast && streaming
+  const bubbleRef = useRef<HTMLDivElement>(null)
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+      e.preventDefault()
+      const el = bubbleRef.current
+      if (!el) return
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      const sel = window.getSelection()
+      sel?.removeAllRanges()
+      sel?.addRange(range)
+    }
+  }, [])
 
   return (
     <div className={`flex min-w-0 ${isUser ? 'justify-end' : 'justify-start'} animate-slideInUp`}>
@@ -504,7 +518,10 @@ export const ChatBubble = memo(function ChatBubble({
         <AiAvatar size="message" streaming={isAssistantStreaming} bounce={isEmpty} />
       )}
       <div
-        className={`select-text max-w-[80%] min-w-0 rounded-2xl px-4 py-2.5 text-body ${
+        ref={bubbleRef}
+        tabIndex={-1}
+        onKeyDown={handleKeyDown}
+        className={`select-text max-w-[80%] min-w-0 rounded-2xl px-4 py-2.5 text-body focus:outline-none ${
           isUser
             ? 'rounded-br-md'
             : 'bg-gm-surface-elevated text-gm-text border border-gm-border rounded-bl-md'

@@ -4,7 +4,10 @@ export interface MemoryQueryFilters {
   statuses?: readonly string[]
   scopeType?: 'global' | 'project'
   scopeKey?: string | null
+  includeGlobalForProject?: boolean
   includeEmbedding?: boolean
+  limit?: number
+  offset?: number
 }
 
 export interface SqlQuery {
@@ -19,7 +22,10 @@ const MEMORY_COLUMNS = [
   'content_hash', 'created_at', 'updated_at',
 ]
 
-export function buildMemoryQuery(filters: MemoryQueryFilters = {}): SqlQuery {
+function buildMemoryConditions(filters: MemoryQueryFilters): {
+  conditions: string[]
+  params: unknown[]
+} {
   const params: unknown[] = []
   const conditions: string[] = []
   const addValues = (column: string, values: readonly string[]) => {
@@ -46,18 +52,55 @@ export function buildMemoryQuery(filters: MemoryQueryFilters = {}): SqlQuery {
     conditions.push("COALESCE(scope_type, 'global') = 'global'")
   } else if (filters.scopeType === 'project') {
     params.push(filters.scopeKey || '')
-    conditions.push(`(
+    const projectCondition = `scope_type = 'project' AND scope_key = $${params.length}`
+    conditions.push(filters.includeGlobalForProject === false
+      ? `(${projectCondition})`
+      : `(
       COALESCE(scope_type, 'global') = 'global'
-      OR (scope_type = 'project' AND scope_key = $${params.length})
+      OR (${projectCondition})
     )`)
   }
 
+  return { conditions, params }
+}
+
+function buildWhereClause(conditions: readonly string[]): string {
+  return conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : ''
+}
+
+function normalizeLimit(limit: number): number {
+  return Math.min(200, Math.max(1, Math.trunc(limit)))
+}
+
+function normalizeOffset(offset: number | undefined): number {
+  return offset !== undefined && Number.isFinite(offset)
+    ? Math.max(0, Math.trunc(offset))
+    : 0
+}
+
+export function buildMemoryQuery(filters: MemoryQueryFilters = {}): SqlQuery {
+  const { conditions, params } = buildMemoryConditions(filters)
   const columns = filters.includeEmbedding
     ? [...MEMORY_COLUMNS, 'embedding']
     : MEMORY_COLUMNS
-  const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : ''
+  const where = buildWhereClause(conditions)
+  let pagination = ''
+  if (filters.limit !== undefined && Number.isFinite(filters.limit)) {
+    params.push(normalizeLimit(filters.limit))
+    const limitPlaceholder = `$${params.length}`
+    params.push(normalizeOffset(filters.offset))
+    pagination = ` LIMIT ${limitPlaceholder} OFFSET $${params.length}`
+  }
   return {
-    sql: `SELECT ${columns.join(', ')} FROM memories${where} ORDER BY updated_at DESC`,
+    sql: `SELECT ${columns.join(', ')} FROM memories${where} ORDER BY updated_at DESC, id ASC${pagination}`,
+    params,
+  }
+}
+
+export function buildMemoryCountQuery(filters: MemoryQueryFilters = {}): SqlQuery {
+  const { conditions, params } = buildMemoryConditions(filters)
+  return {
+    sql: `SELECT COUNT(*) AS total FROM memories${buildWhereClause(conditions)}`,
     params,
   }
 }

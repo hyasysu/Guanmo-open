@@ -1,5 +1,5 @@
 import type { ChatMessage, ChatMessageSource } from '@/services/ai/types'
-import type { Capability } from './intentDetector'
+import type { Capability, SelectionRequestKind } from './intentDetector'
 import type { AgentToolName } from './toolSelector'
 
 export interface ToolParameter {
@@ -36,7 +36,7 @@ export interface AgentStep {
   progressStage?: AgentProgressStage
 }
 
-export type AgentResultReason = 'completed' | 'max_steps' | 'error'
+export type AgentResultReason = 'completed' | 'max_steps' | 'max_tool_calls' | 'error'
 
 export interface AgentResult {
   answer: string
@@ -59,6 +59,7 @@ export interface AgentTaskContext {
 
 export interface AgentConfig {
   maxSteps: number
+  maxToolCalls: number
   stepTimeout: number
   systemPrompt: string
 }
@@ -76,8 +77,60 @@ export interface AgentRunRequest {
   signal?: AbortSignal
   temperature?: number
   onStep?: (step: AgentStep) => void
+  onStreamContent?: (content: string) => void
   requiredCapabilities?: readonly Capability[]
   untrustedContext?: string
   customPreferencePrompt?: string
   streamEnabled?: boolean
+  routingDecision?: RoutingDecision
+}
+
+// --- 统一路由决策 ---
+
+export type RoutingMode = 'direct' | 'agent'
+
+/**
+ * 路由原因码 — 仅用于内部测试和匿名诊断，不向用户展示。
+ */
+export type RoutingReasonCode =
+  | 'no_candidates'
+  | 'strong_signal'
+  | 'regex_match'
+  | 'classifier'
+  | 'context_signal'
+  | 'manual_override'
+  | 'continuation'
+  | 'weak_combo'
+  | 'cancel_last_edit'
+  | 'explicit_memory_write'
+
+/**
+ * 统一路由决策对象。
+ *
+ * 一次用户请求只产生一个 RoutingDecision，由 useAiChat 提供 AppContext
+ * 后调用 makeRoutingDecision 生成，executor 直接消费，不再重复执行意图检测。
+ */
+export interface RoutingDecision {
+  mode: RoutingMode
+  reasonCodes: RoutingReasonCode[]
+  candidates: Capability[]
+  required: Capability[]
+  candidateTools: AgentToolName[]
+  selectionRequestKind: SelectionRequestKind
+  requiresEditConfirmation: boolean
+  shouldLookupMemory: boolean
+  memoryIntent: 'strong' | 'weak' | 'none'
+  shouldLookupKnowledge: boolean
+  isDocumentRewrite: boolean
+  isWebComparison: boolean
+  isLocalResearch: boolean
+  isFileSummary: boolean
+  answerInstruction?: string
+  explicitMemoryWriteIntent: boolean
+  /** 短指令续接时继承的查询文本 */
+  inheritedQuery?: string
+  /** 短指令续接时继承的原始请求 */
+  inheritedOriginalRequest?: string
+  /** 短指令续接时继承的工具列表 */
+  inheritedToolNames?: AgentToolName[]
 }

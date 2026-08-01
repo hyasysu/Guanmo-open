@@ -177,4 +177,4 @@ copy "%APPDATA%\com.guanmo.app\guanmo.db.backup-*" "%APPDATA%\com.guanmo.app\gua
 
 ## 许可证
 
-ISC License
+MIT License（遵循仓库根目录 `LICENSE`）

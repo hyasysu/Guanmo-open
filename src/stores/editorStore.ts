@@ -4,6 +4,7 @@ import { isSameFilePath, normalizeFilePath } from '@/services/pathIdentity'
 import { mergeBackgroundRestoredTab } from '@/services/sessionRestorePolicy'
 import { eventMarker } from '@/services/eventMarker'
 import type { ReadingPosition } from '@/services/editorSession'
+import { useSettingsStore } from '@/stores/settingsStore'
 
 export interface Tab {
   id: string
@@ -371,13 +372,16 @@ export const useEditorStore = create<EditorState>()(
         )),
       })),
 
-      resetTabsForExternalOpen: () => set({
-        tabs: [],
-        activeTabId: null,
-        rightPaneTabId: null,
-        viewMode: 'edit',
-        previewVisible: false,
-      }),
+      resetTabsForExternalOpen: () => {
+        const defaultOpenMode = useSettingsStore.getState().editor.defaultOpenMode
+        set({
+          tabs: [],
+          activeTabId: null,
+          rightPaneTabId: null,
+          viewMode: defaultOpenMode,
+          previewVisible: defaultOpenMode === 'preview',
+        })
+      },
 
       restoreTabs: (tabs, activeTabId, rightPaneTabId) => set({
         tabs,

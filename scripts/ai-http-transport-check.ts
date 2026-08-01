@@ -1,6 +1,11 @@
 import { OpenAICompatibleProvider } from '../src/services/ai/providers/openaiCompatible'
 import { OpenAIResponsesProvider } from '../src/services/ai/providers/openaiResponses'
-import { createChatProvider } from '../src/services/ai/aiClient'
+import {
+  CHAT_PROTOCOL_CAPABILITIES,
+  SUPPORTED_CHAT_PROTOCOLS,
+  createChatProvider,
+  getChatProtocolCapabilities,
+} from '../src/services/ai/aiClient'
 import { updateSearchConfig, webSearch } from '../src/services/webSearch'
 import { AI_CHAT_PRESETS, AI_EMBEDDING_PRESETS, type AiConfig } from '../src/services/ai/types'
 import { readFileSync } from 'node:fs'
@@ -32,6 +37,7 @@ const builtinOrigins = new Set([
 const sessionOrigins = new Set<string>()
 const persistedOrigins = new Set<string>()
 const requests: Array<{ url: string; method: string; headers: [string, string][]; body?: number[] }> = []
+let rejectedReasoningRequests = 0
 
 function originOf(value: string) {
   const url = new URL(value)
@@ -151,6 +157,15 @@ runtime.__TAURI_INVOKE__ = async (command, args = {}) => {
       channel.onmessage?.({ event: 'end' })
       return
     }
+    const decodedBody = request.body ? new TextDecoder().decode(Uint8Array.from(request.body)) : ''
+    if (request.url.includes('api.openai.com') && decodedBody.includes('"reasoning_effort"')) {
+      rejectedReasoningRequests += 1
+      const encoded = new TextEncoder().encode(JSON.stringify({ error: 'unsupported reasoning parameter' }))
+      channel.onmessage?.({ event: 'start', status: 400, headers: [['content-type', 'application/json']] })
+      channel.onmessage?.({ event: 'chunk', data: Array.from(encoded) })
+      channel.onmessage?.({ event: 'end' })
+      return
+    }
     const encoded = new TextEncoder().encode(responseBody(request.url, request.body))
     channel.onmessage?.({ event: 'start', status: 200, headers: [['content-type', 'application/json']] })
     channel.onmessage?.({ event: 'chunk', data: Array.from(encoded) })
@@ -178,6 +193,47 @@ const config: AiConfig = {
 
 const provider = new OpenAICompatibleProvider(config)
 const rustProxySource = readFileSync('src-tauri/src/api_http.rs', 'utf8')
+assert(
+  SUPPORTED_CHAT_PROTOCOLS.length === 2
+    && SUPPORTED_CHAT_PROTOCOLS.includes('openai-chat')
+    && SUPPORTED_CHAT_PROTOCOLS.includes('openai-responses'),
+  '设置页只能展示已实现的 OpenAI Chat Completions 和 Responses 协议',
+)
+assert(
+  !getChatProtocolCapabilities('unknown' as never).implemented &&
+    getChatProtocolCapabilities('unknown' as never).unsupportedReason === '不支持的协议类型: unknown',
+  '未知协议应在发起请求前稳定拒绝，不得导致设置页崩溃',
+)
+assert(
+  CHAT_PROTOCOL_CAPABILITIES['openai-chat'].streaming &&
+    CHAT_PROTOCOL_CAPABILITIES['openai-chat'].toolCalling &&
+    CHAT_PROTOCOL_CAPABILITIES['openai-chat'].embeddingProtocol === 'openai-embedding' &&
+    CHAT_PROTOCOL_CAPABILITIES['openai-chat'].modelList &&
+    CHAT_PROTOCOL_CAPABILITIES['openai-chat'].localApi &&
+    CHAT_PROTOCOL_CAPABILITIES['openai-chat'].originAuthorization,
+  'OpenAI Compatible 能力矩阵应覆盖流式、工具、Embedding、模型列表、本地 API 与 Origin 授权',
+)
+assert(
+  CHAT_PROTOCOL_CAPABILITIES['openai-responses'].implemented &&
+    CHAT_PROTOCOL_CAPABILITIES['openai-responses'].streaming &&
+    CHAT_PROTOCOL_CAPABILITIES['openai-responses'].toolCalling &&
+    CHAT_PROTOCOL_CAPABILITIES['openai-responses'].modelList &&
+    CHAT_PROTOCOL_CAPABILITIES['openai-responses'].localApi &&
+    CHAT_PROTOCOL_CAPABILITIES['openai-responses'].originAuthorization,
+  'OpenAI Responses 能力矩阵应覆盖已实现的对话、流式、工具、模型列表、本地 API 与 Origin 授权',
+)
+for (const protocol of ['anthropic-messages'] as const) {
+  let message = ''
+  try {
+    createChatProvider({ ...config, protocol })
+  } catch (error) {
+    message = (error as Error).message
+  }
+  assert(
+    !CHAT_PROTOCOL_CAPABILITIES[protocol].implemented && message.includes('尚未实现'),
+    `${CHAT_PROTOCOL_CAPABILITIES[protocol].label} 应在发起请求前给出准确拒绝原因`,
+  )
+}
 for (const preset of [...AI_CHAT_PRESETS, ...AI_EMBEDDING_PRESETS]) {
   if (!preset.baseUrl) continue
   const origin = originOf(preset.baseUrl)
@@ -192,6 +248,37 @@ assert(chat.content === '完成', '非流式对话应经过 Rust 代理')
 let streamed = ''
 for await (const chunk of provider.streamChat({ messages: [{ role: 'user', content: 'hi' }] })) streamed += chunk.content
 assert(streamed === '流式', '流式对话应通过 Channel 保持 SSE 解析')
+
+const reasoningProvider = new OpenAICompatibleProvider({
+  ...config,
+  provider: 'openai',
+  baseUrl: 'https://api.openai.com/v1',
+  chatModel: 'gpt-4o-mini',
+})
+const reasoningStart = requests.length
+const reasoningChat = await reasoningProvider.chat({
+  messages: [{ role: 'user', content: 'hi' }],
+  reasoningMode: 'on',
+})
+assert(reasoningChat.content === '完成', 'Reasoning 参数被拒绝后，非流式请求应移除参数并重试')
+let reasoningStreamed = ''
+for await (const chunk of reasoningProvider.streamChat({
+  messages: [{ role: 'user', content: 'hi' }],
+  reasoningMode: 'on',
+})) reasoningStreamed += chunk.content
+assert(reasoningStreamed === '流式', 'Reasoning 参数被拒绝后，流式请求应移除参数并重试')
+const reasoningBodies = requests.slice(reasoningStart).map((request) =>
+  request.body ? new TextDecoder().decode(Uint8Array.from(request.body)) : ''
+)
+assert(
+  rejectedReasoningRequests === 2 &&
+    reasoningBodies.length === 4 &&
+    reasoningBodies[0].includes('"reasoning_effort":"medium"') &&
+    !reasoningBodies[1].includes('"reasoning_effort"') &&
+    reasoningBodies[2].includes('"reasoning_effort":"medium"') &&
+    !reasoningBodies[3].includes('"reasoning_effort"'),
+  'Reasoning 探测与降级必须由真实 400 响应触发，且重试请求不得保留 reasoning 参数',
+)
 
 const embedding = await provider.embedding('test')
 assert(embedding.embedding.length === 2, 'Embedding 应经过 Rust 代理')

@@ -31,6 +31,9 @@ export type PerfEventType =
   | 'prewarm-create'
   | 'prewarm-cancel'
   | 'resource-release'
+  | 'open-file-read-complete'
+  | 'editor-first-visible'
+  | 'preview-first-visible'
 
 export interface EventMetricSnapshot {
   appPrivateWorkingSetKb: number

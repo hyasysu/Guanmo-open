@@ -1,4 +1,4 @@
-import type { AiProvider, AiConfig, EmbeddingConfig, ProviderId, ValidateResult } from './types'
+import type { AiProvider, AiConfig, ChatProtocol, EmbeddingConfig, ProviderId, ValidateResult } from './types'
 import type { AiServiceStatus } from '../../stores/appStore'
 import { AiConfigError } from './errors'
 import { OpenAICompatibleProvider } from './providers/openaiCompatible'
@@ -11,6 +11,80 @@ let currentConfig: AiConfig | null = null
 
 let embeddingProvider: AiProvider | null = null
 let embeddingConfig: EmbeddingConfig | null = null
+
+export interface ChatProtocolCapabilities {
+  label: string
+  implemented: boolean
+  chat: boolean
+  streaming: boolean
+  toolCalling: boolean
+  embeddingProtocol: 'openai-embedding' | null
+  reasoning: 'adapter-with-request-fallback' | false
+  modelList: boolean
+  localApi: boolean
+  originAuthorization: boolean
+  unsupportedReason?: string
+}
+
+/** 设置展示与运行时校验共用的协议能力矩阵。 */
+export const CHAT_PROTOCOL_CAPABILITIES: Record<ChatProtocol, ChatProtocolCapabilities> = {
+  'openai-chat': {
+    label: 'OpenAI Chat Completions',
+    implemented: true,
+    chat: true,
+    streaming: true,
+    toolCalling: true,
+    embeddingProtocol: 'openai-embedding',
+    reasoning: 'adapter-with-request-fallback',
+    modelList: true,
+    localApi: true,
+    originAuthorization: true,
+  },
+  'anthropic-messages': {
+    label: 'Anthropic Messages',
+    implemented: false,
+    chat: false,
+    streaming: false,
+    toolCalling: false,
+    embeddingProtocol: null,
+    reasoning: false,
+    modelList: false,
+    localApi: false,
+    originAuthorization: false,
+    unsupportedReason: 'Anthropic Messages 原生协议尚未实现，请改用供应商提供的 OpenAI Compatible 接口',
+  },
+  'openai-responses': {
+    label: 'OpenAI Responses',
+    implemented: true,
+    chat: true,
+    streaming: true,
+    toolCalling: true,
+    embeddingProtocol: 'openai-embedding',
+    reasoning: 'adapter-with-request-fallback',
+    modelList: true,
+    localApi: true,
+    originAuthorization: true,
+  },
+}
+
+export const SUPPORTED_CHAT_PROTOCOLS = (Object.keys(CHAT_PROTOCOL_CAPABILITIES) as ChatProtocol[])
+  .filter((protocol) => CHAT_PROTOCOL_CAPABILITIES[protocol].implemented)
+
+export function getChatProtocolCapabilities(protocol: ChatProtocol): ChatProtocolCapabilities {
+  return CHAT_PROTOCOL_CAPABILITIES[protocol] || {
+    label: String(protocol),
+    implemented: false,
+    chat: false,
+    streaming: false,
+    toolCalling: false,
+    embeddingProtocol: null,
+    reasoning: false,
+    modelList: false,
+    localApi: false,
+    originAuthorization: false,
+    unsupportedReason: `不支持的协议类型: ${String(protocol)}`,
+  }
+}
 
 /** 判断是否为本地 API（Ollama 等），本地 API 不需要 API Key */
 export function isLocalApi(baseUrl: string): boolean {
@@ -32,11 +106,14 @@ export function isLocalApi(baseUrl: string): boolean {
 
 /** 根据协议类型创建对话 Provider */
 export function createChatProvider(config: AiConfig): AiProvider {
+  const capabilities = getChatProtocolCapabilities(config.protocol)
+  if (!capabilities.implemented) {
+    throw new AiConfigError(capabilities.unsupportedReason || `不支持的协议类型: ${config.protocol}`)
+  }
+
   switch (config.protocol) {
     case 'openai-chat':
       return new OpenAICompatibleProvider(config)
-    case 'anthropic-messages':
-      throw new AiConfigError('Anthropic Messages 协议尚未实现，请使用 OpenAI Compatible 协议')
     case 'openai-responses':
       return new OpenAIResponsesProvider(config)
     default:

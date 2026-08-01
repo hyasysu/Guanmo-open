@@ -24,7 +24,13 @@
     <td><b>🪟 Windows</b></td>
     <td>
       <a href="https://github.com/we-used-to-be/Guanmo-open/releases/latest"><b>⬇ 下载安装包</b></a><br/>
-      <sub>提供 NSIS (<code>.exe</code>) 和 WiX (<code>.msi</code>) 安装程序</sub>
+      <sub>提供 NSIS (<code>.exe</code>) 和 WiX (<code>.msi</code>) 安装程序</sub><br/><br/>
+      <a href="https://apps.microsoft.com/detail/9N2C2C3ZS467?mode=direct&cid=DevShareMCLPCS">
+        <img src="https://get.microsoft.com/images/zh-cn%20dark.svg"
+             alt="从 Microsoft Store 安装观墨"
+             width="200" />
+      </a><br/>
+      <sub>微软商店版本更新频率会慢一些</sub>
     </td>
   </tr>
   <tr>

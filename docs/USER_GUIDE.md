@@ -251,7 +251,7 @@ Diff 对比用于查看 Markdown 文档的内容变化。新增、删除或修�
 
 首次使用前，进入“设置 → AI 模型”，完成以下配置：
 
-1. 选择服务预设，或填写 OpenAI-compatible API 地址。
+1. 选择服务预设，或填写 OpenAI Compatible API 地址。目前对话仅实现 OpenAI Chat Completions；Anthropic Messages 与 OpenAI Responses 原生协议尚未开放。
 2. 如果使用在线服务，填写 API Key。
 3. 填写对话模型名称。
 4. 根据需要调整创造性、流式输出和联网搜索。

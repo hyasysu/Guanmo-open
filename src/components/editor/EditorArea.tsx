@@ -3,6 +3,7 @@ import { EditorView } from '@codemirror/view'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { AiShortcutMenuItems } from './AiShortcutMenuItems'
 import { useFileOperations } from '@/hooks/useFileOperations'
 import { useActiveHeading } from '@/hooks/useActiveHeading'
 import { saveFile, saveFileAs } from '@/services/fileSystem'
@@ -18,7 +19,7 @@ import { eventMarker } from '@/services/eventMarker'
 import { CodeMirrorEditor } from './CodeMirrorEditor'
 import { EditorContextMenu } from './EditorContextMenu'
 import { MarkdownDiffView } from './MarkdownDiffView'
-import { MarkdownPreview, MarkdownToc, type MarkdownBlockCommitRequest } from './MarkdownPreview'
+import { MarkdownPreview, MarkdownToc, type MarkdownBlockCommitRequest, type MarkdownPreviewHandle } from './MarkdownPreview'
 import { SearchOverlay } from './SearchOverlay'
 import { TabBar } from './TabBar'
 import { replaceMarkdownBlock } from '@/services/markdownBlocks'
@@ -181,6 +182,8 @@ export function EditorArea() {
   const readingPositionsRef = useRef<ReadingPositionSession>(seedReadingPositionsFromStore())
   const leftPreviewRef = useRef<HTMLDivElement>(null)
   const rightPreviewRef = useRef<HTMLDivElement>(null)
+  const leftMarkdownPreviewRef = useRef<MarkdownPreviewHandle>(null)
+  const rightMarkdownPreviewRef = useRef<MarkdownPreviewHandle>(null)
   const previewAnchorCacheRef = useRef<WeakMap<HTMLElement, PreviewAnchorCache>>(new WeakMap())
   const isRestoringScrollRef = useRef(false)
   const restoreScrollFrameRef = useRef<number | null>(null)
@@ -236,7 +239,7 @@ export function EditorArea() {
 
   const [leftPreviewMounted, setLeftPreviewMounted] = useState(false)
   const [rightPreviewMounted, setRightPreviewMounted] = useState(false)
-  const [editorMounted, setEditorMounted] = useState(true)
+  const [editorMounted, setEditorMounted] = useState(false)
   const [diffMounted, setDiffMounted] = useState(false)
   const [draftDecisionVersion, setDraftDecisionVersion] = useState(0)
   const leftPreviewMountedRef = useRef(leftPreviewMounted)
@@ -545,6 +548,47 @@ export function EditorArea() {
       setResourceMounted('diff', false)
     }
   }, [viewMode, modeResourcePolicy, leftPreviewVisible, editorVisible, activeTab?.id, draftDecisionVersion, editorMounted, leftPreviewMounted, rightPreviewMounted]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Emit first-visible events after DOM commit (requestAnimationFrame)
+  const editorBecameVisibleRef = useRef(false)
+  const previewBecameVisibleRef = useRef(false)
+  useEffect(() => {
+    if (editorVisible && editorMounted && !editorBecameVisibleRef.current && activeTab?.id) {
+      editorBecameVisibleRef.current = true
+      const raf = requestAnimationFrame(() => {
+        if (import.meta.env.DEV) {
+          eventMarker.mark('editor-first-visible', {
+            charCount: activeTab.content.length,
+            mode: viewMode,
+            policy: modePerformancePolicy,
+          })
+        }
+      })
+      return () => cancelAnimationFrame(raf)
+    }
+    if (!editorVisible && !editorMounted) {
+      editorBecameVisibleRef.current = false
+    }
+  }, [editorVisible, editorMounted, activeTab?.id, activeTab?.content.length, viewMode, modePerformancePolicy])
+
+  useEffect(() => {
+    if (leftPreviewVisible && leftPreviewMounted && !previewBecameVisibleRef.current && activeTab?.id) {
+      previewBecameVisibleRef.current = true
+      const raf = requestAnimationFrame(() => {
+        if (import.meta.env.DEV) {
+          eventMarker.mark('preview-first-visible', {
+            charCount: activeTab.content.length,
+            mode: viewMode,
+            policy: modePerformancePolicy,
+          })
+        }
+      })
+      return () => cancelAnimationFrame(raf)
+    }
+    if (!leftPreviewVisible && !leftPreviewMounted) {
+      previewBecameVisibleRef.current = false
+    }
+  }, [leftPreviewVisible, leftPreviewMounted, activeTab?.id, activeTab?.content.length, viewMode, modePerformancePolicy])
 
   // Document switch: always release old document instances
   const prevActiveTabIdRef = useRef(activeTabId)
@@ -986,8 +1030,9 @@ export function EditorArea() {
     // 从 tabId key 读取位置，与编辑器共用同一个位置
     const position = readingPositionsRef.current.get(tabId)
     if (!container) return
+    const previewHandle = pane === 'left' ? leftMarkdownPreviewRef.current : rightMarkdownPreviewRef.current
     const lineTop = position?.previewScrollTop == null && position?.topLine != null
-      ? getPreviewTopForLine(container, position.topLine)
+      ? getPreviewTopForLine(container, position.topLine, previewHandle?.getTopForLine(position.topLine))
       : undefined
     const nextTop = position?.previewScrollTop
       ?? (typeof lineTop === 'number' ? Math.max(0, lineTop - SCROLL_SYNC_TOP_OFFSET) : 0)
@@ -1207,7 +1252,7 @@ export function EditorArea() {
     const container = leftPreviewRef.current
     if (!container) return
 
-    const targetTop = getPreviewTopForLine(container, line)
+    const targetTop = getPreviewTopForLine(container, line, leftMarkdownPreviewRef.current?.getTopForLine(line))
     if (typeof targetTop !== 'number') return
 
     setScrollSyncSource('editor')
@@ -1488,19 +1533,11 @@ export function EditorArea() {
   }, [handleInsertImagePaths])
 
   const jumpToPreviewHeading = useCallback((item: TocItem) => {
-    const container = leftPreviewRef.current
-    const heading = container?.querySelector<HTMLElement>(`[data-md-line="${item.line}"]`)
-    if (!container || !heading) return
-    const targetTop = heading.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - 24
-    container.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
+    leftMarkdownPreviewRef.current?.scrollToLine(item.line)
   }, [])
 
   const jumpToRightPreviewHeading = useCallback((item: TocItem) => {
-    const container = rightPreviewRef.current
-    const heading = container?.querySelector<HTMLElement>(`[data-md-line="${item.line}"]`)
-    if (!container || !heading) return
-    const targetTop = heading.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - 24
-    container.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
+    rightMarkdownPreviewRef.current?.scrollToLine(item.line)
   }, [])
 
   const dualPreviewTocSections = useMemo(() => {
@@ -1753,10 +1790,22 @@ export function EditorArea() {
 
   const getSearchProps = () => {
     if (viewMode === 'edit' || viewMode === 'edit-preview') return { editorViewRef }
-    const panes: React.RefObject<HTMLDivElement>[] = []
-    if (leftPreviewVisible && leftPreviewRef.current) panes.push(leftPreviewRef)
-    if (viewMode === 'dual-preview' && rightPreviewRef.current) panes.push(rightPreviewRef)
-    return { previewPanes: panes }
+    const previewSources = []
+    if (leftPreviewVisible && leftPreviewRef.current) {
+      previewSources.push({
+        content: leftPreviewRenderRef.current.content,
+        paneRef: leftPreviewRef,
+        previewRef: leftMarkdownPreviewRef,
+      })
+    }
+    if (viewMode === 'dual-preview' && rightPreviewRef.current && rightTab) {
+      previewSources.push({
+        content: rightPreview.content,
+        paneRef: rightPreviewRef,
+        previewRef: rightMarkdownPreviewRef,
+      })
+    }
+    return { previewSources }
   }
 
   return (
@@ -1829,7 +1878,7 @@ export function EditorArea() {
               <div
                 key={`left-${activeTab?.id ?? 'none'}`}
                 ref={leftPreviewRef}
-                className={`${leftPreviewVisible ? 'min-w-0 flex-1' : 'hidden'} ${viewMode === 'dual-preview' ? 'border-r border-gm-border-subtle' : ''} ${viewMode === 'edit-preview' ? 'gm-preview-heading-clickable' : ''} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} ${isFullscreen && viewMode === 'edit-preview' ? 'gm-fullscreen-content-split-right' : isFullscreen && viewMode === 'dual-preview' ? 'gm-fullscreen-content-split-left' : ''} ${fullscreenTocExpanded && viewMode !== 'dual-preview' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-auto select-text bg-gm-surface relative`}
+                className={`${leftPreviewVisible ? 'min-w-0 flex-1' : 'hidden'} ${viewMode === 'dual-preview' ? 'border-r border-gm-border-subtle' : ''} ${viewMode === 'edit-preview' ? 'gm-preview-heading-clickable' : ''} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} ${isFullscreen && viewMode === 'edit-preview' ? 'gm-fullscreen-content-split-right' : isFullscreen && viewMode === 'dual-preview' ? 'gm-fullscreen-content-split-left' : ''} ${fullscreenTocExpanded && viewMode !== 'dual-preview' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-y-auto overflow-x-hidden select-text bg-gm-surface relative`}
                 style={leftPreviewMasked ? { visibility: 'hidden' } : undefined}
                 aria-hidden={!leftPreviewVisible}
                 onScroll={handleLeftPreviewScroll}
@@ -1837,6 +1886,7 @@ export function EditorArea() {
               >
                 {viewMode === 'dual-preview' && <PaneHeader title={activeTab?.title || ''} />}
                 <MarkdownPreview
+                  ref={leftMarkdownPreviewRef}
                   content={leftPreviewRenderRef.current.content}
                   filePath={leftPreviewRenderRef.current.filePath}
                   fontSize={editorFontSize}
@@ -1859,7 +1909,7 @@ export function EditorArea() {
             <div
               key={`right-${rightTab?.id ?? 'none'}`}
               ref={rightPreviewRef}
-              className={`${viewMode === 'dual-preview' ? 'min-w-0 flex-1' : 'hidden'} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} ${isFullscreen && viewMode === 'dual-preview' ? 'gm-fullscreen-content-split-right' : ''} ${fullscreenTocExpanded && viewMode === 'dual-preview' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-auto select-text bg-gm-surface relative ${rightPaneDragOver ? 'ring-2 ring-inset ring-gm-primary/40' : ''}`}
+              className={`${viewMode === 'dual-preview' ? 'min-w-0 flex-1' : 'hidden'} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} ${isFullscreen && viewMode === 'dual-preview' ? 'gm-fullscreen-content-split-right' : ''} ${fullscreenTocExpanded && viewMode === 'dual-preview' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-y-auto overflow-x-hidden select-text bg-gm-surface relative ${rightPaneDragOver ? 'ring-2 ring-inset ring-gm-primary/40' : ''}`}
               style={rightPreviewMasked ? { visibility: 'hidden' } : undefined}
               aria-hidden={viewMode !== 'dual-preview'}
               onScroll={handleRightPreviewScroll}
@@ -1882,6 +1932,7 @@ export function EditorArea() {
               />
               {rightTab ? (
                 <MarkdownPreview
+                  ref={rightMarkdownPreviewRef}
                   content={rightPreview.content}
                   filePath={rightTab.filePath}
                   fontSize={editorFontSize}
@@ -1948,24 +1999,7 @@ export function EditorArea() {
                 <ContextMenuItem onClick={handleAddPreviewSelectionToAi}>
                   添加到 AI 上下文
                 </ContextMenuItem>
-                <ContextMenuItem onClick={() => handlePreviewAiAction('请解释这段内容')}>
-                  AI 解释这段
-                </ContextMenuItem>
-                <ContextMenuItem onClick={() => handlePreviewAiAction('请结合上下文解释这段内容，优先读取选区附近内容，不要默认阅读全文')}>
-                  AI 结合上下文解释
-                </ContextMenuItem>
-                <ContextMenuItem onClick={() => handlePreviewAiAction('请总结这段内容')}>
-                  AI 总结这段
-                </ContextMenuItem>
-                <ContextMenuItem onClick={() => handlePreviewAiAction('请改写这段内容，使其更清晰')}>
-                  AI 改写这段
-                </ContextMenuItem>
-                <ContextMenuItem onClick={() => handlePreviewAiAction('请优化选中文本的 Markdown 格式：可以调整标题、列表、引用、代码块、表格等 Markdown 标记；不得改变原文内容、语义和顺序，不得新增信息。')}>
-                  AI 优化格式
-                </ContextMenuItem>
-                <ContextMenuItem onClick={() => handlePreviewAiAction('请翻译这段内容')}>
-                  AI 翻译
-                </ContextMenuItem>
+                <AiShortcutMenuItems onAction={handlePreviewAiAction} />
               </>
             )}
           </ContextMenu>
@@ -2057,7 +2091,8 @@ function getCachedPreviewAnchors(
 
 function getPreviewTopForLine(
   container: HTMLElement,
-  line: number
+  line: number,
+  estimatedTop?: number
 ): number | undefined {
   let previousElement: HTMLElement | undefined
   let previousLine = -1
@@ -2077,7 +2112,7 @@ function getPreviewTopForLine(
   }
 
   const anchorElement = previousElement ?? nextElement
-  if (!anchorElement) return undefined
+  if (!anchorElement) return estimatedTop
   const containerTop = container.getBoundingClientRect().top
   const anchorRect = anchorElement.getBoundingClientRect()
   const anchorTop = anchorRect.top - containerTop + container.scrollTop
@@ -2093,7 +2128,7 @@ function getPreviewTopForLine(
     return anchorTop + (nextTop - anchorTop) * Math.max(0, Math.min(1, progress))
   }
 
-  return anchorTop
+  return estimatedTop ?? anchorTop
 }
 
 function reportPreviewSwitchPerformance(tabId: string, restoreStartedAt: number) {

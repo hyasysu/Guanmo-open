@@ -31,6 +31,15 @@ describe('设置兼容', () => {
     })
     expect(state.appearance).toMatchObject({ theme: 'light', lightPalette: 'warm' })
     expect(state.webSearch).toMatchObject({ provider: 'duckduckgo', maxResults: 5 })
+    expect(state.aiShortcutActions).toHaveLength(6)
+    expect(state.aiShortcutActions.map((action) => action.label)).toEqual([
+      'AI 解释这段',
+      'AI 结合上下文解释',
+      'AI 总结这段',
+      'AI 改写这段',
+      'AI 优化格式',
+      'AI 翻译',
+    ])
   })
 
   it('旧配置缺少字段时由当前默认值补齐', async () => {
@@ -95,6 +104,45 @@ describe('设置兼容', () => {
     const state = store.getState()
     expect(state.knowledge).toBeDefined()
     expect(state.knowledge.autoIndexEnabled).toBe(true)
+  })
+
+  it('旧配置缺少快捷操作字段时补全默认列表', async () => {
+    const store = await loadSettingsStore({
+      editor: { fontSize: 18 },
+    })
+
+    expect(store.getState().aiShortcutActions).toHaveLength(6)
+    expect(store.getState().editor.fontSize).toBe(18)
+  })
+
+  it('保留快捷操作的顺序、启用状态和合法空列表', async () => {
+    const savedActions = [
+      { id: 'second', label: '第二项', prompt: '第二条命令', enabled: false },
+      { id: 'first', label: '第一项', prompt: '第一条命令', enabled: true },
+    ]
+    const populatedStore = await loadSettingsStore({ aiShortcutActions: savedActions })
+    expect(populatedStore.getState().aiShortcutActions).toEqual(savedActions)
+
+    const emptyStore = await loadSettingsStore({ aiShortcutActions: [] })
+    expect(emptyStore.getState().aiShortcutActions).toEqual([])
+  })
+
+  it('过滤非法快捷操作，非空损坏列表回退默认值', async () => {
+    const mixedStore = await loadSettingsStore({
+      aiShortcutActions: [
+        { id: 'valid', label: '保留项', prompt: '保留命令', enabled: true },
+        { id: 'valid', label: '重复项', prompt: '重复 ID', enabled: true },
+        { id: 'missing-prompt', label: '无命令', enabled: true },
+      ],
+    })
+    expect(mixedStore.getState().aiShortcutActions).toEqual([
+      { id: 'valid', label: '保留项', prompt: '保留命令', enabled: true },
+    ])
+
+    const brokenStore = await loadSettingsStore({
+      aiShortcutActions: [{ id: '', label: '', prompt: '' }],
+    })
+    expect(brokenStore.getState().aiShortcutActions).toHaveLength(6)
   })
 })
 
