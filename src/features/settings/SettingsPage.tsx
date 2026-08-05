@@ -60,6 +60,7 @@ import { listAuthorizedApiOrigins, revokeApiOrigin, type AuthorizedApiOrigin } f
 import { LegacyMigrationEntry } from '@/components/legacy/LegacyMigrationEntry'
 import { KnowledgeBaseManager } from '@/features/settings/KnowledgeBaseManager'
 import { AiShortcutSettings } from '@/features/settings/AiShortcutSettings'
+import { UsageActivity } from '@/features/settings/UsageActivity'
 
 const AI_ROUTING_GUIDE_URL = 'https://github.com/we-used-to-be/Guanmo-open/blob/main/docs/AI_ROUTING_GUIDE.md'
 
@@ -1335,6 +1336,7 @@ function GeneralSettings() {
     updateEditorSettings,
     updateAppearanceSettings,
     updateWebSearchConfig,
+    updateUsageTrackingSettings,
     resetAiShortcutActions,
   } = useSettingsStore()
   const [busy, setBusy] = useState(false)
@@ -1428,6 +1430,7 @@ function GeneralSettings() {
     })
     updateAppearanceSettings({ customCursorEnabled: true, aiMascotAvatarEnabled: false, theme: 'light', lightPalette: 'warm' })
     updateWebSearchConfig({ provider: 'duckduckgo', apiKey: '', maxResults: 5, customUrl: '' })
+    updateUsageTrackingSettings({ enabled: true })
     resetAiShortcutActions()
     toast.success('已恢复默认设置')
   }
@@ -1555,6 +1558,13 @@ function GeneralSettings() {
       </div>
 
       <Sep />
+      {isTauri() && (
+        <>
+          <UsageActivity />
+          <Sep />
+        </>
+      )}
+
       <SectionTitle>外观</SectionTitle>
       <SettingField label="深色模式" description="切换夜间写作配色，无需重启">
         <Switch checked={appearance.theme === 'dark'} onChange={(v) => updateAppearanceSettings({ theme: v ? 'dark' : 'light' })} />

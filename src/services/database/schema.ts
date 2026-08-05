@@ -105,6 +105,13 @@ CREATE TABLE IF NOT EXISTS settings (
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
+-- Usage tracking: daily foreground seconds.
+CREATE TABLE IF NOT EXISTS usage_daily (
+  date TEXT PRIMARY KEY,
+  foreground_seconds INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL
+);
+
 -- Lightweight legacy IndexedDB detection state.
 -- Stores whether old IndexedDB data was detected and whether user was notified.
 CREATE TABLE IF NOT EXISTS legacy_idb_detection (

@@ -19,6 +19,7 @@ import {
 } from './services/sessionRestore'
 import { useEditorStore } from './stores/editorStore'
 import { isTauri } from './hooks/useTauri'
+import { useUsageTracking } from './hooks/useUsageTracking'
 import { GlobalTooltip } from './components/common/Tooltip'
 import { migrateLegacyFileAccess } from './services/persistedFileAccess'
 import { UpdateManager } from './components/update/UpdateManager'
@@ -290,13 +291,13 @@ function CustomCursorFrame({
 }
 
 function App() {
-  const [dbError, setDbError] = useState<string | null>(null)
   const [appReady, setAppReady] = useState(false)
   const [legacyDetection, setLegacyDetection] = useState<LegacyDetectionResult | null>(null)
   const customCursorEnabled = useSettingsStore((s) => s.appearance.customCursorEnabled)
   const theme = useSettingsStore((s) => s.appearance.theme)
   const lightPalette = useSettingsStore((s) => s.appearance.lightPalette)
   useExternalFileOpen(appReady)
+  useUsageTracking(appReady)
 
   // 调试用：控制台调用 __testLegacyModal() 唤起旧版数据检测弹窗
   useEffect(() => {
@@ -366,7 +367,13 @@ function App() {
         const msg = err instanceof Error ? err.message : String(err)
         console.error('[App] Database init failed:', msg)
         if (!cancelled) {
-          setDbError(msg)
+          toast.show({
+            id: 'database-init-failed',
+            title: '数据库初始化失败',
+            message: '数据库初始化失败，部分数据可能无法保存',
+            type: 'error',
+            duration: null,
+          })
         }
         logDuration('app init failed', appInitStartedAt)
       }
@@ -380,11 +387,6 @@ function App() {
 
   return (
     <>
-      {dbError && (
-        <div className="fixed top-0 left-0 right-0 z-50 bg-yellow-100 text-yellow-800 text-caption px-4 py-1 text-center">
-          数据库初始化失败: {dbError}（数据不会持久化）
-        </div>
-      )}
       <CustomCursorFrame enabled={customCursorEnabled}>
         <AppLayout />
       </CustomCursorFrame>

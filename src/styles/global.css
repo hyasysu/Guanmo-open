@@ -1876,3 +1876,285 @@ body {
 .gm-code-line--info {
   color: var(--gm-code-info);
 }
+
+/* ===== 使用时长统计 (Usage Activity) ===== */
+
+.gm-usage {
+  --gm-usage-cell-size: 12px;
+  --gm-usage-cell-gap: 2px;
+  --gm-usage-cell-radius: 2px;
+  --gm-usage-label-width: 16px;
+}
+
+.gm-usage-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.gm-usage-header-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--gm-text-tertiary);
+}
+
+.gm-usage-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.gm-usage-toggle,
+.gm-usage-header-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gm-usage-toggle-label {
+  font-size: 12px;
+  color: var(--gm-text-secondary);
+}
+
+/* 统计卡 */
+.gm-usage-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  border: 1px solid var(--gm-border);
+  border-radius: 12px;
+  background: var(--gm-surface-elevated);
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+.gm-usage-stat {
+  padding: 10px 14px;
+  text-align: center;
+}
+
+.gm-usage-stat:first-child {
+  border-right: 1px solid var(--gm-border);
+}
+
+.gm-usage-stat-label {
+  font-size: 11px;
+  color: var(--gm-text-tertiary);
+  margin-bottom: 2px;
+}
+
+.gm-usage-stat-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--gm-text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 活动区域 */
+.gm-usage-activity {
+  margin-bottom: 0;
+}
+
+.gm-usage-activity-title {
+  font-size: 12px;
+  color: var(--gm-text-secondary);
+  margin-bottom: 6px;
+}
+
+/* 热力图外层容器 */
+.gm-usage-heatmap-wrapper {
+  overflow: hidden;
+  border: 1px solid var(--gm-border);
+  border-radius: 12px;
+  background: var(--gm-surface-elevated);
+  padding: 8px 10px 6px;
+}
+
+.gm-usage-heatmap {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
+/* 热力图主体：横向 flex，标签列 + 格子网格 */
+.gm-usage-heatmap-body {
+  display: flex;
+  gap: 4px;
+  align-items: stretch;
+}
+
+/* 周标签列（纵向 7 行，与格子行对齐） */
+.gm-usage-heatmap-labels {
+  display: grid;
+  grid-template-rows: repeat(7, 1fr);
+  gap: var(--gm-usage-cell-gap);
+  flex-shrink: 0;
+  width: var(--gm-usage-label-width);
+  padding-top: 0;
+}
+
+.gm-usage-heatmap-day-label {
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: var(--gm-text-tertiary);
+  line-height: 1;
+}
+
+/* 热力格子网格 */
+.gm-usage-heatmap-grid {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(7, minmax(0, 1fr));
+  gap: var(--gm-usage-cell-gap);
+}
+
+.gm-usage-heatmap-cell {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: var(--gm-usage-cell-radius);
+  background: var(--gm-surface);
+  cursor: default;
+  transition: outline 80ms var(--gm-ease);
+}
+
+.gm-usage-heatmap-cell--pad {
+  background: transparent;
+  pointer-events: none;
+}
+
+.gm-usage-heatmap-cell[data-level='1'] {
+  background: color-mix(in srgb, var(--gm-accent) 28%, var(--gm-surface));
+}
+
+.gm-usage-heatmap-cell[data-level='2'] {
+  background: color-mix(in srgb, var(--gm-accent) 46%, var(--gm-surface));
+}
+
+.gm-usage-heatmap-cell[data-level='3'] {
+  background: color-mix(in srgb, var(--gm-accent) 64%, var(--gm-surface));
+}
+
+.gm-usage-heatmap-cell[data-level='4'] {
+  background: color-mix(in srgb, var(--gm-accent) 82%, var(--gm-surface));
+}
+
+.gm-usage-heatmap-cell:hover:not(.gm-usage-heatmap-cell--pad) {
+  outline: 1.5px solid var(--gm-accent);
+  outline-offset: 0;
+}
+
+.gm-usage-heatmap-cell:focus-visible:not(.gm-usage-heatmap-cell--pad) {
+  outline: 2px solid var(--gm-border-focus);
+  outline-offset: 1px;
+}
+
+/* 月份标签 */
+.gm-usage-heatmap-months {
+  position: relative;
+  height: 16px;
+  margin-top: 4px;
+  margin-left: calc(var(--gm-usage-label-width) + 4px);
+}
+
+.gm-usage-heatmap-month {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-size: 9px;
+  color: var(--gm-text-tertiary);
+  white-space: nowrap;
+}
+
+/* 确认弹窗 */
+.gm-usage-dialog-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--gm-settings-mask-bg);
+  backdrop-filter: blur(2px);
+  animation: gmReleaseModalScrimIn 180ms ease-out;
+}
+
+.gm-usage-dialog-panel {
+  width: min(360px, 90vw);
+  padding: 20px;
+  border: 1px solid var(--gm-settings-modal-border);
+  border-radius: 22px;
+  background: var(--gm-settings-modal-bg);
+  box-shadow: var(--gm-settings-modal-shadow);
+  animation: gmReleaseModalDialogIn 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.gm-usage-dialog-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--gm-text);
+  margin-bottom: 8px;
+}
+
+.gm-usage-dialog-body {
+  font-size: 13px;
+  color: var(--gm-text-secondary);
+  line-height: 1.5;
+  margin-bottom: 16px;
+}
+
+.gm-usage-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* 窄屏：统计卡纵向排列 */
+@media (max-width: 480px) {
+  .gm-usage-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .gm-usage-stat:first-child {
+    border-right: 0;
+    border-bottom: 1px solid var(--gm-border);
+  }
+}
+
+/* 深色主题 */
+[data-theme='dark'] .gm-usage-heatmap-cell[data-level='1'] {
+  background: color-mix(in srgb, var(--gm-accent) 22%, var(--gm-surface));
+}
+
+[data-theme='dark'] .gm-usage-heatmap-cell[data-level='2'] {
+  background: color-mix(in srgb, var(--gm-accent) 38%, var(--gm-surface));
+}
+
+[data-theme='dark'] .gm-usage-heatmap-cell[data-level='3'] {
+  background: color-mix(in srgb, var(--gm-accent) 56%, var(--gm-surface));
+}
+
+[data-theme='dark'] .gm-usage-heatmap-cell[data-level='4'] {
+  background: color-mix(in srgb, var(--gm-accent) 74%, var(--gm-surface));
+}
+
+[data-theme='dark'] .gm-usage-dialog-scrim {
+  background: rgba(7, 6, 5, 0.72);
+}
+
+[data-theme='dark'] .gm-usage-dialog-panel {
+  background: var(--gm-surface);
+  border-color: var(--gm-border-strong);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
+}

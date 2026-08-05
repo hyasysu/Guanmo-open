@@ -40,7 +40,13 @@ export function collectLegacyFileAccessPaths(sources: LegacyFileAccessSources): 
   }
 }
 
+const LEGACY_MIGRATION_DONE_KEY = 'guanmo-legacy-file-access-done'
+
 export async function migrateLegacyFileAccess(): Promise<void> {
+  if (typeof localStorage !== 'undefined' && localStorage.getItem(LEGACY_MIGRATION_DONE_KEY) === '1') {
+    return
+  }
+
   const [{ useAppStore }, { useEditorStore }, persistence] = await Promise.all([
     import('@/stores/appStore'),
     import('@/stores/editorStore'),
@@ -61,6 +67,10 @@ export async function migrateLegacyFileAccess(): Promise<void> {
     chatSourcePaths,
   })
   await migrateLegacyFileAccessPaths(paths.workspacePaths, paths.filePaths)
+
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(LEGACY_MIGRATION_DONE_KEY, '1')
+  }
 }
 
 export function isFileAccessAuthorizationError(err: unknown): boolean {
