@@ -10,6 +10,7 @@ import {
   getHeatLevel,
   getLocalDateKey,
   getTwelveMonthRange,
+  getUsageSnapshot,
   loadUsageActivity,
   queryUsageToday,
   queryUsageTotal,
@@ -17,6 +18,7 @@ import {
   getPendingSnapshot,
   subscribeUsageSnapshot,
 } from '@/services/usageTracking'
+import type { UsageTrackingError } from '@/services/usageTracking'
 
 // ---------------------------------------------------------------------------
 // 热力图数据生成
@@ -168,8 +170,36 @@ function ClearConfirmDialog({
 // 主组件
 // ---------------------------------------------------------------------------
 
+type UsageStatusTone = 'active' | 'inactive' | 'error'
+
+function getUsageStatus(
+  enabled: boolean,
+  isActive: boolean,
+  error: UsageTrackingError | null,
+): { label: string; tone: UsageStatusTone } {
+  if (error?.kind === 'database_write') {
+    return { label: '保存失败，待写入时间已保留', tone: 'error' }
+  }
+  if (error?.kind === 'database_read') {
+    return { label: '统计数据加载失败', tone: 'error' }
+  }
+  if (error?.kind === 'window_state') {
+    return { label: '窗口状态暂不可用', tone: 'error' }
+  }
+  if (error?.kind === 'startup') {
+    return { label: '统计启动失败，正在重试', tone: 'error' }
+  }
+  if (!enabled) {
+    return { label: '统计已关闭', tone: 'inactive' }
+  }
+  return isActive
+    ? { label: '正在统计', tone: 'active' }
+    : { label: '当前未激活', tone: 'inactive' }
+}
+
 export function UsageActivity() {
   const enabled = useSettingsStore((s) => s.usageTracking.enabled)
+  const initialSnapshot = useMemo(() => getUsageSnapshot(), [])
 
   const [todaySeconds, setTodaySeconds] = useState(0)
   const [totalSeconds, setTotalSeconds] = useState(0)
@@ -177,20 +207,24 @@ export function UsageActivity() {
   const [clearBusy, setClearBusy] = useState(false)
   const [refreshBusy, setRefreshBusy] = useState(false)
   const [showClearDialog, setShowClearDialog] = useState(false)
+  const [trackingActive, setTrackingActive] = useState(initialSnapshot.isActive)
+  const [trackingError, setTrackingError] = useState<UsageTrackingError | null>(initialSnapshot.error)
   const mountedRef = useRef(true)
+  const refreshGenerationRef = useRef(0)
   const displayRemainderMsRef = useRef(new Map<string, number>())
 
   const range = useMemo(() => getTwelveMonthRange(), [])
 
   // 加载统计数据
   const refreshStats = useCallback(async (): Promise<boolean> => {
+    const requestId = ++refreshGenerationRef.current
     try {
       const [today, total, data] = await Promise.all([
         queryUsageToday(),
         queryUsageTotal(),
         loadUsageActivity(range.start, range.end),
       ])
-      if (!mountedRef.current) return true
+      if (!mountedRef.current || requestId !== refreshGenerationRef.current) return true
       // 合并全部 pending 日期
       const pendingSnapshot = getPendingSnapshot()
       const todayKey = getLocalDateKey()
@@ -202,9 +236,15 @@ export function UsageActivity() {
       setTodaySeconds(today + pendingToday)
       setTotalSeconds(total + pendingTotal)
       setActivityData(data)
+      const snapshot = getUsageSnapshot()
+      setTrackingActive(snapshot.isActive)
+      setTrackingError(snapshot.error)
       return true
     } catch {
       // 数据库不可用时保持旧值
+      if (mountedRef.current && requestId === refreshGenerationRef.current) {
+        setTrackingError(getUsageSnapshot().error)
+      }
       return false
     }
   }, [range.start, range.end])
@@ -215,6 +255,10 @@ export function UsageActivity() {
 
     // 订阅快照变更
     const unsub = subscribeUsageSnapshot((snapshot) => {
+      if (!mountedRef.current) return
+      setTrackingActive(snapshot.isActive)
+      setTrackingError(snapshot.error)
+
       if (snapshot.reset) {
         displayRemainderMsRef.current.clear()
         setTodaySeconds(0)
@@ -256,6 +300,7 @@ export function UsageActivity() {
 
     return () => {
       mountedRef.current = false
+      refreshGenerationRef.current += 1
       unsub()
     }
   }, [refreshStats])
@@ -270,8 +315,8 @@ export function UsageActivity() {
   const handleToggle = useCallback(async (v: boolean) => {
     try {
       await setUsageTrackingEnabled(v)
-    } catch (err) {
-      toast.error((err as Error).message || '切换使用统计失败')
+    } catch {
+      toast.error('切换使用统计失败')
     }
   }, [])
 
@@ -281,8 +326,8 @@ export function UsageActivity() {
       await checkpointUsageTracking()
       const refreshed = await refreshStats()
       if (!refreshed) toast.error('刷新使用统计失败')
-    } catch (err) {
-      toast.error((err as Error).message || '刷新使用统计失败')
+    } catch {
+      toast.error('刷新使用统计失败')
     } finally {
       if (mountedRef.current) setRefreshBusy(false)
     }
@@ -295,15 +340,17 @@ export function UsageActivity() {
       await clearUsageDataWithLifecycle()
       setShowClearDialog(false)
       toast.success('使用时长记录已清空')
-      refreshStats()
-    } catch (err) {
-      toast.error((err as Error).message || '清空使用时长记录失败')
+      await refreshStats()
+    } catch {
+      toast.error('清空使用时长记录失败')
     } finally {
       if (mountedRef.current) setClearBusy(false)
     }
   }, [refreshStats])
 
   if (!isTauri()) return null
+
+  const status = getUsageStatus(enabled, trackingActive, trackingError)
 
   // 一周列标题
   const dayLabels = ['一', '二', '三', '四', '五', '六', '日']
@@ -326,6 +373,12 @@ export function UsageActivity() {
             <Switch checked={enabled} onChange={handleToggle} />
           </div>
         </div>
+      </div>
+
+      <div className="gm-usage-status-row" role="status" aria-live="polite">
+        <span className={`gm-usage-status gm-usage-status--${status.tone}`}>
+          {status.label}
+        </span>
       </div>
 
       {/* 统计卡 */}

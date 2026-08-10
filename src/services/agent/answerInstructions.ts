@@ -43,3 +43,11 @@ export const FILE_SUMMARY_ANSWER_PROMPT = `本轮是单文件总结。必须优�
 3. 后续操作建议：只给可追问或可继续阅读的建议，不要自动写回文档、保存记忆或更新知识库。
 
 如果 read_context_file 返回内容被截断，不得声称已覆盖全文；必须说明“当前总结基于已读取范围”。`
+
+export const SECTION_READING_ANSWER_PROMPT = `本轮要求阅读当前标题对应的章节。必须调用 read_selection_context，并以 Markdown heading/source offset 确定范围；优先使用 direction=after 的 Level 1，只有信息不足时才读取 Level 2。
+
+要求：
+- 只能总结所选标题直到下一个同级或更高级标题前的正文，不得扩展为全文。
+- 关键结论要对应工具返回的 heading 和行号范围。
+- 如果章节为空、读取范围不足或返回内容被 token 预算截断，必须明确说明，不得声称覆盖完整章节。
+- 直接区分原文事实、合理推断和信息缺口；普通章节解释无需机械套用研究报告模板。`

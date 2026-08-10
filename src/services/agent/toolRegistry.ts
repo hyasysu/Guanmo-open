@@ -1,7 +1,7 @@
 import type { ChatTool } from '@/services/ai/types'
-import type { ToolDefinition } from './types'
+import type { RegisteredToolDefinition, ToolDefinition } from './types'
 
-const tools = new Map<string, ToolDefinition>()
+const tools = new Map<string, RegisteredToolDefinition>()
 
 const TOOL_USAGE_GUIDANCE: Record<string, string> = {
   search_knowledge: [
@@ -33,20 +33,26 @@ export function registerTool(tool: ToolDefinition) {
   if (tools.has(tool.name)) {
     console.warn(`Tool "${tool.name}" already registered, overwriting`)
   }
-  tools.set(tool.name, tool)
+  tools.set(tool.name, {
+    ...tool,
+    effect: tool.effect ?? 'read',
+    capability: tool.capability ?? 'read',
+    confirmationPolicy: tool.confirmationPolicy ?? 'never',
+    reversibleDescription: tool.reversibleDescription ?? '不产生可撤销副作用',
+  })
 }
 
-export function getTool(name: string): ToolDefinition | undefined {
+export function getTool(name: string): RegisteredToolDefinition | undefined {
   return tools.get(name)
 }
 
-export function getAllTools(): ToolDefinition[] {
+export function getAllTools(): RegisteredToolDefinition[] {
   return Array.from(tools.values())
 }
 
 export function getToolDescriptions(names?: readonly string[]): string {
   const selectedTools = names
-    ? names.map((name) => tools.get(name)).filter((tool): tool is ToolDefinition => Boolean(tool))
+    ? names.map((name) => tools.get(name)).filter((tool): tool is RegisteredToolDefinition => Boolean(tool))
     : getAllTools()
 
   return selectedTools
@@ -65,7 +71,7 @@ export function getToolDescriptions(names?: readonly string[]): string {
 
 export function getToolsForLLM(names?: readonly string[]): ChatTool[] {
   const selectedTools = names
-    ? names.map((name) => tools.get(name)).filter((tool): tool is ToolDefinition => Boolean(tool))
+    ? names.map((name) => tools.get(name)).filter((tool): tool is RegisteredToolDefinition => Boolean(tool))
     : getAllTools()
 
   return selectedTools.map((tool) => ({

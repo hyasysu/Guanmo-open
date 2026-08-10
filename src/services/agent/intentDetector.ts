@@ -18,6 +18,7 @@ export type Capability =
   | 'selection_context'
   | 'file_read'
   | 'file_write'
+  | 'action'
   | 'web'
   | 'time'
 
@@ -67,6 +68,13 @@ const KEYWORD_CONFIG: Record<Capability, { weak: string[]; strong: string[] }> =
     weak: ['修改', '改写', '润色', '优化', '重写', '调整', '更新'],
     strong: ['修改文件', '改写文档', '替换内容', 'replace_current_tab_text', '编辑文件'],
   },
+  action: {
+    weak: ['阅读成果', '阅读笔记', '提醒'],
+    strong: [
+      '保存为阅读成果', '保存阅读成果', '新建 Markdown 阅读笔记',
+      '创建阅读提醒', '设置阅读提醒', '创建提醒', '设置提醒', '添加提醒', '提醒我',
+    ],
+  },
   web: {
     weak: ['搜索', '查找', '网上', '联网', '最新', '新闻', '查一下', '搜一下'],
     strong: ['网络搜索', '联网搜索', '网上搜索', 'web_search', '搜索信息', '查找信息'],
@@ -107,6 +115,11 @@ const REGEX_PATTERNS: Record<Capability, RegExp[]> = {
     /(文本|内容|文件|文档|段落|句子|选中|选择|tag|标签|上下文|这段|上面|前面|刚才)[\s\S]*(修改|改写|润色|优化|重写|覆写|重构|调整|更新|替换|改成|改为|加粗|斜体|删掉|删除|插入|补充|撤销|恢复|还原|改回|取消)/,
     /^(帮我|请|把|将).*(修改|改写|润色|优化|重写|覆写|重构|调整|更新|替换|改成|改为|加粗|斜体|删掉|删除|插入|补充|撤销|恢复|还原|改回|取消)/,
   ],
+  action: [
+    /(保存|存为|添加).*(阅读成果|摘要|问题集|批注)/i,
+    /(新建|创建|保存).*(Markdown|markdown).*(阅读笔记|笔记)/i,
+    /(?:创建|设置|添加)(?:一个|一条)?(?:阅读)?提醒|提醒我/i,
+  ],
   web: [
     /^(搜索|查找|帮我搜|网上搜|联网搜)/,
     /(?:网上|联网|互联网|最新|新闻|实时|今天).*(?:搜索|查找|搜|查询|资料|信息)/,
@@ -125,6 +138,12 @@ const REGEX_PATTERNS: Record<Capability, RegExp[]> = {
   ],
 }
 
+const REMINDER_CREATION_PATTERN = /(?:创建|设置|添加)(?:一个|一条)?(?:阅读)?提醒|提醒我/i
+
+export function isReminderCreationIntent(query: string): boolean {
+  return REMINDER_CREATION_PATTERN.test(query.trim())
+}
+
 export type SelectionRequestKind = 'none' | 'fast' | 'context' | 'explicit_lookup'
 
 const SELECTION_EXPLICIT_LOOKUP_PATTERN = /(搜索|检索|查询|知识库|本地文档|读取文件|查看文件|打开文件|查看全文|阅读全文|全文内容|上下文|前后文|附近内容|周围内容)/i
@@ -135,6 +154,11 @@ const DOCUMENT_REWRITE_PATTERN = /(改写|润色|优化|重写|覆写|替换|写
 const LOCAL_RESEARCH_PATTERN = /(研究|调研|综述|梳理|归纳|综合|对比|比较|分析).*(知识库|本地(?:知识|文档|资料)|文档库|资料库|笔记库|我的(?:文档|笔记|资料)|资料里|笔记里|文档里|已有资料|本地资料|本地知识库)|(?:知识库|本地(?:知识|文档|资料)|文档库|资料库|笔记库|我的(?:文档|笔记|资料)|资料里|笔记里|文档里|已有资料|本地资料|本地知识库).*(研究|调研|综述|梳理|归纳|综合|对比|比较|分析|有没有|是否|哪些|如何|为什么|结论|观点|证据)|(?:根据|基于|结合).*(知识库|本地(?:知识|文档|资料)|文档库|资料库|笔记库|我的(?:文档|笔记|资料)|已有资料|本地资料|本地知识库).*(回答|分析|归纳|综合|对比|比较|判断|说明)|资料里有没有|笔记里有没有|文档里有没有|根据知识库|结合我的笔记|结合我的资料/i
 const TOPIC_RESEARCH_PATTERN = /^(?:(?:请|帮我|麻烦)(?:先)?\s*)?(?:研究一下|调研一下|做个研究|做一份研究|做个调研|做一份调研|综述一下|梳理一下|归纳一下|综合分析一下|研究|调研|综述|梳理|归纳|综合分析)[\s：:，,]*(.+)$/i
 const SCOPED_TEXT_TARGET_PATTERN = /^(?:这个|这份|这篇|这段|当前|本轮|选中|上述|上面|以下|该(?:文件|文档|笔记|文章|内容|文本|选区))/i
+const SECTION_READING_PATTERN = /(本节|这一节|该节|当前章节|这个章节|该章节|章节内容|标题下|这个标题|该标题|本小节|这一小节|当前小节)/i
+
+export function isSectionReadingIntent(query: string, context: AppContext = {}): boolean {
+  return Boolean(context.hasSelection) && SECTION_READING_PATTERN.test(query.trim())
+}
 
 function isTopicResearchIntent(query: string): boolean {
   const match = query.trim().match(TOPIC_RESEARCH_PATTERN)
@@ -170,6 +194,7 @@ export function isWebComparisonIntent(query: string): boolean {
  */
 export function classifySelectionRequest(query: string, context: AppContext = {}): SelectionRequestKind {
   if (!context.hasSelection) return 'none'
+  if (isSectionReadingIntent(query, context)) return 'context'
   if (SELECTION_EXPLICIT_LOOKUP_PATTERN.test(query)) return 'explicit_lookup'
   if (SELECTION_CONTEXT_RISK_PATTERN.test(query) && !isDocumentRewriteIntent(query)) return 'context'
   if (SELECTION_FAST_PATTERN.test(query)) return 'fast'
@@ -212,6 +237,11 @@ function scoreCapability(
       score += 2
       signals.push(`regex:${pattern.source.slice(0, 30)}`)
     }
+  }
+
+  if (capability === 'action' && isReminderCreationIntent(query)) {
+    score = Math.max(score, 4)
+    signals.push('classifier:reminder_creation')
   }
 
   if (capability === 'knowledge' && isLocalResearchIntent(query)) {
@@ -317,7 +347,7 @@ export function detectIntentScores(
   query: string,
   context: AppContext = {}
 ): IntentDetectionResult {
-  const capabilities: Capability[] = ['memory', 'knowledge', 'selection_context', 'file_read', 'file_write', 'web', 'time']
+  const capabilities: Capability[] = ['memory', 'knowledge', 'selection_context', 'file_read', 'file_write', 'action', 'web', 'time']
 
   const scores = capabilities.map(cap => scoreCapability(cap, query, context))
 

@@ -1,65 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { undo, redo } from '@codemirror/commands'
 import { useEditorHistoryStore } from '@/stores/editorHistoryStore'
-import {
-  LIGHT_PALETTE_OPTIONS,
-  useSettingsStore,
-  type LightPalette,
-} from '@/stores/settingsStore'
+import { useSettingsStore, type ThemeId } from '@/stores/settingsStore'
+import { THEME_OPTIONS } from '@/features/settings/ThemePicker'
 import { getActiveEditorView } from '@/services/editorViewRef'
 import { useFullscreen } from '@/hooks/useFullscreen'
 
 import { isTauri } from '@/hooks/useTauri'
-
-type ThemeChoice =
-  | { kind: 'light'; palette: LightPalette }
-  | { kind: 'dark' }
-
-const THEME_OPTIONS: Array<{
-  id: string
-  label: string
-  description: string
-  choice: ThemeChoice
-  swatches: [string, string, string]
-}> = [
-  {
-    id: 'light-warm',
-    label: '暖色',
-    description: '动物岛暖色明亮',
-    choice: { kind: 'light', palette: 'warm' },
-    swatches: ['#f7f3df', '#3aafa4', '#794f27'],
-  },
-  {
-    id: 'light-plain',
-    label: '浅色',
-    description: '干净白底明亮',
-    choice: { kind: 'light', palette: 'plain' },
-    swatches: ['#ffffff', '#2f9f98', '#1f2937'],
-  },
-  {
-    id: 'light-github-dmmono',
-    label: 'GitHub',
-    description: 'GitHub 风格明亮',
-    choice: { kind: 'light', palette: 'github-dmmono' },
-    swatches: ['#ffffff', '#4183c4', '#333333'],
-  },
-  {
-    id: 'dark',
-    label: '深色',
-    description: '夜间写作配色',
-    choice: { kind: 'dark' },
-    swatches: ['#1d1a15', '#58b8ae', '#e0be84'],
-  },
-]
-
-function isThemeSelected(
-  choice: ThemeChoice,
-  theme: 'light' | 'dark',
-  lightPalette: LightPalette,
-): boolean {
-  if (choice.kind === 'dark') return theme === 'dark'
-  return theme === 'light' && lightPalette === choice.palette
-}
 
 export function TitleBar() {
   const [maximized, setMaximized] = useState(false)
@@ -149,29 +96,19 @@ export function TitleBar() {
     if (view) redo({ state: view.state, dispatch: view.dispatch })
   }, [])
 
-  const theme = useSettingsStore((s) => s.appearance.theme)
-  const lightPalette = useSettingsStore((s) => s.appearance.lightPalette)
-
+  const themeId = useSettingsStore((s) => s.appearance.themeId)
+  const lastLightThemeId = useSettingsStore((s) => s.appearance.lastLightThemeId)
   const toggleTheme = useCallback(() => {
-    const next = theme === 'dark' ? 'light' : 'dark'
-    useSettingsStore.getState().updateAppearanceSettings({ theme: next })
-  }, [theme])
+    const next = themeId === 'dark' ? lastLightThemeId : 'dark'
+    useSettingsStore.getState().updateAppearanceSettings({ themeId: next })
+  }, [lastLightThemeId, themeId])
 
-  const applyThemeChoice = useCallback((choice: ThemeChoice) => {
-    if (choice.kind === 'dark') {
-      useSettingsStore.getState().updateAppearanceSettings({ theme: 'dark' })
-    } else {
-      useSettingsStore.getState().updateAppearanceSettings({
-        theme: 'light',
-        lightPalette: choice.palette,
-      })
-    }
+  const applyTheme = useCallback((nextThemeId: ThemeId) => {
+    useSettingsStore.getState().updateAppearanceSettings({ themeId: nextThemeId })
     setThemeMenuOpen(false)
   }, [])
 
-  const activeThemeLabel = theme === 'dark'
-    ? '深色'
-    : (LIGHT_PALETTE_OPTIONS.find((option) => option.key === lightPalette)?.label ?? '暖色')
+  const activeThemeLabel = THEME_OPTIONS.find((option) => option.key === themeId)?.label ?? themeId
 
   return (
     <div className="h-[38px] flex items-center bg-gm-surface border-b border-gm-border-subtle select-none flex-shrink-0">
@@ -225,9 +162,9 @@ export function TitleBar() {
         <button
           onClick={toggleTheme}
           className="h-full w-10 flex items-center justify-center text-gm-text-secondary hover:bg-gm-surface-hover transition-colors"
-          title={theme === 'dark' ? '切换为浅色模式' : '切换为深色模式'}
+          title={themeId === 'dark' ? '切换为上次浅色主题' : '切换为深色主题'}
         >
-          {theme === 'dark' ? (
+          {themeId === 'dark' ? (
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="5" />
               <line x1="12" y1="1" x2="12" y2="3" />
@@ -245,7 +182,6 @@ export function TitleBar() {
             </svg>
           )}
         </button>
-        {/* Theme picker */}
         <div className="relative h-full" ref={themeMenuRef}>
           <button
             type="button"
@@ -253,7 +189,7 @@ export function TitleBar() {
             className={`h-full min-w-10 px-2 flex items-center justify-center gap-1 text-gm-text-secondary hover:bg-gm-surface-hover transition-colors ${
               themeMenuOpen ? 'bg-gm-surface-hover text-gm-text' : ''
             }`}
-            title={`切换主题（当前：${activeThemeLabel}）`}
+            title={`选择主题（当前：${activeThemeLabel}）`}
             aria-haspopup="menu"
             aria-expanded={themeMenuOpen}
           >
@@ -274,35 +210,27 @@ export function TitleBar() {
               aria-label="选择主题"
               className="absolute right-0 top-full z-[60] mt-1 w-[220px] rounded-xl border border-gm-border bg-gm-surface-elevated py-1.5 shadow-lg"
             >
-              <div className="px-3 pb-1.5 pt-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-gm-text-tertiary">
-                主题
-              </div>
               {THEME_OPTIONS.map((option) => {
-                const selected = isThemeSelected(option.choice, theme, lightPalette)
+                const selected = option.key === themeId
                 return (
                   <button
-                    key={option.id}
+                    key={option.key}
                     type="button"
                     role="menuitemradio"
                     aria-checked={selected}
-                    onClick={() => applyThemeChoice(option.choice)}
+                    onClick={() => applyTheme(option.key)}
                     className={`flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors ${
                       selected
                         ? 'bg-gm-primary-subtle text-gm-text'
                         : 'text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text'
                     }`}
                   >
-                    <span className="flex h-5 w-5 shrink-0 overflow-hidden rounded-full border border-gm-border" aria-hidden="true">
-                      {option.swatches.map((color) => (
-                        <span key={color} className="h-full flex-1" style={{ backgroundColor: color }} />
-                      ))}
-                    </span>
                     <span className="min-w-0 flex-1">
                       <span className="block text-caption font-medium text-gm-text">{option.label}</span>
                       <span className="block text-micro text-gm-text-tertiary">{option.description}</span>
                     </span>
                     <span
-                      className={`ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
+                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
                         selected
                           ? 'border-gm-primary bg-gm-primary text-gm-text-on-primary'
                           : 'border-gm-border-subtle text-transparent'

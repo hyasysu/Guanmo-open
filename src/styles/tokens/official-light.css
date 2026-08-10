@@ -1,0 +1,205 @@
+/* === Guanmo official reading themes === */
+
+:root[data-theme-id='paper'] {
+  --gm-canvas: #f1eadc;
+  --gm-surface: #f7f0e3;
+  --gm-surface-elevated: #eee4d3;
+  --gm-surface-overlay: #e6dac6;
+  --gm-surface-hover: rgba(78, 63, 49, 0.07);
+
+  --gm-primary: #3f8179;
+  --gm-primary-hover: #52978e;
+  --gm-primary-active: #326a64;
+  --gm-primary-subtle: #e1eeea;
+  --gm-accent: #7a5c3b;
+  --gm-accent-subtle: rgba(122, 92, 59, 0.09);
+
+  --gm-text: #4e4033;
+  --gm-text-secondary: #746657;
+  --gm-text-tertiary: #968878;
+  --gm-text-disabled: #b1a596;
+  --gm-text-on-primary: #f8fffd;
+  --gm-user-bubble-bg: #dce9e5;
+  --gm-user-bubble-text: #354e4a;
+  --gm-active-indicator: #3f8179;
+
+  --gm-border: #ddd1bd;
+  --gm-border-subtle: #e9dfcf;
+  --gm-border-strong: #cbbb9f;
+  --gm-border-focus: #3f8179;
+  --gm-border-hover: #b9aa93;
+
+  --gm-success: #568b54;
+  --gm-warning: #b68432;
+  --gm-error: #bd5a52;
+  --gm-info: #527d9f;
+
+  --gm-editor-bg: #fbf5e9;
+  --gm-editor-selection: rgba(63, 129, 121, 0.16);
+  --gm-editor-line-highlight: rgba(63, 129, 121, 0.05);
+  --gm-editor-gutter: #f4ecdf;
+  --gm-editor-heading: #49372a;
+  --gm-editor-quote: #5d7974;
+  --gm-editor-code: #75583a;
+  --gm-editor-link: #2f746d;
+  --gm-editor-list: #8d6838;
+  --gm-markdown-heading: #49372a;
+  --gm-markdown-quote-bg: rgba(63, 129, 121, 0.07);
+  --gm-code-bg: #ece2d2;
+  --gm-code-text: #55483a;
+  --gm-code-muted: #887a69;
+  --gm-code-command: #2f746d;
+  --gm-code-path: #76593c;
+  --gm-code-error: #a94f48;
+  --gm-code-info: #527d9f;
+
+  --gm-tooltip-bg: #fbf5e9;
+  --gm-tooltip-border: rgba(78, 64, 51, 0.14);
+  --gm-tooltip-shadow: 0 10px 24px rgba(78, 64, 51, 0.11);
+  --gm-settings-mask-bg: rgba(64, 51, 37, 0.22);
+  --gm-settings-modal-bg: #fbf5e9;
+  --gm-settings-modal-border: rgba(78, 64, 51, 0.14);
+  --gm-settings-modal-shadow: 0 18px 48px rgba(78, 64, 51, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  --gm-scrollbar-track: transparent;
+  --gm-scrollbar-thumb: #cbbb9f;
+  --gm-scrollbar-thumb-hover: #aa997e;
+
+  --gm-fullscreen-control-bg: rgba(251, 245, 233, 0.92);
+  --gm-fullscreen-control-border: rgba(78, 64, 51, 0.15);
+  --gm-fullscreen-control-shadow: 0 18px 44px rgba(78, 64, 51, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  --gm-fullscreen-control-hover: rgba(63, 129, 121, 0.11);
+  --gm-fullscreen-control-text: #4e4033;
+  --gm-fullscreen-control-muted: #746657;
+}
+
+:root[data-theme-id='github-light'] {
+  --gm-canvas: #f5f7f9;
+  --gm-surface: #ffffff;
+  --gm-surface-elevated: #f4f6f8;
+  --gm-surface-overlay: #eaeef2;
+  --gm-surface-hover: rgba(32, 38, 45, 0.06);
+
+  --gm-primary: #1f6fc7;
+  --gm-primary-hover: #3584d8;
+  --gm-primary-active: #185aa2;
+  --gm-primary-subtle: #e7f1fc;
+  --gm-accent: #6653a6;
+  --gm-accent-subtle: rgba(102, 83, 166, 0.09);
+
+  --gm-text: #20262d;
+  --gm-text-secondary: #4d5762;
+  --gm-text-tertiary: #727d88;
+  --gm-text-disabled: #9ca6b0;
+  --gm-text-on-primary: #ffffff;
+  --gm-user-bubble-bg: #e5f0fb;
+  --gm-user-bubble-text: #24496d;
+  --gm-active-indicator: #1f6fc7;
+
+  --gm-border: #d5dbe2;
+  --gm-border-subtle: #e8ebef;
+  --gm-border-strong: #b8c1cc;
+  --gm-border-focus: #1f6fc7;
+  --gm-border-hover: #aeb8c3;
+
+  --gm-success: #31844a;
+  --gm-warning: #b7791f;
+  --gm-error: #c7443e;
+  --gm-info: #1f6fc7;
+
+  --gm-editor-bg: #ffffff;
+  --gm-editor-selection: rgba(31, 111, 199, 0.17);
+  --gm-editor-line-highlight: rgba(31, 111, 199, 0.055);
+  --gm-editor-gutter: #f5f7f9;
+  --gm-editor-heading: #18212b;
+  --gm-editor-quote: #50705b;
+  --gm-editor-code: #a63b55;
+  --gm-editor-link: #1769bd;
+  --gm-editor-list: #8a5b18;
+  --gm-markdown-heading: #18212b;
+  --gm-markdown-quote-bg: rgba(80, 112, 91, 0.08);
+  --gm-code-bg: #f3f5f7;
+  --gm-code-text: #2c3742;
+  --gm-code-muted: #65717d;
+  --gm-code-command: #1769bd;
+  --gm-code-path: #a63b55;
+  --gm-code-error: #b83d38;
+  --gm-code-info: #6653a6;
+
+  --gm-tooltip-bg: #ffffff;
+  --gm-tooltip-border: rgba(32, 38, 45, 0.14);
+  --gm-tooltip-shadow: 0 10px 24px rgba(32, 38, 45, 0.1);
+  --gm-settings-mask-bg: rgba(32, 38, 45, 0.2);
+  --gm-settings-modal-bg: #ffffff;
+  --gm-settings-modal-border: rgba(32, 38, 45, 0.14);
+  --gm-settings-modal-shadow: 0 18px 48px rgba(32, 38, 45, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --gm-scrollbar-track: transparent;
+  --gm-scrollbar-thumb: #b8c1cc;
+  --gm-scrollbar-thumb-hover: #929daa;
+
+  --gm-fullscreen-control-bg: rgba(255, 255, 255, 0.92);
+  --gm-fullscreen-control-border: rgba(32, 38, 45, 0.14);
+  --gm-fullscreen-control-shadow: 0 18px 44px rgba(32, 38, 45, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.88);
+  --gm-fullscreen-control-hover: rgba(31, 111, 199, 0.1);
+  --gm-fullscreen-control-text: #20262d;
+  --gm-fullscreen-control-muted: #4d5762;
+}
+
+:root[data-theme-id='paper'],
+:root[data-theme-id='github-light'] {
+  --animal-primary-color: var(--gm-primary);
+  --animal-primary-color-hover: var(--gm-primary-hover);
+  --animal-primary-color-active: var(--gm-primary-active);
+  --animal-primary-color-bg: var(--gm-primary-subtle);
+  --animal-success-color: var(--gm-success);
+  --animal-warning-color: var(--gm-warning);
+  --animal-error-color: var(--gm-error);
+  --animal-text-color: var(--gm-text);
+  --animal-text-color-secondary: var(--gm-text-secondary);
+  --animal-text-color-muted: var(--gm-text-tertiary);
+  --animal-text-color-disabled: var(--gm-text-disabled);
+  --animal-border-color: var(--gm-border);
+  --animal-border-color-hover: var(--gm-border-hover);
+  --animal-border-color-light: var(--gm-border-subtle);
+  --animal-bg-color: var(--gm-surface);
+  --animal-bg-color-secondary: var(--gm-surface-elevated);
+  --animal-bg-color-disabled: var(--gm-surface-overlay);
+  --animal-tabs-bg: var(--gm-surface);
+  --animal-tabs-border: var(--gm-border);
+  --animal-tabs-list-bg: var(--gm-surface-elevated);
+  --animal-tabs-item-text: var(--gm-text-secondary);
+  --animal-tabs-item-hover-bg: var(--gm-surface-hover);
+  --animal-tabs-active-bg: var(--gm-primary);
+  --animal-tabs-active-text: var(--gm-text-on-primary);
+  --animal-tabs-active-shadow: 0 3px 0 0 color-mix(in srgb, var(--gm-text) 8%, transparent);
+  --animal-select-trigger-bg: var(--gm-surface);
+  --animal-select-trigger-border: var(--gm-border);
+  --animal-select-trigger-hover-bg: var(--gm-surface-elevated);
+  --animal-select-trigger-hover-border: var(--gm-border-hover);
+  --animal-select-dropdown-bg: var(--gm-surface);
+  --animal-select-pill-bg: var(--gm-primary);
+  --animal-select-disabled-bg: var(--gm-surface-overlay);
+  --animal-switch-bg: var(--gm-border);
+  --animal-switch-border: var(--gm-border-hover);
+  --animal-switch-hover-border: var(--gm-primary);
+  --animal-switch-focus: var(--gm-primary);
+  --animal-switch-handle-bg: var(--gm-surface);
+  --animal-switch-text: var(--gm-text-on-primary);
+  --animal-button-primary-text: var(--gm-text-on-primary);
+  --animal-button-primary-bg: var(--gm-primary);
+  --animal-button-primary-border: var(--gm-primary);
+  --animal-button-primary-shadow: var(--gm-primary-active);
+  --animal-button-text-active-bg: var(--gm-primary-subtle);
+  --animal-table-bg: var(--gm-surface);
+  --animal-table-divider: var(--gm-border);
+  --animal-table-text: var(--gm-text);
+  --animal-table-text-hover: var(--gm-text);
+  --animal-table-text-muted: var(--gm-text-tertiary);
+  --animal-table-striped-bg: var(--gm-surface-elevated);
+  --animal-table-hover-stripe-a: color-mix(in srgb, var(--gm-primary) 14%, transparent);
+  --animal-table-hover-stripe-b: color-mix(in srgb, var(--gm-primary) 22%, transparent);
+  --animal-table-loading-bg: color-mix(in srgb, var(--gm-surface) 84%, transparent);
+  --animal-table-loading-color: var(--gm-primary);
+  --animal-shadow-sm: 0 2px 4px 0 color-mix(in srgb, var(--gm-text) 5%, transparent);
+  --animal-shadow-base: 0 3px 10px 0 color-mix(in srgb, var(--gm-text) 9%, transparent);
+  --animal-shadow-lg: 0 8px 24px 0 color-mix(in srgb, var(--gm-text) 13%, transparent);
+}

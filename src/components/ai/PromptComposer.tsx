@@ -36,6 +36,13 @@ export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeCha
     previousContextTagCountRef.current = contextTags.length
   }, [contextTags.length, streaming])
 
+  // 内容被外部清空（如发送消息）时重置内联高度，避免高度残留
+  useEffect(() => {
+    if (!draftInput && textareaRef.current) {
+      textareaRef.current.style.height = ''
+    }
+  }, [draftInput])
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -142,7 +149,7 @@ export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeCha
         )}
 
         {/* Text Input */}
-        <div className="flex items-end gap-2 p-2">
+        <div className="flex items-center gap-2 p-2">
           <textarea
             ref={textareaRef}
             value={draftInput}

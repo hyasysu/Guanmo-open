@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatMessageSource } from '@/services/ai/types'
+import type { ChatMessage, ChatMessageSource, ReadingScope } from '@/services/ai/types'
 import type { Capability, SelectionRequestKind } from './intentDetector'
 import type { AgentToolName } from './toolSelector'
 
@@ -9,11 +9,25 @@ export interface ToolParameter {
   required: boolean
 }
 
+export type ToolEffect = 'read' | 'write_local' | 'schedule' | 'external'
+export type ToolConfirmationPolicy = 'never' | 'required'
+
 export interface ToolDefinition {
   name: string
   description: string
   parameters: ToolParameter[]
+  effect?: ToolEffect
+  capability?: string
+  confirmationPolicy?: ToolConfirmationPolicy
+  reversibleDescription?: string
   execute: (args: Record<string, unknown>, context?: ToolExecutionContext) => Promise<string>
+}
+
+export interface RegisteredToolDefinition extends ToolDefinition {
+  effect: ToolEffect
+  capability: string
+  confirmationPolicy: ToolConfirmationPolicy
+  reversibleDescription: string
 }
 
 export type AgentProgressStage =
@@ -125,6 +139,7 @@ export interface RoutingDecision {
   isWebComparison: boolean
   isLocalResearch: boolean
   isFileSummary: boolean
+  readingScope?: ReadingScope
   answerInstruction?: string
   explicitMemoryWriteIntent: boolean
   /** 短指令续接时继承的查询文本 */

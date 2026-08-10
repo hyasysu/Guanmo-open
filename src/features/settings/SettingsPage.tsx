@@ -3,7 +3,7 @@ import { Button, Collapse, Divider, Footer, Icon, Input, Modal, Select, Switch, 
 import appIcon from '@/assets/icon-settings.png'
 
 import { isTauri } from '@/hooks/useTauri'
-import { LIGHT_PALETTE_OPTIONS, useSettingsStore, type LightPalette } from '@/stores/settingsStore'
+import { useSettingsStore } from '@/stores/settingsStore'
 import type { WebSearchConfig } from '@/services/webSearch'
 import {
   CHAT_PROTOCOL_CAPABILITIES,
@@ -42,7 +42,7 @@ import {
   type Memory,
 } from '@/services/database/persistence'
 import { toast } from '@/services/toast'
-import { useAppStore } from '@/stores/appStore'
+import { selectPrimaryWorkspacePath, useAppStore } from '@/stores/appStore'
 import { cleanupMissingWorkspaceDocuments, rebuildWorkspaceDocuments } from '@/services/workspaceIndex'
 import { exportDataBackup, importDataBackup } from '@/services/dataBackup'
 import { useChatStore } from '@/stores/chatStore'
@@ -61,6 +61,9 @@ import { LegacyMigrationEntry } from '@/components/legacy/LegacyMigrationEntry'
 import { KnowledgeBaseManager } from '@/features/settings/KnowledgeBaseManager'
 import { AiShortcutSettings } from '@/features/settings/AiShortcutSettings'
 import { UsageActivity } from '@/features/settings/UsageActivity'
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/services/requestTimeout'
+import { AdvancedTimeoutSettings } from '@/features/settings/AdvancedTimeoutSettings'
+import { ThemePicker } from '@/features/settings/ThemePicker'
 
 const AI_ROUTING_GUIDE_URL = 'https://github.com/we-used-to-be/Guanmo-open/blob/main/docs/AI_ROUTING_GUIDE.md'
 
@@ -242,6 +245,26 @@ function SliderField({
   )
 }
 
+type FontPresetOption = {
+  key: string
+  label: string
+  value: string
+}
+
+const EDITOR_FONT_OPTIONS: readonly FontPresetOption[] = [
+  { key: 'dmmono', label: 'DMMono Nerd Font', value: "'DMMono Nerd Font', 'JetBrains Mono', 'Cascadia Code', monospace" },
+  { key: 'jetbrains-mono', label: 'JetBrains Mono', value: "'JetBrains Mono', 'Cascadia Code', monospace" },
+  { key: 'cascadia', label: 'Cascadia Code', value: "'Cascadia Code', 'Consolas', monospace" },
+  { key: 'fira-code', label: 'Fira Code', value: "'Fira Code', 'Cascadia Code', monospace" },
+  { key: 'system-mono', label: '系统等宽', value: "'Consolas', 'Courier New', monospace" },
+] as const
+
+const PREVIEW_FONT_OPTIONS: readonly FontPresetOption[] = [
+  { key: 'ui-default', label: '跟随界面字体', value: 'var(--gm-font-family)' },
+  { key: 'sans', label: '清晰无衬线', value: "'Noto Sans SC', 'HarmonyOS Sans SC', 'MiSans', 'PingFang SC', 'Microsoft YaHei', sans-serif" },
+  { key: 'serif', label: '书卷衬线', value: "'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', serif" },
+] as const
+
 function FontStackField({
   label,
   description,
@@ -308,27 +331,6 @@ const MODE_PERFORMANCE_KEYS = MODE_PERFORMANCE_OPTIONS.map((option) => option.ke
 const MODE_PERFORMANCE_STOP_POSITIONS = ['var(--gm-mode-prewarm-stop-edge)', '50%', 'calc(100% - var(--gm-mode-prewarm-stop-edge))'] as const
 const MODE_PERFORMANCE_LABEL_POSITIONS = ['var(--gm-mode-prewarm-stop-edge)', 'calc(50% - 14px)', 'calc(100% - var(--gm-mode-prewarm-stop-edge) - 26px)'] as const
 const MODE_PERFORMANCE_FILL_WIDTHS = ['var(--gm-mode-prewarm-thumb-size)', 'calc(50% + var(--gm-mode-prewarm-thumb-size) / 2)', '100%'] as const
-
-type FontPresetOption = {
-  key: string
-  label: string
-  value: string
-}
-
-const EDITOR_FONT_OPTIONS: readonly FontPresetOption[] = [
-  { key: 'dmmono', label: 'DMMono Nerd Font', value: "'DMMono Nerd Font', 'JetBrains Mono', 'Cascadia Code', monospace" },
-  { key: 'jetbrains-mono', label: 'JetBrains Mono', value: "'JetBrains Mono', 'Cascadia Code', monospace" },
-  { key: 'cascadia', label: 'Cascadia Code', value: "'Cascadia Code', 'Consolas', monospace" },
-  { key: 'fira-code', label: 'Fira Code', value: "'Fira Code', 'Cascadia Code', monospace" },
-  { key: 'system-mono', label: '系统等宽', value: "'Consolas', 'Courier New', monospace" },
-] as const
-
-const PREVIEW_FONT_OPTIONS: readonly FontPresetOption[] = [
-  { key: 'dmmono-ui', label: 'DMMono / GitHub', value: "'DMMono Nerd Font', 'Microsoft YaHei', 'Open Sans', 'Clear Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif" },
-  { key: 'ui-default', label: '跟随界面字体', value: 'var(--gm-font-family)' },
-  { key: 'sans', label: '清晰无衬线', value: "'Noto Sans SC', 'HarmonyOS Sans SC', 'MiSans', 'PingFang SC', 'Microsoft YaHei', sans-serif" },
-  { key: 'serif', label: '书卷衬线', value: "'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', serif" },
-] as const
 
 function getModePerformanceIndex(value: ModePerformanceLevel) {
   return Math.max(0, MODE_PERFORMANCE_KEYS.indexOf(value))
@@ -434,32 +436,6 @@ function ModePerformanceSlider({
   )
 }
 
-function LightPaletteSegmented({
-  value,
-  onChange,
-}: {
-  value: LightPalette
-  onChange: (value: LightPalette) => void
-}) {
-  return (
-    <div className="gm-light-palette-segmented" role="radiogroup" aria-label="明亮配色">
-      {LIGHT_PALETTE_OPTIONS.map((option) => (
-        <button
-          key={option.key}
-          type="button"
-          className="gm-light-palette-segmented__item"
-          data-active={value === option.key}
-          role="radio"
-          aria-checked={value === option.key}
-          onClick={() => onChange(option.key)}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
 const CHAT_PROTOCOL_OPTIONS: { key: ChatProtocol; label: string }[] = [
   ...SUPPORTED_CHAT_PROTOCOLS.map((key) => ({
     key,
@@ -512,18 +488,18 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
       }).catch(() => {})
     }, 1000)
     return () => clearTimeout(timer)
-  }, [ai.protocol, ai.baseUrl, ai.apiKey, ai.chatModel, ai.embedding.protocol, ai.embedding.baseUrl, ai.embedding.apiKey, ai.embedding.embeddingModel])
+  }, [ai.protocol, ai.baseUrl, ai.apiKey, ai.chatModel, ai.timeout, ai.embedding.protocol, ai.embedding.baseUrl, ai.embedding.apiKey, ai.embedding.embeddingModel, ai.embedding.timeout])
 
   // 配置变更时清除旧测试结果
   useEffect(() => {
     setChatTestResult(null)
     setShowChatSavePreset(false)
-  }, [ai.protocol, ai.baseUrl, ai.apiKey, ai.chatModel])
+  }, [ai.protocol, ai.baseUrl, ai.apiKey, ai.chatModel, ai.timeout])
 
   useEffect(() => {
     setEmbTestResult(null)
     setShowEmbSavePreset(false)
-  }, [ai.embedding.protocol, ai.embedding.baseUrl, ai.embedding.apiKey, ai.embedding.embeddingModel])
+  }, [ai.embedding.protocol, ai.embedding.baseUrl, ai.embedding.apiKey, ai.embedding.embeddingModel, ai.embedding.timeout])
 
   const handleChatTest = async () => {
     setChatTesting(true)
@@ -791,6 +767,8 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
         </div>
       )}
 
+      <AdvancedTimeoutSettings value={ai.timeout} onChange={(timeout) => updateAiConfig({ timeout })} />
+
       <Sep />
 
       <SectionTitle>Embedding 配置</SectionTitle>
@@ -895,6 +873,8 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
         </div>
       )}
 
+      <AdvancedTimeoutSettings value={ai.embedding.timeout} onChange={(timeout) => updateEmbeddingConfig({ timeout })} />
+
       <Sep />
 
       <SectionTitle>对话参数</SectionTitle>
@@ -975,6 +955,8 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
         </div>
       )}
 
+      <AdvancedTimeoutSettings value={webSearch.timeout} onChange={(timeout) => updateWebSearchConfig({ timeout })} />
+
       {isTauri() && <AuthorizedApiOrigins />}
 
       <Sep />
@@ -1050,7 +1032,8 @@ function AuthorizedApiOrigins() {
 
 function KnowledgeStats({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => void }) {
   const { ai } = useSettingsStore()
-  const workspacePath = useAppStore((s) => s.workspacePath)
+  const workspaceRoots = useAppStore((state) => state.workspaceRoots)
+  const workspacePaths = workspaceRoots.map((root) => root.path)
   const [stats, setStats] = useState({ documents: 0, totalChunks: 0, embeddedChunks: 0, pendingEmbeddings: 0 })
   const [jobStats, setJobStats] = useState({ pending: 0, running: 0, done: 0, failed: 0 })
   const [stateSummary, setStateSummary] = useState({ PENDING: 0, CHUNKED: 0, EMBEDDING: 0, INDEXED: 0, FAILED: 0 })
@@ -1096,15 +1079,16 @@ function KnowledgeStats({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: ()
   }
 
   const handleCleanupWorkspace = async () => {
-    if (!workspacePath) {
-      setMessage('请先打开工作区后再清理失效索引')
+    if (workspacePaths.length === 0) {
+      setMessage('请先添加工作区后再清理失效索引')
       return
     }
     setEmbedding(true)
     try {
-      const result = await cleanupMissingWorkspaceDocuments(workspacePath)
+      const result = await cleanupMissingWorkspaceDocuments(workspacePaths)
       await refreshStats()
-      setMessage(result.removed > 0 ? `已清理 ${result.removed} 个失效索引` : '未发现失效索引')
+      const summary = result.removed > 0 ? `已清理 ${result.removed} 个失效索引` : '未发现失效索引'
+      setMessage(result.errors.length > 0 ? `${summary}，${result.errors.length} 个工作区不可用` : summary)
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err))
     } finally {
@@ -1113,13 +1097,13 @@ function KnowledgeStats({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: ()
   }
 
   const handleRebuildWorkspace = async () => {
-    if (!workspacePath) {
-      setMessage('请先打开工作区后再重建索引')
+    if (workspacePaths.length === 0) {
+      setMessage('请先添加工作区后再重建索引')
       return
     }
     setEmbedding(true)
     try {
-      const result = await rebuildWorkspaceDocuments(workspacePath)
+      const result = await rebuildWorkspaceDocuments(workspacePaths)
       await refreshStats()
       setLastIndexedAt(Date.now())
       setMessage(`重建完成：移除 ${result.removed} 个旧索引，重新索引 ${result.indexed} 个文件，失败 ${result.failed} 个`)
@@ -1410,6 +1394,7 @@ function GeneralSettings() {
       provider: 'custom',
       baseUrl: '',
       embeddingModel: '',
+      timeout: DEFAULT_REQUEST_TIMEOUT_MS,
     })
     updateEditorSettings({
       fontSize: 14,
@@ -1428,8 +1413,8 @@ function GeneralSettings() {
       modePerformancePolicy: 'balanced',
       defaultOpenMode: 'preview',
     })
-    updateAppearanceSettings({ customCursorEnabled: true, aiMascotAvatarEnabled: false, theme: 'light', lightPalette: 'warm' })
-    updateWebSearchConfig({ provider: 'duckduckgo', apiKey: '', maxResults: 5, customUrl: '' })
+    updateAppearanceSettings({ customCursorEnabled: true, aiMascotAvatarEnabled: false, themeId: 'warm' })
+    updateWebSearchConfig({ provider: 'duckduckgo', apiKey: '', maxResults: 5, customUrl: '', timeout: DEFAULT_REQUEST_TIMEOUT_MS })
     updateUsageTrackingSettings({ enabled: true })
     resetAiShortcutActions()
     toast.success('已恢复默认设置')
@@ -1453,7 +1438,7 @@ function GeneralSettings() {
     setBusy(true)
     try {
       const result = await importDataBackup()
-      toast.success(`已导入 ${result.sessions} 个会话、${result.messages} 条消息、${result.memories} 条记忆`)
+      toast.success(`已导入 ${result.sessions} 个会话、${result.messages} 条消息、${result.memories} 条记忆、${result.artifacts} 条阅读成果`)
     } catch (err) {
       if ((err as Error).message !== '已取消导入') {
         toast.error(err instanceof Error ? err.message : '导入失败')
@@ -1566,15 +1551,13 @@ function GeneralSettings() {
       )}
 
       <SectionTitle>外观</SectionTitle>
-      <SettingField label="深色模式" description="切换夜间写作配色，无需重启">
-        <Switch checked={appearance.theme === 'dark'} onChange={(v) => updateAppearanceSettings({ theme: v ? 'dark' : 'light' })} />
-      </SettingField>
-      <SettingField label="明亮配色" description="仅影响明亮模式；深色模式下会在下次切回明亮时生效">
-        <LightPaletteSegmented
-          value={appearance.lightPalette}
-          onChange={(lightPalette) => updateAppearanceSettings({ lightPalette })}
-        />
-      </SettingField>
+      <div className="gm-theme-setting py-1.5">
+        <div>
+          <span className="text-body text-gm-text">主题</span>
+          <p className="mt-0.5 text-caption text-gm-text-tertiary">选择后立即应用到编辑器、预览和应用界面</p>
+        </div>
+        <ThemePicker value={appearance.themeId} onChange={(themeId) => updateAppearanceSettings({ themeId })} />
+      </div>
       <SettingField label="定制光标" description="使用 animal-island-ui 的手作风光标">
         <Switch checked={appearance.customCursorEnabled} onChange={(v) => updateAppearanceSettings({ customCursorEnabled: v })} />
       </SettingField>
@@ -1644,7 +1627,7 @@ const MEMORY_PAGE_SIZE = 20
 const CANDIDATE_PAGE_SIZE = 10
 
 export function MemorySettings() {
-  const workspacePath = useAppStore((s) => s.workspacePath)
+  const workspacePath = useAppStore(selectPrimaryWorkspacePath)
   const [memories, setMemories] = useState<Memory[]>([])
   const [candidateMemories, setCandidateMemories] = useState<Memory[]>([])
   const [memoryCounts, setMemoryCounts] = useState({ active: 0, candidate: 0, archived: 0 })
@@ -2139,4 +2122,3 @@ export function MemorySettings() {
     </div>
   )
 }
-

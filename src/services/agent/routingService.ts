@@ -19,7 +19,9 @@ import {
   isLocalResearchIntent,
   isWebComparisonIntent,
   isFileSummaryIntent,
+  isSectionReadingIntent,
   isDocumentRewriteIntent,
+  isReminderCreationIntent,
   type Capability,
   type AppContext,
 } from './intentDetector'
@@ -31,6 +33,7 @@ import {
   LOCAL_RESEARCH_ANSWER_PROMPT,
   WEB_COMPARISON_ANSWER_PROMPT,
   FILE_SUMMARY_ANSWER_PROMPT,
+  SECTION_READING_ANSWER_PROMPT,
 } from './answerInstructions'
 
 /**
@@ -150,10 +153,13 @@ export function makeRoutingDecision(
   const isWebComp = isWebComparisonIntent(content)
   const isLocalRes = !isWebComp && isLocalResearchIntent(content)
   const isFileSum = !isWebComp && isFileSummaryIntent(content, appContext)
+  const isSectionReading = isSectionReadingIntent(content, appContext)
 
   // 答案指令
   let answerInstruction: string | undefined
-  if (isWebComp) {
+  if (isSectionReading) {
+    answerInstruction = SECTION_READING_ANSWER_PROMPT
+  } else if (isWebComp) {
     answerInstruction = WEB_COMPARISON_ANSWER_PROMPT
   } else if (isFileSum) {
     answerInstruction = FILE_SUMMARY_ANSWER_PROMPT
@@ -169,19 +175,32 @@ export function makeRoutingDecision(
 
   // 知识库检索
   const shouldLookupKnowledge = intentResult.candidates.includes('knowledge')
-
   // 合并手动选择的 capabilities
   const manualCapabilitiesSet = new Set(manualCapabilities)
-  const mergedCandidates = Array.from(new Set([
+  let mergedCandidates = Array.from(new Set([
     ...manualCapabilitiesSet,
     ...(inheritedAgentContext?.intent || []),
     ...intentResult.candidates,
   ]))
-  const mergedRequired = Array.from(new Set([
+  let mergedRequired = Array.from(new Set([
     ...manualCapabilitiesSet,
     ...(inheritedAgentContext?.requiredCapabilities || []),
     ...intentResult.required,
   ]))
+  if (isSectionReading) {
+    mergedCandidates = mergedCandidates.filter((capability) => capability !== 'knowledge' && capability !== 'file_read')
+    mergedRequired = mergedRequired.filter((capability) => capability !== 'knowledge' && capability !== 'file_read')
+  }
+  const scopedShouldLookupKnowledge = shouldLookupKnowledge && !isSectionReading
+  const readingScope = isSectionReading
+    ? 'section'
+    : appContext.hasSelection
+      ? 'selection'
+      : isFileSum
+        ? 'document'
+        : (isLocalRes || isWebComp) && scopedShouldLookupKnowledge
+          ? 'workspace'
+          : undefined
 
   // 构建候选工具
   let candidateTools = inheritedAgentContext
@@ -200,6 +219,13 @@ export function makeRoutingDecision(
   }
   if (explicitMemoryWriteIntent && !candidateTools.includes('save_memory')) {
     candidateTools.push('save_memory', 'list_memories')
+  }
+  if (
+    isReminderCreationIntent(content)
+    && candidateTools.includes('propose_create_reading_reminder')
+    && !candidateTools.includes('get_current_time')
+  ) {
+    candidateTools.unshift('get_current_time')
   }
   candidateTools = Array.from(new Set(candidateTools))
 
@@ -272,11 +298,12 @@ export function makeRoutingDecision(
     requiresEditConfirmation,
     shouldLookupMemory,
     memoryIntent,
-    shouldLookupKnowledge,
+    shouldLookupKnowledge: scopedShouldLookupKnowledge,
     isDocumentRewrite: isDocRewrite,
     isWebComparison: isWebComp,
     isLocalResearch: isLocalRes,
     isFileSummary: isFileSum,
+    readingScope,
     answerInstruction,
     explicitMemoryWriteIntent,
     inheritedQuery: inheritedAgentContext?.query,

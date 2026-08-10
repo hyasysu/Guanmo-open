@@ -1,4 +1,5 @@
 import { externalFetch } from './externalHttp'
+import { DEFAULT_REQUEST_TIMEOUT_MS, normalizeRequestTimeoutMs } from './requestTimeout'
 
 export interface SearchResult {
   title: string
@@ -21,25 +22,29 @@ export interface WebSearchConfig {
   apiKey: string
   maxResults: number
   customUrl?: string
+  timeout: number
 }
 
 const DEFAULT_CONFIG: WebSearchConfig = {
   provider: 'duckduckgo',
   apiKey: '',
   maxResults: 5,
+  timeout: DEFAULT_REQUEST_TIMEOUT_MS,
 }
 
 let searchConfig: WebSearchConfig = { ...DEFAULT_CONFIG }
 
 export function updateSearchConfig(config: Partial<WebSearchConfig>) {
-  searchConfig = { ...searchConfig, ...config }
+  searchConfig = {
+    ...searchConfig,
+    ...config,
+    timeout: normalizeRequestTimeoutMs(config.timeout ?? searchConfig.timeout),
+  }
 }
 
 export function getSearchConfig(): WebSearchConfig {
   return { ...searchConfig }
 }
-
-const SEARCH_TIMEOUT = 15000
 
 function siteNameFromUrl(url: string): string | undefined {
   try {
@@ -58,7 +63,7 @@ function normalizeSearchResult(result: SearchResult): SearchResult {
 
 function createCombinedAbortSignal(signal?: AbortSignal): { signal: AbortSignal; cleanup: () => void } {
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort('timeout'), SEARCH_TIMEOUT)
+  const timeout = setTimeout(() => controller.abort('timeout'), searchConfig.timeout)
   const forwardAbort = () => controller.abort(signal?.reason || 'aborted')
   signal?.addEventListener('abort', forwardAbort, { once: true })
   return {
@@ -89,6 +94,7 @@ async function searchTavily(query: string, maxResults: number, signal?: AbortSig
         include_raw_content: false,
       }),
       signal: abort.signal,
+      timeoutMs: searchConfig.timeout,
     })
 
     if (!res.ok) {
@@ -133,6 +139,7 @@ async function searchSerper(query: string, maxResults: number, signal?: AbortSig
         num: maxResults,
       }),
       signal: abort.signal,
+      timeoutMs: searchConfig.timeout,
     })
 
     if (!res.ok) {
@@ -176,6 +183,7 @@ async function searchBrave(query: string, maxResults: number, signal?: AbortSign
         'X-Subscription-Token': searchConfig.apiKey,
       },
       signal: abort.signal,
+      timeoutMs: searchConfig.timeout,
     })
 
     if (!res.ok) {
@@ -227,7 +235,7 @@ async function searchCustom(query: string, maxResults: number, signal?: AbortSig
       headers['Authorization'] = `Bearer ${searchConfig.apiKey}`
     }
 
-    const res = await externalFetch(url.toString(), { headers, signal: abort.signal })
+    const res = await externalFetch(url.toString(), { headers, signal: abort.signal, timeoutMs: searchConfig.timeout })
 
     if (!res.ok) {
       let detail = ''
@@ -288,6 +296,7 @@ async function searchDuckDuckGo(query: string, maxResults: number, signal?: Abor
   try {
     res = await externalFetch(url, {
       signal: abort.signal,
+      timeoutMs: searchConfig.timeout,
     })
   } catch (err) {
     if ((err as Error).name === 'UnsupportedCapabilityError') throw err
@@ -382,6 +391,7 @@ export async function testWebSearchConnection(config: WebSearchConfig): Promise<
     if (config.provider === 'duckduckgo') {
       const res = await externalFetch(
         `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent('test')}`,
+        { timeoutMs: normalizeRequestTimeoutMs(config.timeout) },
       )
       if (!res.ok) {
         return { ok: false, message: `DuckDuckGo 连接失败 (${res.status})` }
@@ -400,7 +410,7 @@ export async function testWebSearchConnection(config: WebSearchConfig): Promise<
       if (config.apiKey) {
         headers['Authorization'] = `Bearer ${config.apiKey}`
       }
-      const res = await externalFetch(url.toString(), { headers })
+      const res = await externalFetch(url.toString(), { headers, timeoutMs: normalizeRequestTimeoutMs(config.timeout) })
       if (!res.ok) {
         return { ok: false, message: `自定义搜索连接失败 (${res.status})` }
       }
@@ -419,6 +429,7 @@ export async function testWebSearchConnection(config: WebSearchConfig): Promise<
           Authorization: `Bearer ${config.apiKey}`,
         },
         body: JSON.stringify({ query: 'test', max_results: 1 }),
+        timeoutMs: normalizeRequestTimeoutMs(config.timeout),
       })
       if (!res.ok) {
         let detail = ''
@@ -436,6 +447,7 @@ export async function testWebSearchConnection(config: WebSearchConfig): Promise<
           'X-API-KEY': config.apiKey,
         },
         body: JSON.stringify({ q: 'test', num: 1 }),
+        timeoutMs: normalizeRequestTimeoutMs(config.timeout),
       })
       if (!res.ok) {
         let detail = ''
@@ -454,6 +466,7 @@ export async function testWebSearchConnection(config: WebSearchConfig): Promise<
             'Accept-Encoding': 'gzip',
             'X-Subscription-Token': config.apiKey,
           },
+          timeoutMs: normalizeRequestTimeoutMs(config.timeout),
         },
       )
       if (!res.ok) {

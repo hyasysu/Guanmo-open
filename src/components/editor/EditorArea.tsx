@@ -22,7 +22,6 @@ import { MarkdownDiffView } from './MarkdownDiffView'
 import { MarkdownPreview, MarkdownToc, type MarkdownBlockCommitRequest, type MarkdownPreviewHandle } from './MarkdownPreview'
 import { SearchOverlay } from './SearchOverlay'
 import { TabBar } from './TabBar'
-import { replaceMarkdownBlock } from '@/services/markdownBlocks'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import {
   MODE_PREWARM_ACTIVITY_PAUSE,
@@ -1374,23 +1373,15 @@ export function EditorArea() {
     if (tab) void handleTaskToggle(tab.id, tab.content, line, checked)
   }, [handleTaskToggle])
 
-  const handlePreviewBlockCommit = useCallback((request: MarkdownBlockCommitRequest) => {
+  const handlePreviewBlockCommit = useCallback(async (request: MarkdownBlockCommitRequest) => {
     const tab = useEditorStore.getState().tabs.find((item) => item.id === request.documentKey)
     if (!tab) {
       toast.warning('文档已关闭，块修改未写入；可复制修改内容后重新打开文档。')
-      return Promise.resolve({ status: 'conflict' as const, currentSource: '' })
+      return { status: 'conflict' as const, currentSource: '' }
     }
+    // 动态导入：markdownBlocks 仅在块提交时需要，避免进入入口 chunk（阶段 4 定位重构后 bundle budget）
+    const { replaceMarkdownBlock } = await import('@/services/markdownBlocks')
     const result = replaceMarkdownBlock(tab.content, request.block, request.draft)
-    if (result instanceof Promise) {
-      return result.then((resolved) => {
-        if (resolved.status === 'conflict') {
-          toast.warning('该 Markdown 块已被其他操作修改，当前草稿未覆盖原文。')
-          return resolved
-        }
-        if (resolved.content !== tab.content) updateTabContent(tab.id, resolved.content)
-        return { status: 'applied' as const, content: resolved.content }
-      })
-    }
     if (result.status === 'conflict') {
       toast.warning('该 Markdown 块已被其他操作修改，当前草稿未覆盖原文。')
       return result
@@ -2207,7 +2198,7 @@ function PaneHeader({ title, onClose }: { title: string; onClose?: () => void })
   return (
     <div className="flex items-center justify-between mb-4 pb-2 border-b border-gm-border-subtle">
       <div className="flex items-center gap-2">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#19c8b9" strokeWidth="1.5">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--gm-primary)" strokeWidth="1.5">
           <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
           <path d="M14 2v6h6" />
         </svg>

@@ -195,7 +195,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const [htmlRehypePlugins, setHtmlRehypePlugins] = useState<RehypePlugins | null>(null)
   const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
   const previewFontFamily = useSettingsStore((state) => state.editor.previewFontFamily)
-  const theme = useSettingsStore((state) => state.appearance.theme)
+  const themeId = useSettingsStore((state) => state.appearance.themeId)
   // Virtual scrolling state
   const scrollContainerRef = useRef<HTMLElement | null>(null)
   const measuredHeightsRef = useRef<Map<string, number>>(new Map())
@@ -220,10 +220,10 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     || measurementKey.lineHeight !== lineHeight
     || measurementKey.fontFamily !== previewFontFamily
     || measurementKey.wordWrap !== wordWrap
-    || measurementKey.theme !== theme
+    || measurementKey.theme !== themeId
   ) {
     measuredHeightsRef.current = new Map()
-    measurementKeyRef.current = { content: displayedContent, fontSize, lineHeight, fontFamily: previewFontFamily, wordWrap, theme }
+    measurementKeyRef.current = { content: displayedContent, fontSize, lineHeight, fontFamily: previewFontFamily, wordWrap, theme: themeId }
   }
 
   activeEditRef.current = activeEdit
@@ -1255,33 +1255,34 @@ function getBlockOffsetForLine(block: PreviewBlock, clickedLine: number): number
 function MermaidBlock({ code, startLine, endLine }: { code: string; startLine?: number; endLine?: number }) {
   const [svg, setSvg] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const theme = useSettingsStore((state) => state.appearance.theme)
+  const themeId = useSettingsStore((state) => state.appearance.themeId)
 
   useEffect(() => {
     let cancelled = false
     async function render() {
       try {
         const mermaid = (await import('mermaid')).default
-        const isDark = theme === 'dark'
+        const styles = getComputedStyle(document.documentElement)
+        const token = (name: string) => styles.getPropertyValue(name).trim()
         mermaid.initialize({
           startOnLoad: false,
           theme: 'base',
           securityLevel: 'strict',
-          themeVariables: isDark ? {
-            background: '#1d1a15',
-            primaryColor: '#30291e',
-            primaryTextColor: '#eee4d2',
-            primaryBorderColor: '#514532',
-            secondaryColor: '#1a3a35',
-            secondaryTextColor: '#eee4d2',
-            secondaryBorderColor: '#38d1c1',
-            tertiaryColor: '#252017',
-            tertiaryTextColor: '#eee4d2',
-            tertiaryBorderColor: '#3b3327',
-            lineColor: '#b7aa94',
-            textColor: '#eee4d2',
-            edgeLabelBackground: '#1d1a15',
-          } : undefined,
+          themeVariables: {
+            background: token('--gm-surface'),
+            primaryColor: token('--gm-surface-overlay'),
+            primaryTextColor: token('--gm-text'),
+            primaryBorderColor: token('--gm-border-hover'),
+            secondaryColor: token('--gm-primary-subtle'),
+            secondaryTextColor: token('--gm-text'),
+            secondaryBorderColor: token('--gm-primary'),
+            tertiaryColor: token('--gm-surface-elevated'),
+            tertiaryTextColor: token('--gm-text'),
+            tertiaryBorderColor: token('--gm-border'),
+            lineColor: token('--gm-text-secondary'),
+            textColor: token('--gm-text'),
+            edgeLabelBackground: token('--gm-surface'),
+          },
         })
         const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}`
         const result = await mermaid.render(id, code)
@@ -1298,7 +1299,7 @@ function MermaidBlock({ code, startLine, endLine }: { code: string; startLine?: 
     }
     render()
     return () => { cancelled = true }
-  }, [code, theme])
+  }, [code, themeId])
 
   if (error) {
     return (

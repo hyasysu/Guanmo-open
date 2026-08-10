@@ -15,7 +15,7 @@ async function run() {
   assert.equal(isWorkspaceDisplayFile('D:\\notes\\draft.txt'), false)
 
   const legacyPaths = collectLegacyFileAccessPaths({
-    workspacePath: 'D:\\workspace',
+    workspacePaths: ['D:\\workspace', 'E:\\study', 'F:\\personal'],
     recentFiles: [{ path: 'D:\\notes\\recent.md' }],
     favorites: ['D:\\notes\\favorite.md'],
     tabs: [
@@ -26,7 +26,7 @@ async function run() {
     documentPaths: ['D:\\knowledge\\rag.md'],
     chatSourcePaths: ['D:\\archive\\chat-source.md'],
   })
-  assert.deepEqual(legacyPaths.workspacePaths, ['D:\\workspace'])
+  assert.deepEqual(legacyPaths.workspacePaths, ['D:\\workspace', 'E:\\study', 'F:\\personal'])
   assert.deepEqual(legacyPaths.filePaths, [
     'D:\\notes\\recent.md',
     'D:\\notes\\favorite.md',

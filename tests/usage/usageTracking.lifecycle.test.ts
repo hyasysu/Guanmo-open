@@ -39,14 +39,22 @@ interface MockRow {
 
 let mockDbRows: MockRow[] = []
 let mockExecuteFailures = 0
+let mockExecuteCalls = 0
 let mockSelectFailures = 0
+let mockFocusedFailures = 0
+let mockVisibleFailures = 0
+let mockMinimizedFailures = 0
 let mockExecuteGate: Promise<void> | null = null
 let mockWindowStateGate: Promise<void> | null = null
 
 function resetMockDb() {
   mockDbRows = []
   mockExecuteFailures = 0
+  mockExecuteCalls = 0
   mockSelectFailures = 0
+  mockFocusedFailures = 0
+  mockVisibleFailures = 0
+  mockMinimizedFailures = 0
   mockExecuteGate = null
   mockWindowStateGate = null
 }
@@ -59,6 +67,7 @@ const mockDbAdapter = {
       mockDbRows = []
       return { rowsAffected: 1 }
     }
+    mockExecuteCalls += 1
     if (mockExecuteFailures > 0) {
       mockExecuteFailures -= 1
       throw new Error('mock write failed')
@@ -108,12 +117,28 @@ const mockDbAdapter = {
 
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({
-    isFocused: () => Promise.resolve(mockWindow.focused),
+    isFocused: async () => {
+      if (mockFocusedFailures > 0) {
+        mockFocusedFailures -= 1
+        throw new Error('mock focused state failed')
+      }
+      return mockWindow.focused
+    },
     isVisible: async () => {
+      if (mockVisibleFailures > 0) {
+        mockVisibleFailures -= 1
+        throw new Error('mock visible state failed')
+      }
       await mockWindowStateGate
       return mockWindow.visible
     },
-    isMinimized: () => Promise.resolve(mockWindow.minimized),
+    isMinimized: async () => {
+      if (mockMinimizedFailures > 0) {
+        mockMinimizedFailures -= 1
+        throw new Error('mock minimized state failed')
+      }
+      return mockWindow.minimized
+    },
     onFocusChanged: (handler: (event: { payload: boolean }) => void) => {
       mockWindow.focusListeners.add(handler)
       return Promise.resolve(() => {
@@ -347,6 +372,27 @@ describe('窗口生命周期', () => {
     expect(docListeners.get('visibilitychange')?.size).toBe(1)
   })
 
+  it('快速失焦再聚焦最终只保留一个活动计时器', async () => {
+    mockWindow.focused = true
+    await startUsageTracking()
+
+    mockWindow.focused = false
+    for (const listener of mockWindow.focusListeners) {
+      listener({ payload: false })
+    }
+    mockWindow.focused = true
+    for (const listener of mockWindow.focusListeners) {
+      listener({ payload: true })
+    }
+
+    await flushMicrotasks()
+    await flushMicrotasks()
+
+    expect(getUsageSnapshot().isActive).toBe(true)
+    expect(mockWindow.focusListeners.size).toBe(1)
+    expect(mockWindow.closeListeners.size).toBe(1)
+  })
+
   it('停止后在途的焦点查询不得重新激活统计', async () => {
     mockWindow.focused = false
     await startUsageTracking()
@@ -375,12 +421,37 @@ describe('窗口生命周期', () => {
 
     await expect(startUsageTracking()).rejects.toThrow('mock schema unavailable')
     expect(getUsageSnapshot().isActive).toBe(false)
+    expect(getUsageSnapshot().error).toEqual({ kind: 'database_read' })
     expect(mockWindow.focusListeners.size).toBe(0)
     expect(mockWindow.closeListeners.size).toBe(0)
 
-    await startUsageTracking()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flushMicrotasks()
     expect(getUsageSnapshot().isActive).toBe(true)
+    expect(getUsageSnapshot().error).toBeNull()
     expect(mockWindow.focusListeners.size).toBe(1)
+  })
+
+  it('窗口状态查询失败可观察，并在后续窗口事件恢复', async () => {
+    mockWindow.focused = true
+    mockVisibleFailures = 1
+
+    await startUsageTracking()
+
+    expect(getUsageSnapshot().isActive).toBe(false)
+    expect(getUsageSnapshot().error).toEqual({
+      kind: 'window_state',
+      fields: ['visible'],
+    })
+
+    for (const listener of mockWindow.focusListeners) {
+      listener({ payload: true })
+    }
+    await flushMicrotasks()
+    await flushMicrotasks()
+
+    expect(getUsageSnapshot().isActive).toBe(true)
+    expect(getUsageSnapshot().error).toBeNull()
   })
 
   it('Web 端不启动统计', async () => {
@@ -425,6 +496,28 @@ describe('定时器与 checkpoint', () => {
     const dbRow = mockDbRows.find((r) => r.date === today)
     expect(dbRow).toBeDefined()
     expect(dbRow!.foreground_seconds).toBe(30)
+  })
+
+  it('写入变慢时不会累积 checkpoint 任务', async () => {
+    mockWindow.focused = true
+    await startUsageTracking()
+
+    let releaseWrite!: () => void
+    mockExecuteGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve
+    })
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(mockExecuteCalls).toBe(1)
+
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(mockExecuteCalls).toBe(1)
+
+    releaseWrite()
+    await flushMicrotasks()
+    await vi.advanceTimersByTimeAsync(30_000)
+    await flushMicrotasks()
+    expect(mockExecuteCalls).toBe(2)
   })
 
   it('手动刷新会立即结算未满 30 秒的当前时段', async () => {
@@ -647,11 +740,13 @@ describe('写入失败重试', () => {
     await flushPending()
     expect(getPendingSnapshot().get(today)).toBe(2)
     expect(mockDbRows).toHaveLength(0)
+    expect(getUsageSnapshot().error).toEqual({ kind: 'database_write' })
 
     await flushPending()
     expect(mockDbRows).toHaveLength(1)
     expect(mockDbRows[0].foreground_seconds).toBe(2)
     expect(getPendingSnapshot().has(today)).toBe(false)
+    expect(getUsageSnapshot().error).toBeNull()
   })
 
   it('写入等待期间追加的同日增量不会被旧快照删除', async () => {
@@ -753,6 +848,27 @@ describe('清空数据', () => {
     await flushMicrotasks()
 
     expect(mockDbRows.length).toBe(0)
+    expect(getPendingSnapshot().size).toBe(0)
+  })
+
+  it('清空排在在途写入之后，旧写入不会回流', async () => {
+    const today = getLocalDateKey()
+    let releaseWrite!: () => void
+    mockExecuteGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve
+    })
+    addPendingMs(today, 2_500)
+
+    const flushing = flushPending()
+    await Promise.resolve()
+    expect(mockExecuteCalls).toBe(1)
+
+    const clearing = clearUsageDataWithLifecycle()
+    releaseWrite()
+    await flushing
+    await clearing
+
+    expect(mockDbRows).toHaveLength(0)
     expect(getPendingSnapshot().size).toBe(0)
   })
 

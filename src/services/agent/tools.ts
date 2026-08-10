@@ -7,13 +7,13 @@ import { useChatStore } from '@/stores/chatStore'
 import { getAgentScopeContext } from '@/services/aiScope'
 import type { ContextTag } from '@/types/contextTag'
 import type { ChatMessage, ChatMessageTag } from '@/services/ai/types'
-import { searchMemories, buildMemoryContext, upsertExplicitMemory } from '@/services/memory/memoryService'
+import { searchMemories, buildMemoryContext } from '@/services/memory/memoryService'
 import { loadAllMemories, listEmbeddingJobs } from '@/services/database/persistence'
 import { readFile } from '@/hooks/useTauri'
 import type { TextRange } from './editTarget'
 import { normalizeFilePath } from '@/services/pathIdentity'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { useAppStore } from '@/stores/appStore'
+import { selectPrimaryWorkspacePath, useAppStore } from '@/stores/appStore'
 import { getEmbeddingClient, getEmbeddingConfig, isEmbeddingReady } from '@/services/ai/aiClient'
 import {
   buildSelectionContextWindow,
@@ -21,6 +21,11 @@ import {
   serializeSelectionContextWindow,
   type SelectionContextDirection,
 } from './selectionContext'
+import { buildPendingActionResult } from './actionProposal'
+import {
+  READING_REMINDER_DEVELOPMENT_MESSAGE,
+  READING_REMINDER_FEATURE_AVAILABLE,
+} from '@/services/readingReminderFeature'
 
 function validateString(value: unknown, name: string): string | null {
   if (!value || typeof value !== 'string') {
@@ -691,6 +696,10 @@ export function registerBuiltinTools() {
       { name: 'replaceWholeDocument', type: 'boolean', description: '是否替换目标标签页整份内容；为 true 时由工具自动使用完整原文', required: false },
       { name: 'changeSummary', type: 'string', description: '简短变更摘要，例如：调整语气、压缩重复、优化标题层级、保留原意', required: false },
     ],
+    effect: 'write_local',
+    capability: 'edit_authorized_markdown',
+    confirmationPolicy: 'required',
+    reversibleDescription: '应用后可生成反向修改确认卡片',
     execute: async (args) => {
       const newTextErr = validateString(args.newText, 'newText')
       if (newTextErr) return newTextErr
@@ -851,7 +860,7 @@ export function registerBuiltinTools() {
       const batchEmbedding = isEmbeddingReady()
         ? async (texts: string[], signal?: AbortSignal) => getEmbeddingClient().batchEmbedding(texts, signal)
         : undefined
-      const workspacePath = useAppStore.getState().workspacePath
+      const workspacePath = selectPrimaryWorkspacePath(useAppStore.getState())
       const memories = await searchMemories(args.query as string, {
         mode: 'strong',
         topK,
@@ -867,12 +876,94 @@ export function registerBuiltinTools() {
   })
 
   registerTool({
+    name: 'propose_save_reading_artifact',
+    description: '提出保存阅读成果的行动提案。只生成确认卡，不直接写入 SQLite。',
+    parameters: [
+      { name: 'artifactType', type: 'string', description: '成果类型：summary | question_set | annotation | note', required: true },
+      { name: 'title', type: 'string', description: '成果标题', required: true },
+      { name: 'content', type: 'string', description: '要保存的成果正文', required: true },
+      { name: 'sourceMessageId', type: 'string', description: '可选的来源助手消息 ID；确认时会重新校验', required: false },
+    ],
+    effect: 'write_local',
+    capability: 'reading_artifact',
+    confirmationPolicy: 'required',
+    reversibleDescription: '可在阅读成果中删除',
+    execute: async (args) => buildPendingActionResult('save_reading_artifact', {
+      artifactType: args.artifactType,
+      title: args.title,
+      content: args.content,
+      ...(args.sourceMessageId ? { sourceMessageId: args.sourceMessageId } : {}),
+    }, {
+      title: '保存阅读成果',
+      target: '本地阅读成果库',
+      preview: `${String(args.title || '')}\n${String(args.content || '').slice(0, 800)}`,
+    }),
+  })
+
+  registerTool({
+    name: 'propose_create_markdown_note',
+    description: '提出新建 Markdown 阅读笔记的行动提案。不得接收路径；确认后由用户通过系统保存对话框选择目标。',
+    parameters: [
+      { name: 'title', type: 'string', description: '阅读笔记标题', required: true },
+      { name: 'content', type: 'string', description: 'Markdown 阅读笔记正文', required: true },
+      { name: 'sourceMessageId', type: 'string', description: '可选的来源助手消息 ID；确认时会重新校验', required: false },
+    ],
+    effect: 'write_local',
+    capability: 'markdown_file',
+    confirmationPolicy: 'required',
+    reversibleDescription: '保存后需在文件系统中手动删除',
+    execute: async (args) => buildPendingActionResult('create_markdown_note', {
+      title: args.title,
+      content: args.content,
+      ...(args.sourceMessageId ? { sourceMessageId: args.sourceMessageId } : {}),
+    }, {
+      title: '新建 Markdown 阅读笔记',
+      target: '由系统保存对话框选择',
+      preview: `${String(args.title || '')}\n${String(args.content || '').slice(0, 800)}`,
+    }),
+  })
+
+  registerTool({
+    name: 'propose_create_reading_reminder',
+    description: '提醒功能当前开发中。调用时只返回开发状态，不创建提醒或确认卡。',
+    parameters: [
+      { name: 'title', type: 'string', description: '提醒标题', required: true },
+      { name: 'description', type: 'string', description: '提醒说明', required: false },
+      { name: 'dueAt', type: 'string', description: '明确的未来 ISO 日期时间；无偏移时使用电脑时区', required: true },
+      { name: 'timezone', type: 'string', description: '可选创建时区，例如 Asia/Shanghai；默认电脑时区', required: false },
+      { name: 'sourceMessageId', type: 'string', description: '可选的来源助手消息 ID；确认时会重新校验', required: false },
+    ],
+    effect: 'schedule',
+    capability: 'reading_reminder',
+    confirmationPolicy: READING_REMINDER_FEATURE_AVAILABLE ? 'required' : 'never',
+    reversibleDescription: '可在提醒列表中取消',
+    execute: async (args) => {
+      if (!READING_REMINDER_FEATURE_AVAILABLE) return READING_REMINDER_DEVELOPMENT_MESSAGE
+      return buildPendingActionResult('create_reading_reminder', {
+        title: args.title,
+        ...(args.description ? { description: args.description } : {}),
+        dueAt: args.dueAt,
+        ...(args.timezone ? { timezone: args.timezone } : {}),
+        ...(args.sourceMessageId ? { sourceMessageId: args.sourceMessageId } : {}),
+      }, {
+        title: '创建一次性阅读提醒',
+        target: String(args.dueAt || ''),
+        preview: `${String(args.title || '')}${args.description ? `\n${String(args.description).slice(0, 800)}` : ''}`,
+      })
+    },
+  })
+
+  registerTool({
     name: 'save_memory',
-    description: '主动保存长期记忆。用于记录用户偏好、项目信息、重要上下文等需要跨会话记住的内容。',
+    description: '提出保存长期记忆的行动提案。只生成确认卡，用户确认前不写入长期记忆。',
     parameters: [
       { name: 'content', type: 'string', description: '记忆内容（简洁明确）', required: true },
       { name: 'category', type: 'string', description: '分类: preference(偏好) | project(项目) | learning(学习进度) | profile(稳定背景) | instruction(长期指令)，默认 preference', required: false },
     ],
+    effect: 'write_local',
+    capability: 'memory',
+    confirmationPolicy: 'required',
+    reversibleDescription: '保存后可在记忆管理中手动删除',
     execute: async (args) => {
       const err = validateString(args.content, 'content')
       if (err) return err
@@ -880,10 +971,14 @@ export function registerBuiltinTools() {
       const category = validCategories.includes(args.category as string)
         ? (args.category as string)
         : 'preference'
-      const result = await upsertExplicitMemory(args.content as string, category, {
-        workspacePath: useAppStore.getState().workspacePath,
+      return buildPendingActionResult('save_memory', {
+        content: args.content,
+        category,
+      }, {
+        title: '保存长期记忆',
+        target: '本地长期记忆库',
+        preview: String(args.content),
       })
-      return `${result.action === 'updated' ? '已更新已有记忆' : '已保存新记忆'}：「${result.memory.content}」（分类：${result.memory.category}）`
     },
   })
 }

@@ -82,7 +82,49 @@ export interface BackupPayload {
     messages: ChatMessageRow[]
   }>
   memories: Memory[]
+  artifacts: ReadingArtifactBackupEntry[]
+  readingReminders: ReadingReminderBackupEntry[]
   note: string
+}
+
+/**
+ * 备份中的阅读成果条目。
+ * 字段经运行时解码后重新序列化为备份友好格式；旧备份缺少该字段时按空数组兼容。
+ */
+export interface ReadingArtifactBackupEntry {
+  id: string
+  type: string
+  title: string
+  content: string
+  structuredContent: string | null
+  sourceFilePath: string | null
+  sourceFileName: string | null
+  sourceContentHash: string | null
+  sourceHeadingPath: string | null
+  sourceStartLine: number | null
+  sourceEndLine: number | null
+  sourceQuote: string | null
+  sourceMessageId: string | null
+  sourceScope: string | null
+  status: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ReadingReminderBackupEntry {
+  id: string
+  title: string
+  description: string | null
+  dueAtUtc: number
+  createdTimezone: string
+  status: string
+  sourceArtifactId: string | null
+  sourceFilePath: string | null
+  sourceMessageId: string | null
+  notificationId: number | null
+  errorCode: string | null
+  createdAt: number
+  updatedAt: number
 }
 
 /**
@@ -355,6 +397,20 @@ export async function loadDocumentFilePaths(): Promise<string[]> {
   const db = getDatabase()
   const rows = await db.select<{ file_path: string }>('SELECT file_path FROM documents')
   return rows.map((row) => row.file_path)
+}
+
+/**
+ * 轻量查询：按文件路径读取已索引文档的内容哈希，用于阅读成果来源锚点校验。
+ * 文档未索引时返回 undefined；不加载 chunks/embeddings。
+ */
+export async function loadDocumentContentHashByPath(filePath: string): Promise<string | undefined> {
+  if (!isDatabaseReady()) return undefined
+  const db = getDatabase()
+  const rows = await db.select<{ content_hash: string | null }>(
+    'SELECT content_hash FROM documents WHERE file_path = $1',
+    [filePath],
+  )
+  return rows[0]?.content_hash || undefined
 }
 
 export async function loadChatSourceFilePaths(): Promise<string[]> {
@@ -854,16 +910,22 @@ export async function exportBackupPayload(): Promise<BackupPayload> {
     }))
   )
   const memories = await loadAllMemories()
+  const { loadReadingArtifactsForBackup } = await import('./readingArtifacts')
+  const artifacts = await loadReadingArtifactsForBackup()
+  const { loadReadingRemindersForBackup } = await import('./readingReminders')
+  const readingReminders = await loadReadingRemindersForBackup()
   return {
     version: 1,
     exportedAt: Date.now(),
     sessions: serializedSessions,
     memories,
+    artifacts,
+    readingReminders,
     note: '不包含 API Key 等敏感密钥。知识库文档索引可在新环境通过工作区重建恢复。',
   }
 }
 
-export async function importBackupPayload(payload: BackupPayload): Promise<{ sessions: number; messages: number; memories: number }> {
+export async function importBackupPayload(payload: BackupPayload): Promise<{ sessions: number; messages: number; memories: number; artifacts: number; readingReminders: number }> {
   if (payload.version !== 1) {
     throw new Error(`不支持的备份版本：${payload.version}`)
   }

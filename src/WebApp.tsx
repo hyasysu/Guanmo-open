@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useLayoutEffect, useState } from 'react'
 
 type WebTheme = 'light' | 'dark'
 const THEME_KEY = 'guanmo-web-theme'
@@ -10,8 +10,11 @@ function readTheme(): WebTheme {
 export default function WebApp() {
   const [theme, setTheme] = useState<WebTheme>(readTheme)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme
+    document.documentElement.dataset.themeId = theme
+    document.documentElement.style.colorScheme = theme
+    delete document.documentElement.dataset.lightPalette
     localStorage.setItem(THEME_KEY, theme)
   }, [theme])
 

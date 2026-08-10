@@ -14,8 +14,9 @@ vi.mock('@/hooks/useTauri', () => ({
 }))
 
 vi.mock('@/stores/appStore', () => ({
-  useAppStore: (selector: (state: { workspacePath: string }) => unknown) => selector({
-    workspacePath: 'D:/Anonymous/Current',
+  selectPrimaryWorkspacePath: (state: { workspaceRoots: Array<{ path: string }> }) => state.workspaceRoots[0]?.path ?? null,
+  useAppStore: (selector: (state: { workspaceRoots: Array<{ path: string }> }) => unknown) => selector({
+    workspaceRoots: [{ path: 'D:/Anonymous/Current' }],
   }),
 }))
 

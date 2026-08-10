@@ -1,19 +1,22 @@
-import type { EditConfirmation } from '@/services/ai/types'
+import type { ActionProposal, EditConfirmation } from '@/services/ai/types'
+import { decodePendingAction } from './actionProposal'
 import type { Capability } from './intentDetector'
 import type { AgentToolName } from './toolSelector'
 import type { AgentProgressStage, AgentResult, AgentStep, AgentTaskContext } from './types'
 
 type PendingEditPayload = Omit<EditConfirmation, 'id' | 'messageId' | 'status'>
+type PendingActionPayload = Omit<ActionProposal, 'id' | 'messageId' | 'status' | 'createdAt' | 'expiresAt' | 'updatedAt'>
 
 export type AgentSessionEvent =
   | { type: 'thought'; step: AgentStep }
   | { type: 'action'; step: AgentStep; toolName?: string }
-  | { type: 'observation'; step: AgentStep; toolName?: string; pendingEdit?: PendingEditPayload }
+  | { type: 'observation'; step: AgentStep; toolName?: string; pendingEdit?: PendingEditPayload; pendingAction?: PendingActionPayload }
   | { type: 'progress'; step: AgentStep; stage: AgentProgressStage }
 
 export interface AgentSessionState {
   steps: AgentStep[]
   pendingEdits: PendingEditPayload[]
+  pendingActions: PendingActionPayload[]
 }
 
 export interface AgentContextContinuation {
@@ -155,12 +158,16 @@ export function decodeAgentStepEvent(step: AgentStep): AgentSessionEvent {
   if (step.type === 'action') return { type: 'action', step, toolName: step.toolName }
 
   let pendingEdit: PendingEditPayload | undefined
+  let pendingAction: PendingActionPayload | undefined
   try {
-    pendingEdit = decodePendingEdit(JSON.parse(step.content))
+    const parsed = JSON.parse(step.content)
+    pendingEdit = decodePendingEdit(parsed)
+    pendingAction = decodePendingAction(parsed)
   } catch {
     pendingEdit = undefined
+    pendingAction = undefined
   }
-  return { type: 'observation', step, toolName: step.toolName, pendingEdit }
+  return { type: 'observation', step, toolName: step.toolName, pendingEdit, pendingAction }
 }
 
 export function decodeKnowledgeSearchOutcome(
@@ -184,5 +191,8 @@ export function reduceAgentSession(state: AgentSessionState, event: AgentSession
     pendingEdits: event.type === 'observation' && event.pendingEdit
       ? [...state.pendingEdits, event.pendingEdit]
       : state.pendingEdits,
+    pendingActions: event.type === 'observation' && event.pendingAction
+      ? [...state.pendingActions, event.pendingAction]
+      : state.pendingActions,
   }
 }

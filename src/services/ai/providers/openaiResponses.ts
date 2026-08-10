@@ -140,6 +140,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       headers: this.headers,
       body: JSON.stringify(body),
       signal,
+      timeoutMs: this.config.timeout,
     })
 
     if (
@@ -153,6 +154,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
         headers: this.headers,
         body: JSON.stringify(body),
         signal,
+        timeoutMs: this.config.timeout,
       })
     }
 
@@ -218,7 +220,10 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
 
   async validateConfig(): Promise<ValidateResult> {
     try {
-      const response = await externalFetch(`${this.baseUrl}/models`, { headers: this.headers })
+      const response = await externalFetch(`${this.baseUrl}/models`, {
+        headers: this.headers,
+        timeoutMs: this.config.timeout,
+      })
       if (response.ok) {
         const data: unknown = await response.json()
         const models = isRecord(data) && Array.isArray(data.data)
@@ -240,7 +245,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     }
 
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 15000)
+    const timeout = setTimeout(() => controller.abort(), this.config.timeout)
     try {
       const response = await externalFetch(`${this.baseUrl}/responses`, {
         method: 'POST',
@@ -252,6 +257,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
           store: false,
         }),
         signal: controller.signal,
+        timeoutMs: this.config.timeout,
       })
 
       if (response.ok) return { ok: true }

@@ -2,15 +2,28 @@ import { useCallback, useEffect, useState } from 'react'
 import { joinPath } from '@/hooks/useTauri'
 import { listDirectory } from '@/services/fileSystem'
 import { isWorkspaceDisplayFile, shouldSkipWorkspaceDirectory, type FileNode } from '@/services/fileTree'
-import { toast } from '@/services/toast'
 import { recoverRememberedWorkspace } from '@/services/persistedFileAccess'
-import { useAppStore } from '@/stores/appStore'
+import { useAppStore, type WorkspaceRoot } from '@/stores/appStore'
+
+export interface WorkspaceTreeState {
+  nodes: FileNode[]
+  hiddenCount: number
+  loading: boolean
+  error: string | null
+}
+
+const EMPTY_TREE: WorkspaceTreeState = {
+  nodes: [],
+  hiddenCount: 0,
+  loading: false,
+  error: null,
+}
 
 export function useWorkspaceFileTree() {
-  const workspacePath = useAppStore((s) => s.workspacePath)
-  const setWorkspacePath = useAppStore((s) => s.setWorkspacePath)
-  const [workspaceFiles, setWorkspaceFiles] = useState<FileNode[]>([])
-  const [workspaceHiddenCount, setWorkspaceHiddenCount] = useState(0)
+  const workspaceRoots = useAppStore((state) => state.workspaceRoots)
+  const addWorkspaceRoot = useAppStore((state) => state.addWorkspaceRoot)
+  const removeWorkspaceRoot = useAppStore((state) => state.removeWorkspaceRoot)
+  const [workspaceTrees, setWorkspaceTrees] = useState<Record<string, WorkspaceTreeState>>({})
 
   const readDirRecursive = useCallback(async (dirPath: string, depth: number): Promise<{ nodes: FileNode[]; hidden: number }> => {
     if (depth > 5) return { nodes: [], hidden: 0 }
@@ -42,58 +55,77 @@ export function useWorkspaceFileTree() {
     return { nodes, hidden }
   }, [])
 
-  const loadWorkspace = useCallback(async (dirPath: string) => {
+  const loadWorkspaceRoot = useCallback(async (root: WorkspaceRoot) => {
+    setWorkspaceTrees((current) => ({
+      ...current,
+      [root.id]: { ...(current[root.id] ?? EMPTY_TREE), loading: true, error: null },
+    }))
     try {
       const { nodes, hidden } = await recoverRememberedWorkspace(
-        dirPath,
-        () => readDirRecursive(dirPath, 0)
+        root.path,
+        () => readDirRecursive(root.path, 0)
       )
-      setWorkspaceHiddenCount(hidden)
-      setWorkspaceFiles(nodes)
-    } catch (err) {
-      console.error('Load workspace failed:', err)
-      const message = err instanceof Error ? err.message : String(err)
-      toast.error(message || '工作区加载失败')
-      if (!message.includes('重新授权已取消') && !message.includes('请选择原工作区')) {
-        setWorkspacePath(null)
-      }
-      setWorkspaceFiles([])
-      setWorkspaceHiddenCount(0)
+      if (!useAppStore.getState().workspaceRoots.some((item) => item.id === root.id)) return
+      setWorkspaceTrees((current) => ({
+        ...current,
+        [root.id]: { nodes, hiddenCount: hidden, loading: false, error: null },
+      }))
+    } catch (error) {
+      if (!useAppStore.getState().workspaceRoots.some((item) => item.id === root.id)) return
+      const message = error instanceof Error ? error.message : String(error)
+      setWorkspaceTrees((current) => ({
+        ...current,
+        [root.id]: { ...(current[root.id] ?? EMPTY_TREE), loading: false, error: message || '工作区加载失败' },
+      }))
     }
-  }, [readDirRecursive, setWorkspacePath])
+  }, [readDirRecursive])
 
-  const refreshWorkspace = useCallback(async () => {
-    if (!workspacePath) return
-    await loadWorkspace(workspacePath)
-  }, [loadWorkspace, workspacePath])
+  const refreshWorkspaceRoot = useCallback(async (id: string) => {
+    const root = useAppStore.getState().workspaceRoots.find((item) => item.id === id)
+    if (root) await loadWorkspaceRoot(root)
+  }, [loadWorkspaceRoot])
 
-  const closeWorkspace = useCallback(() => {
-    setWorkspaceFiles([])
-    setWorkspacePath(null)
-    setWorkspaceHiddenCount(0)
-  }, [setWorkspacePath])
+  const loadWorkspaceRoots = useCallback(async (roots: WorkspaceRoot[]) => {
+    for (const root of roots) {
+      await loadWorkspaceRoot(root)
+    }
+  }, [loadWorkspaceRoot])
+
+  const refreshAllWorkspaces = useCallback(async () => {
+    const roots = useAppStore.getState().workspaceRoots
+    await loadWorkspaceRoots(roots)
+  }, [loadWorkspaceRoots])
+
+  const removeWorkspace = useCallback((id: string) => {
+    removeWorkspaceRoot(id)
+    setWorkspaceTrees((current) => {
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
+  }, [removeWorkspaceRoot])
 
   useEffect(() => {
-    if (workspacePath) {
-      void loadWorkspace(workspacePath)
-    }
-  }, [])
+    const rootIds = new Set(workspaceRoots.map((root) => root.id))
+    setWorkspaceTrees((current) => Object.fromEntries(
+      Object.entries(current).filter(([id]) => rootIds.has(id))
+    ))
+    void loadWorkspaceRoots(workspaceRoots)
+  }, [loadWorkspaceRoots, workspaceRoots])
 
   useEffect(() => {
-    if (!workspacePath) return
-    const handler = () => {
-      void loadWorkspace(workspacePath)
-    }
+    const handler = () => { void refreshAllWorkspaces() }
     window.addEventListener('guanmo:workspace-refresh', handler)
     return () => window.removeEventListener('guanmo:workspace-refresh', handler)
-  }, [loadWorkspace, workspacePath])
+  }, [refreshAllWorkspaces])
 
   return {
-    workspacePath,
-    workspaceFiles,
-    workspaceHiddenCount,
-    loadWorkspace,
-    refreshWorkspace,
-    closeWorkspace,
+    workspaceRoots,
+    workspaceTrees,
+    addWorkspaceRoot,
+    removeWorkspace,
+    loadWorkspaceRoot,
+    refreshWorkspaceRoot,
+    refreshAllWorkspaces,
   }
 }

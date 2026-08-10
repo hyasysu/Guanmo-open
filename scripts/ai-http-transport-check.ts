@@ -5,8 +5,10 @@ import {
   SUPPORTED_CHAT_PROTOCOLS,
   createChatProvider,
   getChatProtocolCapabilities,
+  initAiClient,
+  initEmbeddingClient,
 } from '../src/services/ai/aiClient'
-import { updateSearchConfig, webSearch } from '../src/services/webSearch'
+import { testWebSearchConnection, updateSearchConfig, webSearch } from '../src/services/webSearch'
 import { AI_CHAT_PRESETS, AI_EMBEDDING_PRESETS, type AiConfig } from '../src/services/ai/types'
 import { readFileSync } from 'node:fs'
 import {
@@ -16,7 +18,7 @@ import {
   setOriginAuthorizationPrompt,
 } from '../src/services/externalHttp'
 
-function assert(condition: unknown, message: string): asserts condition {
+function assert(condition: boolean, message: string) {
   if (!condition) throw new Error(message)
 }
 
@@ -33,10 +35,11 @@ const builtinOrigins = new Set([
   'https://api.openai.com:443',
   'https://api.tavily.com:443',
   'https://api.github.com:443',
+  'http://localhost:11434',
 ])
 const sessionOrigins = new Set<string>()
 const persistedOrigins = new Set<string>()
-const requests: Array<{ url: string; method: string; headers: [string, string][]; body?: number[] }> = []
+const requests: Array<{ url: string; method: string; headers: [string, string][]; body?: number[]; timeoutMs?: number }> = []
 let rejectedReasoningRequests = 0
 
 function originOf(value: string) {
@@ -143,7 +146,7 @@ runtime.__TAURI_INVOKE__ = async (command, args = {}) => {
   }
   if (command !== 'external_http_stream') throw new Error(`unexpected command: ${command}`)
 
-  const request = args.request as { url: string; method: string; headers: [string, string][]; body?: number[] }
+  const request = args.request as { url: string; method: string; headers: [string, string][]; body?: number[]; timeoutMs?: number }
   const channel = args.onEvent as { onmessage?: (event: unknown) => void }
   const origin = originOf(request.url)
   requests.push(request)
@@ -187,7 +190,7 @@ const config: AiConfig = {
   temperature: 0.7,
   topP: 1,
   embedding: {
-    protocol: 'openai-embedding', provider: 'custom', baseUrl: '', apiKey: '', embeddingModel: 'embed',
+    protocol: 'openai-embedding', provider: 'custom', baseUrl: '', apiKey: '', embeddingModel: 'embed', timeout: 45000,
   },
 }
 
@@ -241,6 +244,7 @@ for (const preset of [...AI_CHAT_PRESETS, ...AI_EMBEDDING_PRESETS]) {
 }
 const validation = await provider.validateConfig()
 assert(validation.ok && validation.models?.[0] === 'glm-5.2', '内置火山供应商连接测试和模型列表应自动放行')
+assert(requests.at(-1)?.timeoutMs === config.timeout, '模型连接测试应使用自定义超时')
 
 const chat = await provider.chat({ messages: [{ role: 'user', content: 'hi' }] })
 assert(chat.content === '完成', '非流式对话应经过 Rust 代理')
@@ -282,6 +286,7 @@ assert(
 
 const embedding = await provider.embedding('test')
 assert(embedding.embedding.length === 2, 'Embedding 应经过 Rust 代理')
+assert(requests.at(-1)?.timeoutMs === config.timeout, 'Embedding 自定义超时应传递到 Rust 代理')
 assert((await provider.listModels())[0] === 'glm-5.2', '模型列表应经过 Rust 代理')
 
 const responsesConfig: AiConfig = {
@@ -320,8 +325,12 @@ assert(responseChat.toolCalls?.[0]?.name === 'get_weather', 'Responses 非流式
 assert(responseChat.toolCalls?.[0]?.args.city === 'Beijing', 'Responses 工具参数应解析为对象')
 assert(responseChat.usage?.totalTokens === 5, 'Responses 用量应映射为统一格式')
 
-const responseRequest = requests.find((request) => request.url.endsWith('/responses') && !new TextDecoder().decode(Uint8Array.from(request.body)).includes('"stream":true'))
+const responseRequest = requests.find((request) => (
+  request.url.endsWith('/responses')
+  && !new TextDecoder().decode(Uint8Array.from(request.body || [])).includes('"stream":true')
+))
 assert(responseRequest, 'Responses 对话应请求 /responses')
+assert(responseRequest.timeoutMs === responsesConfig.timeout, 'Responses 请求应使用统一的自定义超时')
 const responsePayload = JSON.parse(new TextDecoder().decode(Uint8Array.from(responseRequest.body || []))) as Record<string, unknown>
 assert(responsePayload.store === false, 'Responses 请求不得默认存储用户内容')
 assert(responsePayload.max_output_tokens === 12, 'Responses 请求应映射 max_output_tokens')
@@ -355,8 +364,30 @@ assert(responsesStreamed === '流式', 'Responses 流式输出应读取 output_t
 assert(streamedToolCall.name === 'get_weather', 'Responses 流式输出应读取 function_call 名称')
 assert(streamedToolCall.arguments === '{"city":"Beijing"}', 'Responses 流式输出应读取 function_call 参数')
 
-updateSearchConfig({ provider: 'tavily', apiKey: 'test', maxResults: 1 })
+const localChatProvider = initAiClient({
+  ...config,
+  provider: 'ollama',
+  baseUrl: 'http://localhost:11434/v1',
+  apiKey: '',
+  timeout: 45000,
+})
+await localChatProvider.chat({ messages: [{ role: 'user', content: 'hi' }] })
+assert(requests.at(-1)?.timeoutMs === 45000, '本地对话 API 不应再被强制限制为 15 秒')
+
+const configuredEmbeddingProvider = initEmbeddingClient({
+  ...config.embedding,
+  provider: 'ollama',
+  baseUrl: 'http://localhost:11434/v1',
+  apiKey: '',
+})
+await configuredEmbeddingProvider.embedding('test')
+assert(requests.at(-1)?.timeoutMs === 45000, 'Embedding 独立超时应传递到 Rust 代理')
+
+updateSearchConfig({ provider: 'tavily', apiKey: 'test', maxResults: 1, timeout: 45000 })
 assert((await webSearch('test')).results.length === 1, '联网搜索应经过 Rust 代理')
+assert(requests.at(-1)?.timeoutMs === 45000, '联网搜索自定义超时应传递到 Rust 代理')
+assert((await testWebSearchConnection({ provider: 'tavily', apiKey: 'test', maxResults: 1, timeout: 45000 })).ok, '联网搜索连接测试应成功')
+assert(requests.at(-1)?.timeoutMs === 45000, '联网搜索连接测试应使用自定义超时')
 
 const NativeRequest = globalThis.Request
 class ChromiumRequest extends NativeRequest {

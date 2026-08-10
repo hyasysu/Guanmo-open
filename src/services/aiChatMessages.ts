@@ -1,4 +1,10 @@
-import type { ChatMessage, ChatMessageContextMeta, ChatMessageTag } from '@/services/ai/types'
+import type {
+  ChatMessage,
+  ChatMessageContextMeta,
+  ChatMessageTag,
+  ReadingScope,
+  ReadingSourceCoverage,
+} from '@/services/ai/types'
 import type { AgentResult } from '@/services/agent/types'
 import type { ContextTag } from '@/types/contextTag'
 import { CONTEXT_BLOCK_PREFIX } from '@/services/contextBuilder'
@@ -125,12 +131,38 @@ export function createContextMeta(options: {
   tagCount: number
   ragSourceCount: number
   webSearchUsed: boolean
+  readingScope?: unknown
+  sourceCoverage?: unknown
 }): ChatMessageContextMeta {
-  return {
+  const metadata: ChatMessageContextMeta = {
     tagCount: options.tagCount,
     ragSourceCount: options.ragSourceCount,
     webSearchUsed: options.webSearchUsed,
   }
+  const readingScope = decodeReadingScope(options.readingScope)
+  const sourceCoverage = decodeReadingSourceCoverage(options.sourceCoverage)
+  if (readingScope) metadata.readingScope = readingScope
+  if (sourceCoverage) metadata.sourceCoverage = sourceCoverage
+  return metadata
+}
+
+export function decodeReadingScope(value: unknown): ReadingScope | undefined {
+  return typeof value === 'string' && ['selection', 'section', 'document', 'workspace'].includes(value)
+    ? value as ReadingScope
+    : undefined
+}
+
+export function decodeReadingSourceCoverage(value: unknown): ReadingSourceCoverage | undefined {
+  return typeof value === 'string' && [
+    'selected_range',
+    'section_chunks',
+    'document_full',
+    'document_partial',
+    'workspace_topk',
+    'none',
+  ].includes(value)
+    ? value as ReadingSourceCoverage
+    : undefined
 }
 
 export function countRagSourcesInContext(ragContext: string): number {

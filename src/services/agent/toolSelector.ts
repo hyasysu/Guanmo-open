@@ -19,6 +19,9 @@ export type AgentToolName =
   | 'read_selection_context'
   | 'list_current_edit_targets'
   | 'replace_current_tab_text'
+  | 'propose_save_reading_artifact'
+  | 'propose_create_markdown_note'
+  | 'propose_create_reading_reminder'
   | 'read_context_file'
   | 'web_search'
   | 'get_current_time'
@@ -30,12 +33,19 @@ const CAPABILITY_TOOLS: Record<Capability, AgentToolName[]> = {
   selection_context: ['read_selection_context'],
   file_read: ['read_context_file'],
   file_write: ['list_current_edit_targets', 'replace_current_tab_text'],
+  action: ['propose_save_reading_artifact', 'propose_create_markdown_note', 'propose_create_reading_reminder'],
   web: ['web_search'],
   time: ['get_current_time'],
 }
 
 // 写入类工具（需要确认）
-const WRITE_TOOLS: AgentToolName[] = ['replace_current_tab_text', 'save_memory']
+const WRITE_TOOLS: AgentToolName[] = [
+  'replace_current_tab_text',
+  'save_memory',
+  'propose_save_reading_artifact',
+  'propose_create_markdown_note',
+  'propose_create_reading_reminder',
+]
 
 // 读取类工具（可以自动执行）
 const READ_TOOLS: AgentToolName[] = [
@@ -134,6 +144,7 @@ export function getCapabilityHint(capability: Capability): string {
     selection_context: '用户问题依赖选区附近内容，已自动读取受限的选区上下文',
     file_read: '用户问题涉及文件读取，已自动读取文件',
     file_write: '用户问题涉及文件修改，需要用户确认',
+    action: '用户要求保存阅读成果、新建笔记或创建提醒，需要用户确认',
     web: '用户问题需要网络搜索，已自动搜索',
     time: '用户问题涉及时间信息，已自动获取当前时间',
   }
@@ -156,6 +167,9 @@ export function getToolTokenBudget(toolName: string): number {
     get_current_time: 1000,
     save_memory: 1000,
     replace_current_tab_text: 2000,
+    propose_save_reading_artifact: 2000,
+    propose_create_markdown_note: 2000,
+    propose_create_reading_reminder: 1000,
   }
   return budgets[toolName] || 3000
 }

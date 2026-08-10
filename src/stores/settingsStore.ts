@@ -5,6 +5,7 @@ import { DEFAULT_AI_CONFIG } from '@/services/ai/types'
 import { inferProvider } from '@/services/ai/aiClient'
 import type { WebSearchConfig } from '@/services/webSearch'
 import { updateSearchConfig } from '@/services/webSearch'
+import { DEFAULT_REQUEST_TIMEOUT_MS, normalizeRequestTimeoutMs } from '@/services/requestTimeout'
 import {
   AI_API_KEY_SECRET,
   EMBEDDING_API_KEY_SECRET,
@@ -39,21 +40,16 @@ interface EditorSettings {
   defaultOpenMode: 'edit' | 'preview'
 }
 
+export const THEME_IDS = ['warm', 'light', 'dark', 'paper', 'github-light'] as const
+export type ThemeId = typeof THEME_IDS[number]
+export type NonDarkThemeId = Exclude<ThemeId, 'dark'>
+
 interface AppearanceSettings {
   customCursorEnabled: boolean
   aiMascotAvatarEnabled: boolean
-  theme: 'light' | 'dark'
-  lightPalette: 'warm' | 'plain' | 'github-dmmono'
+  themeId: ThemeId
+  lastLightThemeId: NonDarkThemeId
 }
-
-export type AppearanceTheme = AppearanceSettings['theme']
-export type LightPalette = AppearanceSettings['lightPalette']
-
-export const LIGHT_PALETTE_OPTIONS = [
-  { key: 'warm', label: '暖色' },
-  { key: 'plain', label: '浅色' },
-  { key: 'github-dmmono', label: 'GitHub' },
-] as const satisfies ReadonlyArray<{ key: LightPalette; label: string }>
 
 interface KnowledgeSettings {
   autoIndexEnabled: boolean
@@ -118,8 +114,8 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
 const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   customCursorEnabled: false,
   aiMascotAvatarEnabled: false,
-  theme: 'light',
-  lightPalette: 'warm',
+  themeId: 'warm',
+  lastLightThemeId: 'warm',
 }
 
 const DEFAULT_WEB_SEARCH: WebSearchConfig = {
@@ -127,6 +123,7 @@ const DEFAULT_WEB_SEARCH: WebSearchConfig = {
   apiKey: '',
   maxResults: 5,
   customUrl: '',
+  timeout: DEFAULT_REQUEST_TIMEOUT_MS,
 }
 
 const DEFAULT_KNOWLEDGE_SETTINGS: KnowledgeSettings = {
@@ -137,14 +134,39 @@ const DEFAULT_USAGE_TRACKING_SETTINGS: UsageTrackingSettings = {
   enabled: true,
 }
 
-const THEME_SWITCH_THROTTLE_MS = 180
-let lastThemeSwitchAt = 0
+export function resolveThemeId(appearance: unknown): ThemeId {
+  if (!appearance || typeof appearance !== 'object') return DEFAULT_APPEARANCE_SETTINGS.themeId
+  const saved = appearance as Record<string, unknown>
+  if (typeof saved.themeId === 'string' && THEME_IDS.includes(saved.themeId as ThemeId)) {
+    return saved.themeId as ThemeId
+  }
+  if (saved.theme === 'dark') return 'dark'
+  if (saved.theme === 'light' && saved.lightPalette === 'plain') return 'light'
+  return 'warm'
+}
 
-export function syncDocumentTheme(theme: AppearanceTheme, lightPalette: LightPalette = 'warm') {
+export function resolveLastLightThemeId(appearance: unknown): NonDarkThemeId {
+  if (!appearance || typeof appearance !== 'object') return DEFAULT_APPEARANCE_SETTINGS.lastLightThemeId
+  const saved = appearance as Record<string, unknown>
+  if (
+    typeof saved.lastLightThemeId === 'string'
+    && THEME_IDS.includes(saved.lastLightThemeId as ThemeId)
+    && saved.lastLightThemeId !== 'dark'
+  ) {
+    return saved.lastLightThemeId as NonDarkThemeId
+  }
+  const themeId = resolveThemeId(saved)
+  if (themeId !== 'dark') return themeId
+  return saved.lightPalette === 'plain' ? 'light' : 'warm'
+}
+
+export function syncDocumentTheme(themeId: ThemeId) {
   if (typeof document === 'undefined') return
   const root = document.documentElement
-  root.dataset.theme = theme
-  root.dataset.lightPalette = lightPalette
+  root.dataset.themeId = themeId
+  root.dataset.theme = themeId === 'dark' ? 'dark' : 'light'
+  root.style.colorScheme = themeId === 'dark' ? 'dark' : 'light'
+  delete root.dataset.lightPalette
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -203,20 +225,12 @@ export const useSettingsStore = create<SettingsState>()(
 
       updateAppearanceSettings: (settings) =>
         set((s) => {
-          let nextSettings = settings
-          if (settings.theme && settings.theme !== s.appearance.theme) {
-            const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
-            if (now - lastThemeSwitchAt < THEME_SWITCH_THROTTLE_MS) {
-              const { theme: _theme, ...rest } = settings
-              nextSettings = rest
-            } else {
-              lastThemeSwitchAt = now
-            }
+          const appearance = { ...s.appearance, ...settings }
+          if (settings.themeId && settings.themeId !== 'dark') {
+            appearance.lastLightThemeId = settings.themeId
           }
-          if (Object.keys(nextSettings).length === 0) return s
-          const appearance = { ...s.appearance, ...nextSettings }
-          if ('theme' in nextSettings || 'lightPalette' in nextSettings) {
-            syncDocumentTheme(appearance.theme, appearance.lightPalette)
+          if ('themeId' in settings) {
+            syncDocumentTheme(appearance.themeId)
           }
           return { appearance }
         }),
@@ -280,17 +294,27 @@ export const useSettingsStore = create<SettingsState>()(
         // 向后兼容：旧配置没有 protocol/provider，自动补全
         const savedAi = saved.ai
         const patchedAi = savedAi ? {
+          ...current.ai,
           ...savedAi,
+          timeout: normalizeRequestTimeoutMs(savedAi.timeout),
           protocol: savedAi.protocol || 'openai-chat' as const,
           provider: savedAi.provider || (savedAi.baseUrl ? inferProvider(savedAi.baseUrl) : 'custom' as const),
           embedding: savedAi.embedding ? {
+            ...current.ai.embedding,
             ...savedAi.embedding,
             protocol: savedAi.embedding.protocol || 'openai-embedding' as const,
             provider: savedAi.embedding.provider || (savedAi.embedding.baseUrl ? inferProvider(savedAi.embedding.baseUrl) : 'custom' as const),
             apiKey: '',
+            timeout: normalizeRequestTimeoutMs(savedAi.embedding.timeout),
           } : current.ai.embedding,
           apiKey: '',
         } : undefined
+        const patchedWebSearch = saved.webSearch ? {
+          ...current.webSearch,
+          ...saved.webSearch,
+          apiKey: '',
+          timeout: normalizeRequestTimeoutMs(saved.webSearch.timeout),
+        } : current.webSearch
         // 向后兼容：旧自定义预设没有 protocol/provider，补齐后类型断言
         const VALID_CHAT_PROTOCOLS: ChatProtocol[] = ['openai-chat', 'anthropic-messages', 'openai-responses']
         const patchedChatPresets: CustomPreset[] = (saved.customChatPresets || []).map((p) => ({
@@ -351,16 +375,20 @@ export const useSettingsStore = create<SettingsState>()(
             }
             return { ...mergedEditor, modePerformancePolicy: migrated }
           })(),
-          appearance: {
-            ...current.appearance,
-            ...saved.appearance,
-            aiMascotAvatarEnabled: saved.appearance?.aiMascotAvatarEnabled ?? current.appearance.aiMascotAvatarEnabled,
-          },
-          webSearch: {
-            ...current.webSearch,
-            ...saved.webSearch,
-            apiKey: '',
-          },
+          appearance: (() => {
+            const savedAppearance = (saved.appearance ?? {}) as unknown as Record<string, unknown>
+            return {
+              customCursorEnabled: typeof savedAppearance.customCursorEnabled === 'boolean'
+                ? savedAppearance.customCursorEnabled
+                : current.appearance.customCursorEnabled,
+              aiMascotAvatarEnabled: typeof savedAppearance.aiMascotAvatarEnabled === 'boolean'
+                ? savedAppearance.aiMascotAvatarEnabled
+                : current.appearance.aiMascotAvatarEnabled,
+              themeId: resolveThemeId(savedAppearance),
+              lastLightThemeId: resolveLastLightThemeId(savedAppearance),
+            }
+          })(),
+          webSearch: patchedWebSearch,
           knowledge: {
             ...current.knowledge,
             ...(saved.knowledge || {}),
@@ -377,4 +405,3 @@ export const useSettingsStore = create<SettingsState>()(
     }
   )
 )
-

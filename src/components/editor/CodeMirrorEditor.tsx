@@ -195,7 +195,7 @@ export function buildMarkdownEditorTheme(fontSize: number, lineHeight: number, f
       backgroundColor: 'var(--gm-surface)',
       border: '1px solid var(--gm-border)',
       borderRadius: '16px',
-      boxShadow: '0 4px 12px rgba(61, 52, 40, 0.1)',
+      boxShadow: '0 4px 12px color-mix(in srgb, var(--gm-text) 10%, transparent)',
     },
     '.cm-tooltip-autocomplete': {
       '& > ul > li': { padding: '4px 8px' },
@@ -213,8 +213,8 @@ export function buildMarkdownEditorTheme(fontSize: number, lineHeight: number, f
       borderRadius: '12px',
       padding: '4px 8px',
     },
-    '.cm-searchMatch': { backgroundColor: 'rgba(251, 191, 36, 0.2)' },
-    '.cm-searchMatch-selected': { backgroundColor: 'rgba(251, 191, 36, 0.4)' },
+    '.cm-searchMatch': { backgroundColor: 'color-mix(in srgb, var(--gm-warning) 20%, transparent)' },
+    '.cm-searchMatch-selected': { backgroundColor: 'color-mix(in srgb, var(--gm-warning) 40%, transparent)' },
   })
 }
 

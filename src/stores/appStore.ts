@@ -1,5 +1,9 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { createWorkspaceRoot, normalizeWorkspacePath, type WorkspaceRoot } from '@/services/workspaceIdentity'
+
+export { createWorkspaceRoot, normalizeWorkspacePath } from '@/services/workspaceIdentity'
+export type { WorkspaceRoot } from '@/services/workspaceIdentity'
 
 export type AiServiceStatus =
   | 'unchecked'
@@ -13,12 +17,12 @@ export type AiServiceStatus =
   | 'all_unreachable'
   | 'not_configured'
 
-interface AppState {
+export interface AppState {
   sidebarCollapsed: boolean
   aiPanelOpen: boolean
   sidebarWidth: number
   aiPanelWidth: number
-  workspacePath: string | null
+  workspaceRoots: WorkspaceRoot[]
   aiStatus: AiServiceStatus
   isFullscreen: boolean
 
@@ -28,9 +32,46 @@ interface AppState {
   closeAiPanel: () => void
   setSidebarWidth: (width: number) => void
   setAiPanelWidth: (width: number) => void
-  setWorkspacePath: (path: string | null) => void
+  addWorkspaceRoot: (path: string) => boolean
+  removeWorkspaceRoot: (id: string) => void
   setAiStatus: (status: AiServiceStatus) => void
   setFullscreen: (isFullscreen: boolean) => void
+}
+
+function sanitizeWorkspaceRoots(value: unknown): WorkspaceRoot[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const roots: WorkspaceRoot[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const candidate = item as Partial<WorkspaceRoot>
+    if (typeof candidate.path !== 'string') continue
+    const identity = normalizeWorkspacePath(candidate.path)
+    if (!identity || seen.has(identity)) continue
+    const root = createWorkspaceRoot(candidate.path, typeof candidate.id === 'string' && candidate.id ? candidate.id : undefined)
+    if (!root) continue
+    if (typeof candidate.name === 'string' && candidate.name.trim()) root.name = candidate.name.trim()
+    seen.add(identity)
+    roots.push(root)
+  }
+  return roots
+}
+
+export function migratePersistedAppState(persistedState: unknown): Partial<AppState> {
+  const saved = (persistedState ?? {}) as Partial<AppState> & { workspacePath?: string | null }
+  const workspaceRoots = sanitizeWorkspaceRoots(
+    Array.isArray(saved.workspaceRoots)
+      ? saved.workspaceRoots
+      : saved.workspacePath
+        ? [createWorkspaceRoot(saved.workspacePath)]
+        : []
+  )
+  const { workspacePath: _legacyWorkspacePath, ...rest } = saved
+  return { ...rest, workspaceRoots }
+}
+
+export function selectPrimaryWorkspacePath(state: Pick<AppState, 'workspaceRoots'>): string | null {
+  return state.workspaceRoots[0]?.path ?? null
 }
 
 export const useAppStore = create<AppState>()(
@@ -40,7 +81,7 @@ export const useAppStore = create<AppState>()(
       aiPanelOpen: false,
       sidebarWidth: 260,
       aiPanelWidth: 360,
-      workspacePath: null,
+      workspaceRoots: [],
       aiStatus: 'unchecked',
       isFullscreen: false,
 
@@ -50,7 +91,21 @@ export const useAppStore = create<AppState>()(
       closeAiPanel: () => set({ aiPanelOpen: false }),
       setSidebarWidth: (width) => set({ sidebarWidth: width }),
       setAiPanelWidth: (width) => set({ aiPanelWidth: width }),
-      setWorkspacePath: (path) => set({ workspacePath: path }),
+      addWorkspaceRoot: (path) => {
+        const root = createWorkspaceRoot(path)
+        if (!root) return false
+        let added = false
+        set((state) => {
+          const identity = normalizeWorkspacePath(root.path)
+          if (state.workspaceRoots.some((item) => normalizeWorkspacePath(item.path) === identity)) return state
+          added = true
+          return { workspaceRoots: [...state.workspaceRoots, root] }
+        })
+        return added
+      },
+      removeWorkspaceRoot: (id) => set((state) => ({
+        workspaceRoots: state.workspaceRoots.filter((root) => root.id !== id),
+      })),
       setAiStatus: (status) => set({ aiStatus: status }),
       setFullscreen: (isFullscreen) => set({ isFullscreen }),
     }),
@@ -59,11 +114,14 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         sidebarWidth: state.sidebarWidth,
         aiPanelWidth: state.aiPanelWidth,
-        workspacePath: state.workspacePath,
+        workspaceRoots: state.workspaceRoots,
       }),
+      version: 1,
+      migrate: migratePersistedAppState,
       merge: (persistedState, currentState) => ({
         ...currentState,
         ...(persistedState as Partial<AppState>),
+        workspaceRoots: sanitizeWorkspaceRoots((persistedState as Partial<AppState>)?.workspaceRoots),
         sidebarCollapsed: true,
         aiPanelOpen: false,
       }),

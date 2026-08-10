@@ -18,7 +18,7 @@ export async function exportDataBackup(): Promise<string> {
   return path
 }
 
-export async function importDataBackup(): Promise<{ path: string; sessions: number; messages: number; memories: number }> {
+export async function importDataBackup(): Promise<{ path: string; sessions: number; messages: number; memories: number; artifacts: number }> {
   const result = await openFileDialog([{ name: 'JSON', extensions: ['json'] }])
   const path = Array.isArray(result) ? result[0] : result
   if (!path) {

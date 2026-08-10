@@ -15,9 +15,35 @@ import { useEditorStore } from '@/stores/editorStore'
 import { deleteChatSession } from '@/services/database/persistence'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
-import type { ChatMessageSource, LocalChatMessageSource } from '@/services/ai/types'
+import type {
+  ChatMessageContextMeta,
+  ChatMessageSource,
+  LocalChatMessageSource,
+  ActionProposal,
+} from '@/services/ai/types'
 import { AI_SHORTCUT_SUBMIT_EVENT } from '@/services/aiContext'
 import { applyPendingEditCommand } from '@/services/pendingEditCommand'
+import { saveAssistantMessageAsMarkdown } from '@/services/assistantMessageExport'
+import { useReadingArtifactsStore, type ReadingArtifactFilter } from '@/stores/readingArtifactsStore'
+import {
+  type ReadingArtifact,
+  type ReadingArtifactType,
+  type SourceAnchorStatus,
+  type AnnotationStructuredContent,
+  getAnnotationStructuredContent,
+  loadReadingArtifactById,
+  resolveAnnotationPosition,
+} from '@/services/database/readingArtifacts'
+import { loadReadingReminders, type ReadingReminder } from '@/services/database/readingReminders'
+import {
+  cancelReadingReminder,
+  editReadingReminderTime,
+  retryReadingReminder,
+} from '@/services/readingReminders'
+import {
+  READING_REMINDER_DEVELOPMENT_MESSAGE,
+  READING_REMINDER_FEATURE_AVAILABLE,
+} from '@/services/readingReminderFeature'
 
 type AiPanelProps = {
   fullscreenDragHandleProps?: {
@@ -52,6 +78,72 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const visibleMessages = useMemo(() => messages.filter((msg) => !msg.hidden), [messages])
   const [reasoningMode, setReasoningMode] = useState<'off' | 'on'>('off')
   const [resetManualToggle, setResetManualToggle] = useState(0)
+  const [panelView, setPanelView] = useState<'chat' | 'artifacts' | 'reminders'>('chat')
+  const [reminders, setReminders] = useState<ReadingReminder[]>([])
+  const [remindersLoading, setRemindersLoading] = useState(false)
+  const artifacts = useReadingArtifactsStore((s) => s.artifacts)
+  const artifactsLoading = useReadingArtifactsStore((s) => s.loading)
+  const artifactFilter = useReadingArtifactsStore((s) => s.filter)
+  const setArtifactFilter = useReadingArtifactsStore((s) => s.setFilter)
+  const loadArtifacts = useReadingArtifactsStore((s) => s.loadArtifacts)
+  const deleteArtifact = useReadingArtifactsStore((s) => s.deleteArtifact)
+  const saveArtifactFromMessage = useReadingArtifactsStore((s) => s.saveArtifactFromMessage)
+  const anchorStatuses = useReadingArtifactsStore((s) => s.anchorStatuses)
+  const checkAnchor = useReadingArtifactsStore((s) => s.checkAnchor)
+
+  useEffect(() => {
+    if (panelView === 'artifacts') {
+      loadArtifacts()
+    }
+  }, [panelView, loadArtifacts])
+
+  const refreshReminders = useCallback(async () => {
+    setRemindersLoading(true)
+    try {
+      setReminders(await loadReadingReminders())
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '加载提醒失败')
+    } finally {
+      setRemindersLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (panelView === 'reminders' && READING_REMINDER_FEATURE_AVAILABLE) void refreshReminders()
+  }, [panelView, refreshReminders])
+
+  const handleCancelReminder = useCallback(async (id: string) => {
+    try {
+      await cancelReadingReminder(id)
+      await refreshReminders()
+      toast.success('提醒已取消')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '取消提醒失败')
+    }
+  }, [refreshReminders])
+
+  const handleRetryReminder = useCallback(async (id: string) => {
+    try {
+      await retryReadingReminder(id)
+      await refreshReminders()
+      toast.success('提醒已重新安排')
+    } catch (error) {
+      await refreshReminders()
+      toast.error(error instanceof Error ? error.message : '重试提醒失败')
+    }
+  }, [refreshReminders])
+
+  const handleEditReminder = useCallback(async (id: string, dueAtUtc: number, timezone: string) => {
+    try {
+      await editReadingReminderTime(id, dueAtUtc, timezone)
+      await refreshReminders()
+      toast.success('提醒时间已更新')
+    } catch (error) {
+      await refreshReminders()
+      toast.error(error instanceof Error ? error.message : '修改提醒失败')
+      throw error
+    }
+  }, [refreshReminders])
 
   // 检测是否在底部（距离底部 50px 以内视为底部）
   const isAtBottom = useCallback(() => {
@@ -238,6 +330,143 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     }
   }, [])
 
+  const handleOpenArtifactSource = useCallback(async (artifact: ReadingArtifact) => {
+    const source = artifact.source
+    if (!source?.filePath) {
+      toast.error('该成果未绑定来源文件')
+      return
+    }
+    const anchorLines = source.startLine && source.endLine
+      ? { startLine: source.startLine, endLine: source.endLine }
+      : null
+    // 批注按 Markdown model/source offset 定位；其他类型直接用锚点行号。
+    const annotation = artifact.type === 'annotation'
+      ? getAnnotationStructuredContent(artifact)
+      : null
+    try {
+      const editorState = useEditorStore.getState()
+      const existing = editorState.tabs.find((tab) => isSameFilePath(tab.filePath, source.filePath))
+      let tabId = existing?.id
+      let content = existing?.content ?? ''
+      if (!tabId) {
+        content = await readRememberedFile(source.filePath)
+        const name = source.filePath.split(/[/\\]/).pop() || source.filePath
+        editorState.addTab(source.filePath, name, content)
+        tabId = useEditorStore.getState().activeTabId || undefined
+      } else {
+        editorState.setActiveTab(tabId)
+      }
+      if (!tabId) return
+      editorState.setViewMode('edit')
+      // 批注：用当前文档内容解析定位（基于 Markdown model，不遍历 DOM）
+      let revealStart = anchorLines?.startLine
+      let revealEnd = anchorLines?.endLine
+      if (annotation) {
+        const position = resolveAnnotationPosition(content, annotation, source)
+        if (position) {
+          revealStart = position.startLine
+          revealEnd = position.endLine
+        }
+      }
+      if (revealStart && revealEnd) {
+        editorState.requestReveal(tabId, revealStart, revealEnd)
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '打开来源失败')
+    }
+  }, [])
+
+  const handleOpenReminderSource = useCallback(async (reminder: ReadingReminder) => {
+    if (reminder.sourceArtifactId) {
+      const artifact = await loadReadingArtifactById(reminder.sourceArtifactId)
+      if (artifact) {
+        await handleOpenArtifactSource(artifact)
+        return
+      }
+    }
+    if (reminder.sourceFilePath) {
+      await handleOpenRagSource({ filePath: reminder.sourceFilePath, startLine: 1, endLine: 1 })
+      return
+    }
+    if (reminder.sourceMessageId && messages.some((message) => message.id === reminder.sourceMessageId)) {
+      setPanelView('chat')
+      window.setTimeout(() => {
+        const target = Array.from(document.querySelectorAll<HTMLElement>('[data-chat-message-id]'))
+          .find((element) => element.dataset.chatMessageId === reminder.sourceMessageId)
+        target?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      }, 0)
+      return
+    }
+    toast.error('提醒来源当前不可用')
+  }, [handleOpenArtifactSource, handleOpenRagSource, messages])
+
+  const handleSaveAssistantAsMarkdown = useCallback(async (content: string, sources?: ChatMessageSource[]) => {
+    await saveAssistantMessageAsMarkdown(content, sources)
+  }, [])
+
+  const handleSaveAssistantAsArtifact = useCallback(async (
+    type: ReadingArtifactType,
+    content: string,
+    sources: ChatMessageSource[] | undefined,
+    contextMeta: ChatMessageContextMeta | undefined,
+    messageId: string | undefined,
+  ) => {
+    const trimmed = content.trim()
+    if (!trimmed) return
+
+    // 批注：必须有本地来源锚点；批注正文为 AI 回答，引用快照取来源标题或行号
+    if (type === 'annotation') {
+      const localSource = sources?.find((s): s is LocalChatMessageSource => s.kind !== 'web')
+      if (!localSource || !localSource.filePath) {
+        toast.error('批注需要绑定本地来源，请先选择带文件来源的回答')
+        return
+      }
+      const quote = localSource.heading
+        || formatSourceHeading(localSource)
+        || `${localSource.fileName} L${localSource.startLine}-${localSource.endLine}`
+      const structured: AnnotationStructuredContent = { quote, note: trimmed }
+      const title = quote.length > 40 ? `${quote.slice(0, 40)}…` : quote
+      try {
+        const saved = await saveArtifactFromMessage({
+          type,
+          title,
+          content: trimmed,
+          sources,
+          contextScope: contextMeta?.readingScope,
+          messageId,
+          structuredContent: structured,
+        })
+        if (saved) {
+          toast.success('已保存为批注')
+        } else {
+          toast.error('保存批注失败')
+        }
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : '保存批注失败')
+      }
+      return
+    }
+
+    const title = deriveArtifactTitle(type, trimmed)
+    try {
+      const saved = await saveArtifactFromMessage({
+        type,
+        title,
+        content: trimmed,
+        sources,
+        contextScope: contextMeta?.readingScope,
+        messageId,
+      })
+      if (saved) {
+        toast.success(`已保存为${ARTIFACT_TYPE_LABELS[type]}`)
+      } else {
+        toast.error('保存阅读成果失败')
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '保存阅读成果失败')
+    }
+  }, [saveArtifactFromMessage])
+
   const handleDeleteSession = useCallback(async (sessionId: string) => {
     const confirmed = window.confirm('确认删除这组历史会话吗？删除后不可恢复。')
     if (!confirmed) return
@@ -270,7 +499,31 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
         </div>
         <div className="flex-1" />
         <div className="flex items-center" onPointerDown={(e) => e.stopPropagation()}>
-          {messages.length > 0 && (
+          <Button
+            type={panelView === 'artifacts' ? 'default' : 'text'}
+            size="small"
+            onClick={() => setPanelView('artifacts')}
+            title="阅读成果"
+            icon={
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
+              </svg>
+            }
+          />
+          <Button
+            type={panelView === 'reminders' ? 'default' : 'text'}
+            size="small"
+            onClick={() => setPanelView('reminders')}
+            title="阅读提醒（功能开发中）"
+            icon={
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M18 8a6 6 0 00-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+                <path d="M13.73 21a2 2 0 01-3.46 0" />
+              </svg>
+            }
+          />
+          {panelView === 'chat' && messages.length > 0 ? (
             <Button
               type="text"
               size="small"
@@ -282,7 +535,19 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
                 </svg>
               }
             />
-          )}
+          ) : panelView !== 'chat' ? (
+            <Button
+              type="text"
+              size="small"
+              onClick={() => setPanelView('chat')}
+              title="返回"
+              icon={
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M19 12H5M12 19l-7-7 7-7" />
+                </svg>
+              }
+            />
+          ) : null}
           <Button
             type="text"
             size="small"
@@ -301,7 +566,35 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
 
       {/* Chat Content - 可以滚动到控制栏下面 */}
       <div ref={chatContainerRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden min-w-0 pb-32 bg-gm-surface">
-        {visibleMessages.length === 0 ? (
+        {panelView === 'artifacts' ? (
+          <ReadingArtifactsPanel
+            artifacts={artifacts}
+            loading={artifactsLoading}
+            filter={artifactFilter}
+            onFilterChange={setArtifactFilter}
+            onDelete={deleteArtifact}
+            onOpenSource={handleOpenRagSource}
+            onOpenArtifactSource={handleOpenArtifactSource}
+            anchorStatuses={anchorStatuses}
+            onCheckAnchor={checkAnchor}
+          />
+        ) : panelView === 'reminders' ? (
+          READING_REMINDER_FEATURE_AVAILABLE ? (
+            <ReadingRemindersPanel
+              reminders={reminders}
+              loading={remindersLoading}
+              onCancel={handleCancelReminder}
+              onRetry={handleRetryReminder}
+              onEdit={handleEditReminder}
+              onOpenSource={handleOpenReminderSource}
+            />
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center p-6 text-center">
+              <p className="mb-1 font-bold text-gm-text-secondary">提醒功能开发中</p>
+              <p className="text-caption text-gm-text-tertiary">{READING_REMINDER_DEVELOPMENT_MESSAGE}</p>
+            </div>
+          )
+        ) : visibleMessages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full p-6 animate-fadeIn">
             {hasMoreHistory && (
               <button
@@ -357,6 +650,26 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
                   streaming={streaming}
                   sources={msg.sources}
                   onOpenSource={handleOpenRagSource}
+                  onSaveAsMarkdown={
+                    msg.role === 'assistant'
+                      && Boolean((msg.displayContent ?? msg.content).trim())
+                      && !(i === visibleMessages.length - 1 && streaming)
+                      ? () => handleSaveAssistantAsMarkdown(msg.displayContent ?? msg.content, msg.sources)
+                      : undefined
+                  }
+                  onSaveAsArtifact={
+                    msg.role === 'assistant'
+                      && Boolean((msg.displayContent ?? msg.content).trim())
+                      && !(i === visibleMessages.length - 1 && streaming)
+                      ? (type) => handleSaveAssistantAsArtifact(
+                          type,
+                          msg.displayContent ?? msg.content,
+                          msg.sources,
+                          msg.contextMeta,
+                          msg.id,
+                        )
+                      : undefined
+                  }
                 />
                 {msg.role === 'assistant' && msg.editConfirmation && (
                   <div className="mt-2">
@@ -364,6 +677,11 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
                       edit={msg.editConfirmation}
                       actionable={msg.editConfirmation.status === 'pending'}
                     />
+                  </div>
+                )}
+                {msg.role === 'assistant' && msg.actionProposal && (
+                  <div className="mt-2">
+                    <ActionProposalCard proposal={msg.actionProposal} />
                   </div>
                 )}
                 {msg.tags && msg.tags.length > 0 && (
@@ -405,13 +723,392 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
       </div>
 
       {/* Prompt Composer */}
-      <PromptComposer
-        onSend={handleSend}
-        streaming={streaming}
-        onCancel={cancelStream}
-        onReasoningModeChange={setReasoningMode}
-        resetManualToggle={resetManualToggle}
-      />
+      {panelView === 'chat' && (
+        <PromptComposer
+          onSend={handleSend}
+          streaming={streaming}
+          onCancel={cancelStream}
+          onReasoningModeChange={setReasoningMode}
+          resetManualToggle={resetManualToggle}
+        />
+      )}
+    </div>
+  )
+}
+
+const REMINDER_STATUS_LABELS: Record<ReadingReminder['status'], string> = {
+  pending: '待注册',
+  scheduled: '已安排',
+  fired: '已到期',
+  cancel_pending: '待取消',
+  cancelled: '已取消',
+  failed: '失败',
+}
+
+function ReadingRemindersPanel({
+  reminders,
+  loading,
+  onCancel,
+  onRetry,
+  onEdit,
+  onOpenSource,
+}: {
+  reminders: ReadingReminder[]
+  loading: boolean
+  onCancel: (id: string) => void | Promise<void>
+  onRetry: (id: string) => void | Promise<void>
+  onEdit: (id: string, dueAtUtc: number, timezone: string) => void | Promise<void>
+  onOpenSource: (reminder: ReadingReminder) => void | Promise<void>
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingTime, setEditingTime] = useState('')
+  const [savingEdit, setSavingEdit] = useState(false)
+  if (loading) {
+    return <div className="p-6 text-center text-caption text-gm-text-secondary">正在加载提醒…</div>
+  }
+  if (reminders.length === 0) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center p-6 text-center">
+        <p className="mb-1 font-bold text-gm-text-secondary">还没有阅读提醒</p>
+        <p className="text-caption text-gm-text-tertiary">可在对话中让 AI 提出一次性提醒，确认后才会注册。</p>
+      </div>
+    )
+  }
+  return (
+    <div className="space-y-2 p-3">
+      {reminders.map((reminder) => {
+        const cancellable = ['pending', 'scheduled', 'cancel_pending', 'failed'].includes(reminder.status)
+        const editable = reminder.dueAtUtc > Date.now()
+          && !['cancelled', 'fired', 'cancel_pending'].includes(reminder.status)
+          && reminder.errorCode !== 'notification_cancel_failed'
+        const hasSource = Boolean(reminder.sourceArtifactId || reminder.sourceFilePath || reminder.sourceMessageId)
+        const editing = editingId === reminder.id
+        return (
+          <div key={reminder.id} className="rounded-xl border border-gm-border bg-gm-surface-elevated p-3">
+            <div className="flex items-start gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-body font-bold text-gm-text">{reminder.title}</p>
+                <p className="mt-1 text-caption text-gm-text-secondary">
+                  {new Intl.DateTimeFormat('zh-CN', {
+                    timeZone: reminder.createdTimezone,
+                    year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short',
+                    hour: '2-digit', minute: '2-digit',
+                  }).format(reminder.dueAtUtc)}
+                </p>
+                {reminder.description && (
+                  <p className="mt-1 whitespace-pre-wrap text-caption text-gm-text-tertiary">{reminder.description}</p>
+                )}
+                <p className="mt-2 text-micro text-gm-text-tertiary">
+                  {REMINDER_STATUS_LABELS[reminder.status]}
+                  {reminder.errorCode ? ` · ${reminder.errorCode}` : ''}
+                </p>
+                {editing && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <input
+                      type="datetime-local"
+                      value={editingTime}
+                      min={toDatetimeLocalValue(Date.now() + 60_000)}
+                      onChange={(event) => setEditingTime(event.target.value)}
+                      className="min-w-0 rounded-lg border border-gm-border bg-gm-surface px-2 py-1 text-micro text-gm-text"
+                    />
+                    <Button
+                      type="default"
+                      size="small"
+                      disabled={savingEdit || !editingTime}
+                      onClick={async () => {
+                        const dueAtUtc = new Date(editingTime).getTime()
+                        if (!Number.isFinite(dueAtUtc) || dueAtUtc <= Date.now()) {
+                          toast.error('请选择未来时间')
+                          return
+                        }
+                        setSavingEdit(true)
+                        try {
+                          await onEdit(
+                            reminder.id,
+                            dueAtUtc,
+                            Intl.DateTimeFormat().resolvedOptions().timeZone,
+                          )
+                          setEditingId(null)
+                        } finally {
+                          setSavingEdit(false)
+                        }
+                      }}
+                    >
+                      保存
+                    </Button>
+                    <Button type="text" size="small" onClick={() => setEditingId(null)}>取消编辑</Button>
+                  </div>
+                )}
+              </div>
+              <div className="flex shrink-0 flex-col items-end gap-1">
+                {hasSource && (
+                  <Button type="text" size="small" onClick={() => void onOpenSource(reminder)}>查看来源</Button>
+                )}
+                {reminder.status === 'failed' && (
+                  <Button type="default" size="small" onClick={() => void onRetry(reminder.id)}>重试</Button>
+                )}
+                {editable && !editing && (
+                  <Button
+                    type="default"
+                    size="small"
+                    onClick={() => {
+                      setEditingId(reminder.id)
+                      setEditingTime(toDatetimeLocalValue(reminder.dueAtUtc))
+                    }}
+                  >
+                    改期
+                  </Button>
+                )}
+                {cancellable && (
+                  <Button
+                    type="default"
+                    size="small"
+                    className="text-red-600 hover:text-red-700"
+                    onClick={() => void onCancel(reminder.id)}
+                  >
+                    取消
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function toDatetimeLocalValue(timestamp: number): string {
+  const date = new Date(timestamp)
+  return new Date(timestamp - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
+}
+
+const ARTIFACT_FILTER_OPTIONS: Array<{ value: ReadingArtifactFilter; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'summary', label: '摘要' },
+  { value: 'question_set', label: '问题集' },
+  { value: 'annotation', label: '批注' },
+  { value: 'note', label: '笔记' },
+]
+
+function ReadingArtifactsPanel({
+  artifacts,
+  loading,
+  filter,
+  onFilterChange,
+  onDelete,
+  onOpenSource,
+  onOpenArtifactSource,
+  anchorStatuses,
+  onCheckAnchor,
+}: {
+  artifacts: ReadingArtifact[]
+  loading: boolean
+  filter: ReadingArtifactFilter
+  onFilterChange: (filter: ReadingArtifactFilter) => void
+  onDelete: (id: string) => void | Promise<void>
+  onOpenSource: (source: { filePath: string; startLine: number; endLine: number }) => void | Promise<void>
+  onOpenArtifactSource: (artifact: ReadingArtifact) => void | Promise<void>
+  anchorStatuses: Record<string, SourceAnchorStatus>
+  onCheckAnchor: (artifact: ReadingArtifact) => void | Promise<void>
+}) {
+  const visible = filter === 'all' ? artifacts : artifacts.filter((a) => a.type === filter)
+
+  return (
+    <div className="p-3 space-y-3 animate-fadeIn">
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {ARTIFACT_FILTER_OPTIONS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onFilterChange(option.value)}
+            className={`px-2.5 py-1 rounded-full text-micro font-bold border transition-colors ${
+              filter === option.value
+                ? 'bg-gm-primary text-white border-gm-primary'
+                : 'bg-gm-surface text-gm-text-secondary border-gm-border hover:bg-gm-surface-hover'
+            }`}
+          >
+            {option.label}
+          </button>
+        ))}
+        <span className="ml-auto text-micro text-gm-text-tertiary">{visible.length} 条</span>
+      </div>
+
+      {loading ? (
+        <div className="text-center text-caption text-gm-text-tertiary py-8">加载中...</div>
+      ) : visible.length === 0 ? (
+        <div className="text-center text-caption text-gm-text-tertiary py-12">
+          <p className="font-bold text-gm-text-secondary mb-1">还没有阅读成果</p>
+          <p>在 AI 回答上点击「摘要 / 问题集 / 批注 / 卡片 / 笔记」即可保存</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {visible.map((artifact) => (
+            <ReadingArtifactCard
+              key={artifact.id}
+              artifact={artifact}
+              anchorStatus={anchorStatuses[artifact.id]}
+              onDelete={onDelete}
+              onOpenSource={onOpenSource}
+              onOpenArtifactSource={onOpenArtifactSource}
+              onCheckAnchor={onCheckAnchor}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ReadingArtifactCard({
+  artifact,
+  anchorStatus,
+  onDelete,
+  onOpenSource,
+  onOpenArtifactSource,
+  onCheckAnchor,
+}: {
+  artifact: ReadingArtifact
+  anchorStatus?: SourceAnchorStatus
+  onDelete: (id: string) => void | Promise<void>
+  onOpenSource: (source: { filePath: string; startLine: number; endLine: number }) => void | Promise<void>
+  onOpenArtifactSource: (artifact: ReadingArtifact) => void | Promise<void>
+  onCheckAnchor: (artifact: ReadingArtifact) => void | Promise<void>
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => {
+    if (artifact.source?.filePath && anchorStatus === undefined) {
+      onCheckAnchor(artifact)
+    }
+  }, [artifact, anchorStatus, onCheckAnchor])
+
+  const annotation = artifact.type === 'annotation'
+    ? getAnnotationStructuredContent(artifact)
+    : null
+
+  const sourceLabel = artifact.source?.fileName
+    ? [
+        artifact.source.fileName,
+        artifact.source.headingPath?.length ? artifact.source.headingPath.join(' / ') : null,
+        artifact.source.startLine ? `L${artifact.source.startLine}-${artifact.source.endLine}` : null,
+      ].filter(Boolean).join(' · ')
+    : null
+
+  const hasAnchorLines = Boolean(artifact.source?.filePath && artifact.source?.startLine && artifact.source?.endLine)
+  const canOpenSource = hasAnchorLines || artifact.type === 'annotation'
+  const anchorChanged = anchorStatus === 'changed'
+  const anchorMissing = anchorStatus === 'missing'
+
+  const handleOpen = () => {
+    // 批注统一走 onOpenArtifactSource 以便按 Markdown model 解析定位
+    if (artifact.type === 'annotation' || annotation) {
+      onOpenArtifactSource(artifact)
+      return
+    }
+    if (hasAnchorLines) {
+      onOpenSource({
+        filePath: artifact.source!.filePath,
+        startLine: artifact.source!.startLine!,
+        endLine: artifact.source!.endLine!,
+      })
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-gm-border bg-gm-surface-elevated p-3 animate-slideInUp">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center gap-2 text-left"
+      >
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`flex-shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}>
+          <path d="M9 18l6-6-6-6" />
+        </svg>
+        <span className="rounded-full border border-gm-border bg-gm-surface px-1.5 py-0.5 text-micro font-bold text-gm-text-tertiary flex-shrink-0">
+          {ARTIFACT_TYPE_LABELS[artifact.type]}
+        </span>
+        <span className="font-bold text-gm-text text-caption truncate">{artifact.title}</span>
+      </button>
+
+      {sourceLabel && (
+        <div className="mt-1.5 flex items-center gap-1.5 text-micro text-gm-text-tertiary pl-5">
+          <span className="truncate">{sourceLabel}</span>
+          {anchorChanged && (
+            <span className="flex-shrink-0 rounded-full bg-[#f5c31c]/15 text-[#b8860b] px-1.5 py-0.5 font-bold">来源已变化</span>
+          )}
+          {anchorMissing && (
+            <span className="flex-shrink-0 rounded-full bg-gm-error/10 text-gm-error px-1.5 py-0.5 font-bold">来源缺失</span>
+          )}
+        </div>
+      )}
+      {(anchorChanged || anchorMissing) && (
+        <div className="mt-1.5 ml-5 text-micro text-gm-text-tertiary">
+          {anchorChanged
+            ? '原文已修改，定位可能偏移；打开来源时会尝试用引用快照重新定位。'
+            : '来源文件已不可访问或未索引。'}
+        </div>
+      )}
+
+      {expanded && (
+        <div className="mt-2 ml-5 rounded-lg bg-gm-canvas border border-gm-border p-2 max-h-[280px] overflow-auto">
+          {annotation ? (
+            <AnnotationDetail annotation={annotation} fallbackContent={artifact.content} />
+          ) : (
+            <AssistantMarkdown content={artifact.content} />
+          )}
+          {artifact.source?.quote && !annotation && (
+            <div className="mt-2 pl-3 border-l-2 border-gm-border text-micro text-gm-text-tertiary italic">
+              「{artifact.source.quote}」
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="mt-2 flex items-center gap-2 pl-5">
+        {canOpenSource && (
+          <button
+            type="button"
+            onClick={handleOpen}
+            className="px-2 py-1 rounded-lg text-micro text-gm-primary hover:bg-gm-surface-hover border border-gm-border"
+            title="打开来源"
+          >
+            打开来源
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => {
+            if (window.confirm('确认删除这条阅读成果吗？删除后不可恢复，不会改动原文。')) {
+              onDelete(artifact.id)
+            }
+          }}
+          className="px-2 py-1 rounded-lg text-micro text-gm-text-tertiary hover:text-gm-error hover:bg-gm-surface-hover border border-gm-border"
+          title="删除成果"
+        >
+          删除
+        </button>
+        <span className="ml-auto text-micro text-gm-text-disabled">
+          {new Date(artifact.createdAt).toLocaleDateString('zh-CN')}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function AnnotationDetail({
+  annotation,
+  fallbackContent,
+}: {
+  annotation: AnnotationStructuredContent
+  fallbackContent: string
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="pl-3 border-l-2 border-gm-primary text-micro text-gm-text-secondary italic break-words">
+        「{annotation.quote}」
+      </div>
+      <AssistantMarkdown content={annotation.note || fallbackContent} />
     </div>
   )
 }
@@ -425,12 +1122,12 @@ function AgentTimeline({ timeline }: { timeline: TimelineItem[] }) {
   const tone = {
     index_initializing: 'bg-gm-primary',
     index_ready: 'bg-gm-success',
-    index_fallback: 'bg-[#f5c31c]',
+    index_fallback: 'bg-gm-warning',
     local_search_start: 'bg-gm-primary',
     local_search_found: 'bg-gm-success',
     local_search_empty: 'bg-gm-text-tertiary',
-    web_search_start: 'bg-[#f5c31c]',
-    web_search_done: 'bg-[#6fba2c]',
+    web_search_start: 'bg-gm-warning',
+    web_search_done: 'bg-gm-success',
     answer_streaming: 'bg-gm-primary',
     done: 'bg-gm-success',
     error: 'bg-gm-error',
@@ -486,6 +1183,8 @@ export const ChatBubble = memo(function ChatBubble({
   streaming,
   sources,
   onOpenSource,
+  onSaveAsMarkdown,
+  onSaveAsArtifact,
 }: {
   role: 'system' | 'user' | 'assistant'
   content: string
@@ -493,11 +1192,17 @@ export const ChatBubble = memo(function ChatBubble({
   streaming: boolean
   sources?: ChatMessageSource[]
   onOpenSource?: (source: LocalChatMessageSource) => void
+  onSaveAsMarkdown?: () => void
+  onSaveAsArtifact?: (type: ReadingArtifactType) => void
 }) {
   const isUser = role === 'user'
   const isEmpty = !content && isLast && streaming
   const isAssistantStreaming = !isUser && isLast && streaming
   const bubbleRef = useRef<HTMLDivElement>(null)
+  const saveMenuRef = useRef<HTMLDivElement>(null)
+  const [saveMenuOpen, setSaveMenuOpen] = useState(false)
+  // 批注需绑定本地来源范围；仅当存在非 web 来源时显示「批注」按钮
+  const hasLocalSource = Boolean(sources?.some((s) => s.kind !== 'web'))
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
@@ -512,43 +1217,127 @@ export const ChatBubble = memo(function ChatBubble({
     }
   }, [])
 
+  useEffect(() => {
+    if (!saveMenuOpen) return
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!saveMenuRef.current?.contains(event.target as Node)) setSaveMenuOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSaveMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointer)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [saveMenuOpen])
+
+  const runSaveAction = (action: () => void) => {
+    setSaveMenuOpen(false)
+    action()
+  }
+
+  const canSave = !isUser && !isEmpty && Boolean(content.trim()) && Boolean(onSaveAsMarkdown || onSaveAsArtifact)
+
   return (
     <div className={`flex min-w-0 ${isUser ? 'justify-end' : 'justify-start'} animate-slideInUp`}>
       {!isUser && (
         <AiAvatar size="message" streaming={isAssistantStreaming} bounce={isEmpty} />
       )}
-      <div
-        ref={bubbleRef}
-        tabIndex={-1}
-        onKeyDown={handleKeyDown}
-        className={`select-text max-w-[80%] min-w-0 rounded-2xl px-4 py-2.5 text-body focus:outline-none ${
-          isUser
-            ? 'rounded-br-md'
-            : 'bg-gm-surface-elevated text-gm-text border border-gm-border rounded-bl-md'
-        } ${isAssistantStreaming ? 'gm-streaming-bubble' : ''}`}
-        style={isUser ? { backgroundColor: 'var(--gm-user-bubble-bg)', color: 'var(--gm-user-bubble-text)' } : undefined}
-      >
-        {isEmpty ? (
-          <div className="gm-typing-loader" aria-label="正在生成">
-            <span style={{ animationDelay: '0ms' }} />
-            <span style={{ animationDelay: '140ms' }} />
-            <span style={{ animationDelay: '280ms' }} />
+      <div className="group relative min-w-0 w-fit max-w-[80%]">
+        <div
+          ref={bubbleRef}
+          tabIndex={-1}
+          onKeyDown={handleKeyDown}
+          className={`select-text max-w-full min-w-0 rounded-2xl px-4 py-2.5 text-body focus:outline-none ${
+            isUser
+              ? 'rounded-br-md'
+              : 'bg-gm-surface-elevated text-gm-text border border-gm-border rounded-bl-md'
+          } ${isAssistantStreaming ? 'gm-streaming-bubble' : ''}`}
+          style={isUser ? { backgroundColor: 'var(--gm-user-bubble-bg)', color: 'var(--gm-user-bubble-text)' } : undefined}
+        >
+          {isEmpty ? (
+            <div className="gm-typing-loader" aria-label="正在生成">
+              <span style={{ animationDelay: '0ms' }} />
+              <span style={{ animationDelay: '140ms' }} />
+              <span style={{ animationDelay: '280ms' }} />
+            </div>
+          ) : isUser || (isLast && streaming) ? (
+            <div className={`whitespace-pre-wrap overflow-wrap-anywhere ${isAssistantStreaming ? 'gm-streaming-text' : ''}`} style={{ wordBreak: 'normal' }}>
+              <span>{content}</span>
+              {isAssistantStreaming && <span className="gm-streaming-caret" aria-hidden="true" />}
+            </div>
+          ) : (
+            <AssistantMarkdown content={content} />
+          )}
+          {!isUser && sources && sources.length > 0 && onOpenSource && (
+            <MessageSources sources={sources} onOpenSource={onOpenSource} />
+          )}
+        </div>
+        {canSave && (
+          <div
+            ref={saveMenuRef}
+            className={`absolute bottom-0 left-full z-20 pl-1 transition-opacity ${
+              saveMenuOpen
+                ? 'pointer-events-auto opacity-100'
+                : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100'
+            }`}
+          >
+            <Button
+              type="default"
+              size="small"
+              onClick={() => setSaveMenuOpen((open) => !open)}
+              title="保存回复"
+              aria-label="保存回复"
+              aria-expanded={saveMenuOpen}
+              className="!h-6 !w-6 !min-w-0 !rounded-full !p-0"
+            >
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                <path d="M7 10l5 5 5-5" />
+                <path d="M12 15V3" />
+              </svg>
+            </Button>
+            {saveMenuOpen && (
+              <div className="absolute bottom-full right-0 mb-1 min-w-32 rounded-lg border border-gm-border bg-gm-surface-elevated p-1 shadow-lg">
+                {onSaveAsMarkdown && (
+                  <Button type="text" size="small" className="w-full justify-start" onClick={() => runSaveAction(onSaveAsMarkdown)}>Markdown</Button>
+                )}
+                {onSaveAsArtifact && (
+                  <>
+                    <Button type="text" size="small" className="w-full justify-start" onClick={() => runSaveAction(() => onSaveAsArtifact('summary'))}>摘要</Button>
+                    <Button type="text" size="small" className="w-full justify-start" onClick={() => runSaveAction(() => onSaveAsArtifact('question_set'))}>问题集</Button>
+                    {hasLocalSource && (
+                      <Button type="text" size="small" className="w-full justify-start" onClick={() => runSaveAction(() => onSaveAsArtifact('annotation'))}>批注</Button>
+                    )}
+                    <Button type="text" size="small" className="w-full justify-start" onClick={() => runSaveAction(() => onSaveAsArtifact('note'))}>阅读笔记</Button>
+                  </>
+                )}
+              </div>
+            )}
           </div>
-        ) : isUser || (isLast && streaming) ? (
-          <div className={`select-text whitespace-pre-wrap overflow-wrap-anywhere ${isAssistantStreaming ? 'gm-streaming-text' : ''}`} style={{ wordBreak: 'normal' }}>
-            <span>{content}</span>
-            {isAssistantStreaming && <span className="gm-streaming-caret" aria-hidden="true" />}
-          </div>
-        ) : (
-          <AssistantMarkdown content={content} />
-        )}
-        {!isUser && sources && sources.length > 0 && onOpenSource && (
-          <MessageSources sources={sources} onOpenSource={onOpenSource} />
         )}
       </div>
     </div>
   )
 })
+
+const ARTIFACT_TYPE_LABELS: Record<ReadingArtifactType, string> = {
+  summary: '摘要',
+  question_set: '问题集',
+  annotation: '批注',
+  note: '阅读笔记',
+}
+
+function deriveArtifactTitle(type: ReadingArtifactType, content: string): string {
+  // 取正文首行非空文本作为标题，截断到合理长度；不调用模型二次改写
+  const firstLine = content
+    .split('\n')
+    .map((line) => line.replace(/^#+\s*/, '').trim())
+    .find((line) => line.length > 0) || ARTIFACT_TYPE_LABELS[type]
+  return firstLine.length > 40 ? `${firstLine.slice(0, 40)}…` : firstLine
+}
 
 function AiAvatar({
   size,
@@ -704,7 +1493,7 @@ const ASSISTANT_MARKDOWN_COMPONENTS: Components = {
 
 const AssistantMarkdown = memo(function AssistantMarkdown({ content }: { content: string }) {
   return (
-    <div className="ai-message-content select-text max-w-none min-w-0 overflow-wrap-anywhere [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+    <div className="ai-message-content max-w-none min-w-0 overflow-wrap-anywhere [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
       <ReactMarkdown
         remarkPlugins={ASSISTANT_MARKDOWN_REMARK_PLUGINS}
         components={ASSISTANT_MARKDOWN_COMPONENTS}
@@ -714,6 +1503,61 @@ const AssistantMarkdown = memo(function AssistantMarkdown({ content }: { content
     </div>
   )
 })
+
+function ActionProposalCard({ proposal }: { proposal: ActionProposal }) {
+  const reminderUnavailable = proposal.kind === 'create_reading_reminder'
+    && !READING_REMINDER_FEATURE_AVAILABLE
+  const statusLabel: Record<ActionProposal['status'], string> = {
+    pending: '待确认',
+    executing: '执行中',
+    completed: '已完成',
+    rejected: '已拒绝',
+    expired: '已过期',
+    failed: '执行失败',
+  }
+
+  return (
+    <div className="animate-slideInUp">
+      <div className="rounded-xl p-3" style={{ border: '1px solid var(--gm-warning)', backgroundColor: 'color-mix(in srgb, var(--gm-warning) 8%, transparent)' }}>
+        <div className="text-caption font-bold text-gm-text-primary">{proposal.title}</div>
+        <div className="mt-1 text-caption text-gm-text-secondary">目标：{proposal.target}</div>
+        <div className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded-lg border border-gm-border bg-gm-surface-elevated px-3 py-2 text-caption text-gm-text-primary">
+          {proposal.preview}
+        </div>
+        <div className="mt-2 text-caption text-gm-text-secondary">风险：{proposal.riskDescription}</div>
+        <div className="mt-1 text-caption text-gm-text-secondary">
+          {proposal.reversible ? '可撤销' : '不可自动撤销'}：{proposal.reversibleDescription}
+        </div>
+        {proposal.status === 'pending' && reminderUnavailable ? (
+          <div className="mt-3 rounded-lg border border-gm-border bg-gm-surface-elevated px-3 py-1.5 text-caption text-gm-text-secondary">
+            {READING_REMINDER_DEVELOPMENT_MESSAGE}
+          </div>
+        ) : proposal.status === 'pending' ? (
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={() => void import('@/services/actionProposalCommand')
+                .then(({ confirmActionProposalCommand }) => confirmActionProposalCommand(proposal.id))}
+              className="flex-1 rounded-lg bg-gm-primary px-3 py-1.5 text-caption font-bold text-white transition-opacity hover:opacity-90"
+            >
+              确认执行
+            </button>
+            <button
+              onClick={() => void import('@/services/actionProposalCommand')
+                .then(({ rejectActionProposalCommand }) => rejectActionProposalCommand(proposal.id))}
+              className="flex-1 rounded-lg border border-gm-border px-3 py-1.5 text-caption text-gm-text-secondary hover:bg-gm-surface-hover"
+            >
+              拒绝
+            </button>
+          </div>
+        ) : (
+          <div className="mt-3 rounded-lg border border-gm-border bg-gm-surface-elevated px-3 py-1.5 text-caption text-gm-text-secondary">
+            {statusLabel[proposal.status]}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 function PendingEditCard({ edit, actionable }: { edit: PendingEdit; actionable: boolean }) {
   const rejectPendingEdit = useChatStore((s) => s.rejectPendingEdit)

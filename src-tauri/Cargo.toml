@@ -25,6 +25,10 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tokio = { version = "1", features = ["io-util", "macros", "net", "sync"] }
 url = "2"
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "sqlite"] }
+tauri-plugin-notification = "2.3.3"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61.3", features = ["Data_Xml_Dom", "Foundation", "Foundation_Collections", "UI_Notifications"] }
 
 [lib]
 name = "guanmo_lib"

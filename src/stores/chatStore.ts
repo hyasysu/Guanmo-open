@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ChatMessage, ChatMessageContextMeta, ChatMessageSource, EditConfirmation } from '@/services/ai/types'
+import type { ActionProposal, ChatMessage, ChatMessageContextMeta, ChatMessageSource, EditConfirmation } from '@/services/ai/types'
 import type { AgentStep, AgentTaskContext } from '@/services/agent/types'
 import type { ContextTag } from '@/types/contextTag'
 import { MAX_CONTEXT_TAGS } from '@/types/contextTag'
@@ -8,7 +8,11 @@ import {
   persistChatMessage,
   loadRecentChatTurns,
 } from '@/services/database/persistence'
-import { normalizeStoredDisplayContent } from '@/services/aiChatMessages'
+import {
+  decodeReadingScope,
+  decodeReadingSourceCoverage,
+  normalizeStoredDisplayContent,
+} from '@/services/aiChatMessages'
 import { buildLinkedQaRows } from '@/services/chatHistory'
 
 const MAX_MESSAGES = 100
@@ -416,6 +420,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (msg.contextMeta) metadata.contextMeta = msg.contextMeta
       if (msg.sources?.length) metadata.sources = msg.sources
       if (msg.editConfirmation) metadata.editConfirmation = msg.editConfirmation
+      if (msg.actionProposal) metadata.actionProposal = msg.actionProposal
 
       await persistChatMessage({
         id: msg.id!,
@@ -444,7 +449,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return
     }
 
-    const historyMessages = buildCompleteQaMessages(rows)
+    const historyMessages = await buildCompleteQaMessages(rows)
     const loadedTurnCount = historyMessages.length / 2
     set((s) => ({
       messages: [
@@ -459,16 +464,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
 type LoadedChatMessageRow = Awaited<ReturnType<typeof loadRecentChatTurns>>[number]
 
-function buildCompleteQaMessages(rows: LoadedChatMessageRow[]): ChatMessage[] {
-  return buildLinkedQaRows(rows).map(toChatMessage)
+function buildCompleteQaMessages(rows: LoadedChatMessageRow[]): Promise<ChatMessage[]> {
+  return import('@/services/agent/actionProposal').then(({ decodeActionProposal, decodeEditConfirmation }) =>
+    buildLinkedQaRows(rows).map((row) => toChatMessage(row, decodeActionProposal, decodeEditConfirmation)))
 }
 
-function toChatMessage(row: LoadedChatMessageRow): ChatMessage {
+function toChatMessage(
+  row: LoadedChatMessageRow,
+  decodeActionProposal: (value: unknown) => ActionProposal | undefined,
+  decodeEditConfirmation: (value: unknown) => EditConfirmation | undefined,
+): ChatMessage {
   let tags: ChatMessage['tags']
   let displayContent: string | undefined
   let contextMeta: ChatMessageContextMeta | undefined
   let sources: ChatMessageSource[] | undefined
   let editConfirmation: EditConfirmation | undefined
+  let actionProposal: ActionProposal | undefined
 
   if (row.metadata) {
     try {
@@ -477,7 +488,8 @@ function toChatMessage(row: LoadedChatMessageRow): ChatMessage {
       displayContent = typeof meta.displayContent === 'string' ? meta.displayContent : undefined
       contextMeta = sanitizeContextMeta(meta.contextMeta)
       sources = sanitizeMessageSources(meta.sources)
-      editConfirmation = sanitizeEditConfirmation(meta.editConfirmation)
+      editConfirmation = decodeEditConfirmation(meta.editConfirmation)
+      actionProposal = decodeActionProposal(meta.actionProposal)
     } catch {
       // ignore corrupted metadata
     }
@@ -496,11 +508,11 @@ function toChatMessage(row: LoadedChatMessageRow): ChatMessage {
     contextMeta,
     sources,
     editConfirmation,
+    actionProposal,
     sessionId: row.session_id,
     sessionTitle: row.session_title,
   }
 }
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -591,35 +603,7 @@ function sanitizeContextMeta(value: unknown): ChatMessageContextMeta | undefined
     tagCount: value.tagCount,
     ragSourceCount: value.ragSourceCount,
     webSearchUsed: value.webSearchUsed,
-  }
-}
-
-function sanitizeEditConfirmation(value: unknown): EditConfirmation | undefined {
-  if (!isPlainObject(value)) return undefined
-  if (
-    typeof value.id !== 'string'
-    || typeof value.oldText !== 'string'
-    || typeof value.newText !== 'string'
-    || typeof value.tabId !== 'string'
-    || typeof value.tabTitle !== 'string'
-    || !['pending', 'applied', 'rejected'].includes(String(value.status))
-  ) {
-    return undefined
-  }
-
-  return {
-    id: value.id,
-    messageId: typeof value.messageId === 'string' ? value.messageId : undefined,
-    oldText: value.oldText,
-    newText: value.newText,
-    tabId: value.tabId,
-    tabTitle: value.tabTitle,
-    replaceFrom: typeof value.replaceFrom === 'number' ? value.replaceFrom : undefined,
-    replaceTo: typeof value.replaceTo === 'number' ? value.replaceTo : undefined,
-    replaceWholeDocument: typeof value.replaceWholeDocument === 'boolean' ? value.replaceWholeDocument : undefined,
-    changeSummary: typeof value.changeSummary === 'string' ? value.changeSummary : undefined,
-    selectionFrom: typeof value.selectionFrom === 'number' ? value.selectionFrom : undefined,
-    selectionTo: typeof value.selectionTo === 'number' ? value.selectionTo : undefined,
-    status: value.status as EditConfirmation['status'],
+    readingScope: decodeReadingScope(value.readingScope),
+    sourceCoverage: decodeReadingSourceCoverage(value.sourceCoverage),
   }
 }

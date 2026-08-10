@@ -75,6 +75,6 @@ describe('历史 Bug 回归', () => {
     const message = screen.getByText(longMessage)
     expect(container.firstElementChild).toHaveClass('min-w-0')
     expect(message.parentElement).toHaveClass('overflow-wrap-anywhere')
-    expect(message.parentElement?.parentElement).toHaveClass('max-w-[80%]', 'min-w-0')
+    expect(message.parentElement?.parentElement).toHaveClass('max-w-full', 'min-w-0')
   })
 })

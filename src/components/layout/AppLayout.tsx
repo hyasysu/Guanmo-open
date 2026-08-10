@@ -36,6 +36,7 @@ export function AppLayout() {
   const aiPanelWidth = useAppStore((s) => s.aiPanelWidth)
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
   const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
+  const setSidebarWidth = useAppStore((s) => s.setSidebarWidth)
   const setAiPanelWidth = useAppStore((s) => s.setAiPanelWidth)
   const togglePreview = useEditorStore((s) => s.togglePreview)
   const toggleDiffPreview = useEditorStore((s) => s.toggleDiffPreview)
@@ -72,19 +73,52 @@ export function AppLayout() {
     }
   }, [isFullscreen])
 
-  // AI panel resize
-  const isResizing = useRef(false)
+  // Sidebar resize
+  const isSidebarResizing = useRef(false)
 
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+  const handleSidebarResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
-    isResizing.current = true
+    isSidebarResizing.current = true
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
   }, [])
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
-      if (!isResizing.current) return
+      if (!isSidebarResizing.current) return
+      const clamped = Math.max(250, Math.min(500, e.clientX))
+      setSidebarWidth(clamped)
+    }
+
+    const handleMouseUp = () => {
+      if (isSidebarResizing.current) {
+        isSidebarResizing.current = false
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+      }
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [setSidebarWidth])
+
+  // AI panel resize
+  const isAiPanelResizing = useRef(false)
+
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    isAiPanelResizing.current = true
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }, [])
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isAiPanelResizing.current) return
       // Calculate new width from the right edge of the window
       const newWidth = window.innerWidth - e.clientX
       const clamped = Math.max(280, Math.min(600, newWidth))
@@ -92,8 +126,8 @@ export function AppLayout() {
     }
 
     const handleMouseUp = () => {
-      if (isResizing.current) {
-        isResizing.current = false
+      if (isAiPanelResizing.current) {
+        isAiPanelResizing.current = false
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
       }
@@ -184,8 +218,8 @@ export function AppLayout() {
   }, [])
 
   const toggleTheme = useCallback(() => {
-    const theme = useSettingsStore.getState().appearance.theme
-    useSettingsStore.getState().updateAppearanceSettings({ theme: theme === 'dark' ? 'light' : 'dark' })
+    const { appearance, updateAppearanceSettings } = useSettingsStore.getState()
+    updateAppearanceSettings({ themeId: appearance.themeId === 'dark' ? appearance.lastLightThemeId : 'dark' })
   }, [])
 
   const runAfterNormalLayout = useCallback(async (action: () => void | Promise<void>) => {
@@ -299,6 +333,7 @@ export function AppLayout() {
           <Sidebar
             collapsed={sidebarCollapsed}
             width={sidebarWidth}
+            onResizeStart={handleSidebarResizeStart}
             onOpenSettings={openSettings}
             onOpenSearch={handleOpenSearch}
           />
@@ -407,9 +442,9 @@ export function AppLayout() {
 
       {/* Search highlight styles (CSS Highlight API) */}
       <style>{`
-        ::highlight(search-highlight) { background-color: rgba(251, 191, 36, 0.35); }
-        ::highlight(search-highlight-active) { background-color: rgba(251, 191, 36, 0.7); }
-        ::highlight(preview-context-selection) { background-color: rgba(58, 175, 164, 0.28); }
+        ::highlight(search-highlight) { background-color: color-mix(in srgb, var(--gm-warning) 35%, transparent); }
+        ::highlight(search-highlight-active) { background-color: color-mix(in srgb, var(--gm-warning) 70%, transparent); }
+        ::highlight(preview-context-selection) { background-color: color-mix(in srgb, var(--gm-primary) 28%, transparent); }
       `}</style>
     </div>
   )

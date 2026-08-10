@@ -1,3 +1,5 @@
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/services/requestTimeout'
+
 /** 对话协议类型 */
 export type ChatProtocol = 'openai-chat' | 'anthropic-messages' | 'openai-responses'
 
@@ -13,6 +15,7 @@ export interface EmbeddingConfig {
   baseUrl: string
   apiKey: string
   embeddingModel: string
+  timeout: number
 }
 
 export interface AiConfig {
@@ -48,7 +51,19 @@ export interface ChatMessageContextMeta {
   tagCount: number
   ragSourceCount: number
   webSearchUsed: boolean
+  readingScope?: ReadingScope
+  sourceCoverage?: ReadingSourceCoverage
 }
+
+export type ReadingScope = 'selection' | 'section' | 'document' | 'workspace'
+
+export type ReadingSourceCoverage =
+  | 'selected_range'
+  | 'section_chunks'
+  | 'document_full'
+  | 'document_partial'
+  | 'workspace_topk'
+  | 'none'
 
 export interface LocalChatMessageSource {
   kind?: 'local'
@@ -87,6 +102,41 @@ export interface EditConfirmation {
   status: 'pending' | 'applied' | 'rejected'
 }
 
+export type ActionProposalKind =
+  | 'save_memory'
+  | 'save_reading_artifact'
+  | 'create_markdown_note'
+  | 'create_reading_reminder'
+
+export type ActionProposalStatus =
+  | 'pending'
+  | 'executing'
+  | 'completed'
+  | 'rejected'
+  | 'expired'
+  | 'failed'
+
+export interface ActionProposal {
+  id: string
+  messageId?: string
+  version: 1
+  kind: ActionProposalKind
+  effect: 'write_local' | 'schedule'
+  capability: 'memory' | 'reading_artifact' | 'markdown_file' | 'reading_reminder'
+  title: string
+  target: string
+  preview: string
+  reversible: boolean
+  reversibleDescription: string
+  riskDescription: string
+  payload: Record<string, unknown>
+  createdAt: number
+  expiresAt: number
+  updatedAt: number
+  status: ActionProposalStatus
+  errorCategory?: 'invalid' | 'expired' | 'target_changed' | 'cancelled' | 'execution_failed' | 'unsupported'
+}
+
 export interface ChatMessage {
   id?: string
   parentId?: string
@@ -98,6 +148,7 @@ export interface ChatMessage {
   contextMeta?: ChatMessageContextMeta
   sources?: ChatMessageSource[]
   editConfirmation?: EditConfirmation
+  actionProposal?: ActionProposal
   hidden?: boolean
   sessionId?: string
   sessionTitle?: string
@@ -193,7 +244,7 @@ export const DEFAULT_AI_CONFIG: AiConfig = {
   streamEnabled: true,
   webSearchEnabled: false,
   customPreferencePrompt: '',
-  timeout: 60000,
+  timeout: DEFAULT_REQUEST_TIMEOUT_MS,
   maxContextLength: 8192,
   temperature: 0.7,
   topP: 1,
@@ -203,6 +254,7 @@ export const DEFAULT_AI_CONFIG: AiConfig = {
     baseUrl: '',
     apiKey: '',
     embeddingModel: '',
+    timeout: DEFAULT_REQUEST_TIMEOUT_MS,
   },
 }
 

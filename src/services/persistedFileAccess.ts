@@ -7,7 +7,7 @@ import {
 import { normalizeFilePath } from '@/services/pathIdentity'
 
 interface LegacyFileAccessSources {
-  workspacePath: string | null
+  workspacePaths: string[]
   recentFiles: Array<{ path: string }>
   favorites: string[]
   tabs: Array<{ filePath: string | null }>
@@ -35,7 +35,7 @@ export function collectLegacyFileAccessPaths(sources: LegacyFileAccessSources): 
     filePaths.push(path)
   }
   return {
-    workspacePaths: sources.workspacePath ? [sources.workspacePath] : [],
+    workspacePaths: sources.workspacePaths,
     filePaths,
   }
 }
@@ -59,7 +59,7 @@ export async function migrateLegacyFileAccess(): Promise<void> {
     persistence.loadChatSourceFilePaths(),
   ])
   const paths = collectLegacyFileAccessPaths({
-    workspacePath: appState.workspacePath,
+    workspacePaths: appState.workspaceRoots.map((root) => root.path),
     recentFiles: editorState.recentFiles,
     favorites: editorState.favorites,
     tabs: editorState.tabs,

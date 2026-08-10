@@ -44,6 +44,15 @@ function isPendingEditResult(text: string): boolean {
   }
 }
 
+function isPendingActionResult(text: string): boolean {
+  try {
+    const parsed = JSON.parse(text)
+    return Boolean(parsed && typeof parsed === 'object' && parsed.__pendingAction)
+  } catch {
+    return false
+  }
+}
+
 const DEFAULT_CONFIG: AgentConfig = {
   maxSteps: 6,
   maxToolCalls: 8,
@@ -95,8 +104,8 @@ ${CONTEXT_SAFETY_PROMPT}
 14. 调用 replace_current_tab_text 或输出 needsEditConfirmation 时只输出 JSON，不要同时输出解释文本。
 
 保存记忆的规则：
-1. 当用户要求记住、保存记忆、记下来时，调用 save_memory 工具保存。
-2. 调用 save_memory 后，必须用自然语言回复，说明保存了什么内容，并告知用户可以基于这个记忆做什么。
+1. 当用户要求记住、保存记忆、记下来时，调用 save_memory 生成行动确认卡片。
+2. save_memory 不会直接写入；生成确认卡后等待用户确认，不得提前声称已保存。
 3. 记忆内容应简洁明确，分类准确（preference/project/learning/profile/instruction）。
 
 检索记忆的规则：
@@ -112,9 +121,10 @@ ${CONTEXT_SAFETY_PROMPT}
 5. 如果 search_knowledge 只返回片段而不足以完整总结整篇文章，应基于片段说明当前结论范围，并提示用户添加目标文件以读取完整原文。
 
 工具安全规则：
-1. 查询工具可以自动执行；产生持久化写入的 save_memory 仅可在用户本轮明确要求保存记忆时调用。
-2. 文件修改只能生成待确认卡片，用户确认前不得宣称已完成写入。
-3. 不得伪造工具结果，也不得向用户展示内部工具编排或推理内容。
+1. 查询工具可以自动执行；write_local、schedule 等副作用工具必须返回已注册的确认提案，模型 JSON 不得直接触发执行。
+2. 文件修改、保存记忆、保存阅读成果、新建 Markdown 笔记和创建提醒都只能生成待确认卡片，用户确认前不得宣称已完成。
+3. 新建 Markdown 笔记不得提供或猜测绝对路径，确认后由用户通过系统保存对话框选择目标。
+4. 不得伪造工具结果，也不得向用户展示内部工具编排或推理内容。
 
 可用工具：
 {{tool_descriptions}}`,
@@ -375,7 +385,17 @@ async function executeTool(
         setTimeout(() => reject(new Error('工具执行超时')), timeout)
       ),
     ])
-    if (isPendingEditResult(result)) return { result, rawResult: result }
+    const isRejectedResult = /^(?:错误：|参数 |修改被拒绝|替换失败|整文替换被拒绝|保存被拒绝)/.test(result.trim())
+    if (
+      tool.confirmationPolicy === 'required'
+      && !isPendingEditResult(result)
+      && !isPendingActionResult(result)
+      && !isRejectedResult
+    ) {
+      const blocked = `错误：工具 "${name}" 声明为必须确认，但未返回受支持的行动提案。`
+      return { result: blocked, rawResult: blocked }
+    }
+    if (isPendingEditResult(result) || isPendingActionResult(result)) return { result, rawResult: result }
     return {
       result: name === 'read_selection_context' ? result : truncate(result, getToolTokenBudget(name)),
       rawResult: result,
@@ -1048,8 +1068,10 @@ export async function runAgent({
     }
 
     // 检查是否有待确认的编辑
-    const hasPendingEdit = toolResults.some(tr => isPendingEditResult(tr.result))
-    if (hasPendingEdit) {
+    const hasPendingConfirmation = toolResults.some(
+      (tr) => isPendingEditResult(tr.result) || isPendingActionResult(tr.result),
+    )
+    if (hasPendingConfirmation) {
       return { answer: '', steps, toolCalls, reason: 'completed', sources: knowledgeSources }
     }
 

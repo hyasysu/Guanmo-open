@@ -41,12 +41,42 @@ export function splitIntervalByMidnight(
   startMs: number,
   endMs: number,
 ): Array<{ date: string; ms: number }> {
-  if (endMs <= startMs) return []
+  const normalizedStartMs = Number.isFinite(startMs) ? Math.trunc(startMs) : null
+  const normalizedEndMs = Number.isFinite(endMs) ? Math.trunc(endMs) : null
+  const maxDateMs = 8.64e15
+  if (
+    normalizedStartMs === null ||
+    normalizedEndMs === null ||
+    Math.abs(normalizedStartMs) > maxDateMs ||
+    Math.abs(normalizedEndMs) > maxDateMs ||
+    normalizedEndMs <= normalizedStartMs
+  ) {
+    return []
+  }
+
+  const millisecondsPerDay = 24 * 60 * 60 * 1000
+  const maxSegments = 10_000
+  const estimatedSegments =
+    Math.ceil((normalizedEndMs - normalizedStartMs) / millisecondsPerDay) + 1
+  if (estimatedSegments > maxSegments) {
+    throw new RangeError(
+      `splitIntervalByMidnight exceeded the maximum number of segments (${maxSegments})`,
+    )
+  }
 
   const result: Array<{ date: string; ms: number }> = []
-  let cursor = new Date(startMs)
+  let cursorMs = normalizedStartMs
+  let iterations = 0
 
-  while (cursor.getTime() < endMs) {
+  while (cursorMs < normalizedEndMs) {
+    iterations += 1
+    if (iterations > maxSegments) {
+      throw new RangeError(
+        `splitIntervalByMidnight exceeded the maximum number of segments (${maxSegments})`,
+      )
+    }
+
+    const cursor = new Date(cursorMs)
     const date = getLocalDateKey(cursor)
     // 当天 24:00:00.000 的毫秒时间戳
     const nextMidnight = new Date(
@@ -58,12 +88,12 @@ export function splitIntervalByMidnight(
       0,
       0,
     ).getTime()
-    const segmentEnd = Math.min(nextMidnight, endMs)
-    const ms = segmentEnd - cursor.getTime()
-    if (ms > 0) {
-      result.push({ date, ms })
+    const segmentEnd = Math.min(nextMidnight, normalizedEndMs)
+    if (!Number.isFinite(segmentEnd) || segmentEnd <= cursorMs) {
+      throw new RangeError('splitIntervalByMidnight cursor did not advance')
     }
-    cursor = new Date(segmentEnd)
+    result.push({ date, ms: segmentEnd - cursorMs })
+    cursorMs = segmentEnd
   }
 
   return result
@@ -71,12 +101,14 @@ export function splitIntervalByMidnight(
 
 /**
  * 将总秒数格式化为可读时长字符串。
+ * - 小于 1 分钟：`少于 1 分钟`
  * - 小于 1 小时：`xx 分钟`
  * - 大于等于 1 小时：`x 小时 xx 分钟`
  * - 没有记录：`0 分钟`
  */
 export function formatDuration(totalSeconds: number): string {
   if (totalSeconds <= 0) return '0 分钟'
+  if (totalSeconds < 60) return '少于 1 分钟'
   const totalMinutes = Math.floor(totalSeconds / 60)
   if (totalMinutes < 60) {
     return `${totalMinutes} 分钟`
@@ -149,24 +181,38 @@ export async function upsertUsageSeconds(
  * 查询全部累计使用秒数。
  */
 export async function queryUsageTotal(): Promise<number> {
-  const db = getDatabase()
-  const rows = await db.select<{ total: number }>(
-    `SELECT COALESCE(SUM(foreground_seconds), 0) AS total FROM usage_daily`,
-  )
-  return rows[0]?.total ?? 0
+  try {
+    const db = getDatabase()
+    const rows = await db.select<{ total: number }>(
+      `SELECT COALESCE(SUM(foreground_seconds), 0) AS total FROM usage_daily`,
+    )
+    const total = rows[0]?.total ?? 0
+    clearTrackingError('database_read')
+    return total
+  } catch (error) {
+    setTrackingError({ kind: 'database_read' })
+    throw error
+  }
 }
 
 /**
  * 查询今日使用秒数。
  */
 export async function queryUsageToday(): Promise<number> {
-  const db = getDatabase()
-  const today = getLocalDateKey()
-  const rows = await db.select<{ seconds: number }>(
-    `SELECT foreground_seconds AS seconds FROM usage_daily WHERE date = $1`,
-    [today],
-  )
-  return rows[0]?.seconds ?? 0
+  try {
+    const db = getDatabase()
+    const today = getLocalDateKey()
+    const rows = await db.select<{ seconds: number }>(
+      `SELECT foreground_seconds AS seconds FROM usage_daily WHERE date = $1`,
+      [today],
+    )
+    const seconds = rows[0]?.seconds ?? 0
+    clearTrackingError('database_read')
+    return seconds
+  } catch (error) {
+    setTrackingError({ kind: 'database_read' })
+    throw error
+  }
 }
 
 /**
@@ -176,26 +222,37 @@ export async function queryUsageRange(
   start: string,
   end: string,
 ): Promise<Map<string, number>> {
-  const db = getDatabase()
-  const rows = await db.select<UsageDailyRow>(
-    `SELECT date, foreground_seconds FROM usage_daily
-     WHERE date >= $1 AND date <= $2
-     ORDER BY date`,
-    [start, end],
-  )
-  const result = new Map<string, number>()
-  for (const row of rows) {
-    result.set(row.date, row.foreground_seconds)
+  try {
+    const db = getDatabase()
+    const rows = await db.select<UsageDailyRow>(
+      `SELECT date, foreground_seconds FROM usage_daily
+       WHERE date >= $1 AND date <= $2
+       ORDER BY date`,
+      [start, end],
+    )
+    const result = new Map<string, number>()
+    for (const row of rows) {
+      result.set(row.date, row.foreground_seconds)
+    }
+    clearTrackingError('database_read')
+    return result
+  } catch (error) {
+    setTrackingError({ kind: 'database_read' })
+    throw error
   }
-  return result
 }
 
 /**
  * 清空全部使用时长数据。
  */
 export async function clearUsageData(): Promise<void> {
-  const db = getDatabase()
-  await db.execute(`DELETE FROM usage_daily`)
+  try {
+    const db = getDatabase()
+    await db.execute(`DELETE FROM usage_daily`)
+  } catch (error) {
+    setTrackingError({ kind: 'database_write' })
+    throw error
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -234,11 +291,14 @@ export function getPendingSnapshot(): Map<string, number> {
  * - 写入成功才扣除对应整秒；
  * - 写入失败保留该日增量，下次重试。
  */
-export async function flushPending(): Promise<void> {
+async function flushPendingInternal(): Promise<void> {
   const entries = Array.from(pendingMs.entries())
+  let attempted = false
+  let failed = false
   for (const [date, ms] of entries) {
     const seconds = Math.floor(ms / 1000)
     if (seconds <= 0) continue
+    attempted = true
     try {
       await upsertUsageSeconds(date, seconds)
       // 成功：扣除已写入的整秒，保留不足一秒余数
@@ -252,9 +312,19 @@ export async function flushPending(): Promise<void> {
         pendingMs.set(date, remaining)
       }
     } catch {
-      // 失败：保留该日增量，下次重试
+      failed = true
+      // 失败：保留该日增量，下次重试；只暴露匿名错误类别。
+      setTrackingError({ kind: 'database_write' })
     }
   }
+  if (attempted && !failed) clearTrackingError('database_write')
+}
+
+/**
+ * 串行执行 pending 写入，避免与生命周期结算或清空操作交错。
+ */
+export function flushPending(): Promise<void> {
+  return enqueueLifecycle(() => flushPendingInternal())
 }
 
 /** 清空 pending map。 */
@@ -268,6 +338,14 @@ export function clearPending(): void {
 
 const CHECKPOINT_INTERVAL_MS = 30_000
 
+export type UsageWindowStateField = 'focused' | 'visible' | 'minimized'
+
+export type UsageTrackingError =
+  | { kind: 'startup' }
+  | { kind: 'window_state'; fields: readonly UsageWindowStateField[] }
+  | { kind: 'database_read' }
+  | { kind: 'database_write' }
+
 interface UsageSnapshot {
   enabled: boolean
   isActive: boolean
@@ -275,33 +353,33 @@ interface UsageSnapshot {
   totalSeconds: number
   capturedMsByDate: ReadonlyMap<string, number>
   reset: boolean
+  error: UsageTrackingError | null
 }
 
 type SnapshotListener = (snapshot: UsageSnapshot) => void
 
-let trackingStarted = false
-let active = false
-let checkpointTimer: ReturnType<typeof setInterval> | null = null
+type TrackingState = 'stopped' | 'inactive' | 'active' | 'stopping'
+
+let trackingState: TrackingState = 'stopped'
+let checkpointTimer: ReturnType<typeof setTimeout> | null = null
 let wallClockBase = 0
 let monotonicBase = 0
 let generation = 0
 let unlistenFocus: (() => void) | null = null
-let unlistenClose: (() => void) | null = null
 let unlistenVisibility: (() => void) | null = null
+let unlistenClose: (() => void) | null = null
 let trackingRequested = false
-let closeInProgress = false
+let closeHandled = false
+let trackingError: UsageTrackingError | null = null
+let startupRetryTimer: ReturnType<typeof setTimeout> | null = null
+let startupRetryAttempt = 0
+
+const STARTUP_RETRY_DELAYS_MS = [1_000, 5_000, 15_000] as const
 
 const snapshotListeners = new Set<SnapshotListener>()
 
-// 串行写入队列：flush、clear 等操作共用一条 Promise 链
-let writeQueue: Promise<void> = Promise.resolve()
+// 生命周期、结算和清空共用一条 Promise 链，避免状态转换和写入交错。
 let lifecycleQueue: Promise<void> = Promise.resolve()
-
-function enqueueWrite(fn: () => Promise<void>): Promise<void> {
-  const task = writeQueue.then(fn, fn)
-  writeQueue = task.catch(() => {})
-  return task
-}
 
 function enqueueLifecycle(fn: () => Promise<void>): Promise<void> {
   const task = lifecycleQueue.then(fn, fn)
@@ -309,25 +387,104 @@ function enqueueLifecycle(fn: () => Promise<void>): Promise<void> {
   return task
 }
 
-async function queryWindowState(): Promise<{ focused: boolean; visible: boolean; minimized: boolean }> {
-  if (!isTauri()) return { focused: false, visible: false, minimized: true }
+function setTrackingError(error: UsageTrackingError): void {
+  trackingError = error
+  notifyListeners()
+}
+
+function clearTrackingError(kind: UsageTrackingError['kind']): void {
+  if (trackingError?.kind !== kind) return
+  trackingError = null
+  notifyListeners()
+}
+
+function clearStartupRetry(): void {
+  if (startupRetryTimer !== null) {
+    clearTimeout(startupRetryTimer)
+    startupRetryTimer = null
+  }
+}
+
+function scheduleStartupRetry(): void {
+  if (
+    !trackingRequested ||
+    startupRetryTimer !== null ||
+    startupRetryAttempt >= STARTUP_RETRY_DELAYS_MS.length
+  ) {
+    return
+  }
+
+  const delay = STARTUP_RETRY_DELAYS_MS[startupRetryAttempt]
+  startupRetryAttempt += 1
+  startupRetryTimer = setTimeout(() => {
+    startupRetryTimer = null
+    void startUsageTracking().catch(() => {})
+  }, delay)
+}
+
+interface WindowState {
+  focused: boolean
+  visible: boolean
+  minimized: boolean
+}
+
+interface WindowStateResult {
+  state: WindowState
+  error: Extract<UsageTrackingError, { kind: 'window_state' }> | null
+}
+
+async function queryWindowState(): Promise<WindowStateResult> {
+  if (!isTauri()) {
+    return {
+      state: { focused: false, visible: false, minimized: true },
+      error: null,
+    }
+  }
+
   try {
     const { getCurrentWindow } = await import('@tauri-apps/api/window')
     const win = getCurrentWindow()
-    const [focused, visible, minimized] = await Promise.all([
+    const results = await Promise.allSettled([
       win.isFocused(),
       win.isVisible(),
       win.isMinimized(),
     ])
-    return { focused, visible, minimized }
+    const fields: UsageWindowStateField[] = []
+    const values: boolean[] = []
+    const fieldNames: UsageWindowStateField[] = ['focused', 'visible', 'minimized']
+
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        values[index] = result.value
+      } else {
+        values[index] = false
+        fields.push(fieldNames[index])
+      }
+    })
+
+    return {
+      state: {
+        focused: values[0],
+        visible: values[1],
+        minimized: values[2],
+      },
+      error: fields.length > 0 ? { kind: 'window_state', fields } : null,
+    }
   } catch {
-    return { focused: false, visible: false, minimized: true }
+    return {
+      state: { focused: false, visible: false, minimized: true },
+      error: {
+        kind: 'window_state',
+        fields: ['focused', 'visible', 'minimized'],
+      },
+    }
   }
 }
 
 function shouldBeActive(focused: boolean, visible: boolean, minimized: boolean): boolean {
   const enabled = useSettingsStore.getState().usageTracking.enabled
-  return trackingRequested && trackingStarted && enabled && focused && visible && !minimized
+  const started = trackingState === 'inactive' || trackingState === 'active'
+  return trackingRequested && started && enabled && focused && visible && !minimized
 }
 
 function resetBases(): void {
@@ -361,22 +518,34 @@ async function doCheckpoint(): Promise<void> {
   for (const seg of segments) {
     addPendingMs(seg.date, seg.ms)
   }
-  await flushPending()
+  await flushPendingInternal()
   notifyListeners(new Map(segments.map((segment) => [segment.date, segment.ms])))
 }
 
-async function startTimer(): Promise<void> {
-  if (checkpointTimer !== null) return
-  resetBases()
-  checkpointTimer = setInterval(() => {
-    void enqueueWrite(() => doCheckpoint())
+function scheduleCheckpoint(): void {
+  if (checkpointTimer !== null || trackingState !== 'active') return
+
+  checkpointTimer = setTimeout(() => {
+    checkpointTimer = null
+    void enqueueLifecycle(async () => {
+      if (trackingState !== 'active') return
+      await doCheckpoint()
+      if (trackingState === 'active') scheduleCheckpoint()
+    })
   }, CHECKPOINT_INTERVAL_MS)
+}
+
+function startTimer(): void {
+  if (checkpointTimer !== null) return
+  trackingState = 'active'
+  resetBases()
+  scheduleCheckpoint()
   console.log('[UsageTracking] timer started (step4: checkpoint on)')
 }
 
 async function stopTimer(): Promise<void> {
   if (checkpointTimer !== null) {
-    clearInterval(checkpointTimer)
+    clearTimeout(checkpointTimer)
     checkpointTimer = null
   }
   // 结算当前时段
@@ -389,34 +558,54 @@ async function stopTimer(): Promise<void> {
       capturedMsByDate.set(seg.date, seg.ms)
     }
   }
-  await enqueueWrite(() => flushPending())
+  await flushPendingInternal()
   notifyListeners(capturedMsByDate)
 }
 
 async function activate(): Promise<void> {
-  if (active) return
-  active = true
-  await startTimer()
+  if (trackingState !== 'inactive') return
+  startTimer()
   notifyListeners()
 }
 
 async function deactivate(): Promise<void> {
-  if (!active) return
-  active = false
+  if (trackingState !== 'active' && trackingState !== 'stopping') return
+  trackingState = 'stopping'
   await stopTimer()
+  trackingState = 'inactive'
+  notifyListeners()
+}
+
+async function stopTrackingInternal(): Promise<void> {
+  if (trackingState === 'stopped') return
+
+  const shouldCapture = trackingState === 'active' || checkpointTimer !== null
+  trackingState = 'stopping'
+  if (shouldCapture) {
+    await stopTimer()
+  }
+  trackingState = 'stopped'
   notifyListeners()
 }
 
 async function reevaluateState(): Promise<void> {
   const gen = ++generation
-  const state = await queryWindowState()
+  const result = await queryWindowState()
   // 竞态保护：旧查询结果不得覆盖新事件
   if (gen !== generation) return
 
+  if (result.error) {
+    setTrackingError(result.error)
+    if (trackingState === 'active') await deactivate()
+    return
+  }
+  clearTrackingError('window_state')
+
+  const state = result.state
   const shouldActivate = shouldBeActive(state.focused, state.visible, state.minimized)
-  if (shouldActivate && !active) {
+  if (shouldActivate && trackingState === 'inactive') {
     await activate()
-  } else if (!shouldActivate && active) {
+  } else if (!shouldActivate && trackingState === 'active') {
     await deactivate()
   }
 }
@@ -439,56 +628,81 @@ async function registerWindowListeners(): Promise<void> {
 
   // 焦点变化
   unlistenFocus = await win.onFocusChanged((event) => {
-    // 使用事件中的 payload 避免异步查询竞态
     const gen = ++generation
     const focused = event.payload
-    // 失焦是确定状态，立即停止计时，不能等待额外的窗口状态查询。
-    if (!focused) {
-      void deactivate()
-      return
+    if (!focused && trackingState === 'active') {
+      trackingState = 'stopping'
+      notifyListeners()
     }
-    // 还需要查询 visible 和 minimized 状态
-    void queryWindowState().then((state) => {
-      if (gen !== generation) return
+
+    void enqueueLifecycle(async () => {
+      if (
+        !trackingRequested ||
+        trackingState === 'stopped' ||
+        (trackingState === 'stopping' && focused)
+      ) {
+        return
+      }
+
+      // 失焦是确定状态，不等待额外的窗口状态查询。
+      if (!focused) {
+        await deactivate()
+        return
+      }
+
+      const result = await queryWindowState()
+      if (gen !== generation || !trackingRequested) return
+      if (result.error) {
+        setTrackingError(result.error)
+        if (trackingState === 'active') await deactivate()
+        return
+      }
+      clearTrackingError('window_state')
+
+      const state = result.state
       const shouldActivate = shouldBeActive(focused, state.visible, state.minimized)
-      if (shouldActivate && !active) {
-        void activate()
-      } else if (!shouldActivate && active) {
-        void deactivate()
+      if (shouldActivate && trackingState === 'inactive') {
+        await activate()
+      } else if (!shouldActivate && trackingState === 'active') {
+        await deactivate()
       }
     })
   })
 
-  unlistenClose = await win.onCloseRequested(async (event) => {
-    event.preventDefault()
-    if (closeInProgress) return
-
-    closeInProgress = true
-    try {
-      await stopUsageTracking()
-    } finally {
-      await win.destroy()
-    }
-  })
-
   // 页面可见性
   const handleVisibility = (): void => {
-    void reevaluateState()
+    void enqueueLifecycle(() => reevaluateState())
   }
   document.addEventListener('visibilitychange', handleVisibility)
   unlistenVisibility = () => {
     document.removeEventListener('visibilitychange', handleVisibility)
   }
 
+  unlistenClose = await win.onCloseRequested((event) => {
+    event.preventDefault()
+    trackingRequested = false
+    generation += 1
+    if (closeHandled) return
+    closeHandled = true
+
+    return enqueueLifecycle(async () => {
+      try {
+        await stopTrackingInternal()
+      } finally {
+        unregisterWindowListeners()
+        await win.destroy()
+      }
+    })
+  })
 }
 
 function unregisterWindowListeners(): void {
   unlistenFocus?.()
   unlistenFocus = null
-  unlistenClose?.()
-  unlistenClose = null
   unlistenVisibility?.()
   unlistenVisibility = null
+  unlistenClose?.()
+  unlistenClose = null
 }
 
 // ---------------------------------------------------------------------------
@@ -502,29 +716,43 @@ function unregisterWindowListeners(): void {
 export function startUsageTracking(): Promise<void> {
   if (!isTauri()) return Promise.resolve()
   trackingRequested = true
+  if (trackingState === 'stopped') closeHandled = false
 
   return enqueueLifecycle(async () => {
-    if (!trackingRequested || trackingStarted) return
+    if (!trackingRequested || trackingState !== 'stopped') return
+
+    // Schema 只在桌面数据库初始化时创建。开发模式热更新若仍连接旧进程，
+    // 先做一次轻量探测并停止启动，避免每 30 秒重复查询缺失表。
+    try {
+      await queryUsageToday()
+    } catch (err) {
+      trackingState = 'stopped'
+      unregisterWindowListeners()
+      scheduleStartupRetry()
+      throw err
+    }
+
+    if (!trackingRequested) return
 
     try {
-      // Schema 只在桌面数据库初始化时创建。开发模式热更新若仍连接旧进程，
-      // 先做一次轻量探测并停止启动，避免每 30 秒重复查询缺失表。
-      await queryUsageToday()
-      if (!trackingRequested) return
-
-      trackingStarted = true
-      closeInProgress = false
+      trackingState = 'inactive'
       await registerWindowListeners()
       if (!trackingRequested) {
-        trackingStarted = false
+        trackingState = 'stopped'
         unregisterWindowListeners()
         return
       }
       await reevaluateState()
+      startupRetryAttempt = 0
+      clearStartupRetry()
+      clearTrackingError('startup')
+      clearTrackingError('database_read')
       console.log('[UsageTracking] started (step3: listeners on, checkpoint off)')
     } catch (err) {
-      trackingStarted = false
+      trackingState = 'stopped'
       unregisterWindowListeners()
+      setTrackingError({ kind: 'startup' })
+      scheduleStartupRetry()
       throw err
     }
   })
@@ -536,18 +764,18 @@ export function startUsageTracking(): Promise<void> {
  */
 export function stopUsageTracking(): Promise<void> {
   trackingRequested = false
+  clearStartupRetry()
   // 立即让所有尚未返回的窗口状态查询失效，避免停止/关闭后重新激活定时器。
   generation += 1
 
   return enqueueLifecycle(async () => {
     // StrictMode 的紧邻重启会覆盖前一个 cleanup，不应把新实例停掉。
     if (trackingRequested) return
-    if (!trackingStarted) {
+    if (trackingState === 'stopped') {
       unregisterWindowListeners()
       return
     }
-    trackingStarted = false
-    await deactivate()
+    await stopTrackingInternal()
     unregisterWindowListeners()
   })
 }
@@ -559,13 +787,18 @@ export function stopUsageTracking(): Promise<void> {
 export async function setUsageTrackingEnabled(enabled: boolean): Promise<void> {
   useSettingsStore.getState().updateUsageTrackingSettings({ enabled })
 
-  if (!trackingStarted) return
+  if (trackingState === 'stopped') return
 
-  if (enabled) {
-    await reevaluateState()
-  } else {
-    await deactivate()
-  }
+  await enqueueLifecycle(async () => {
+    if (!trackingRequested || trackingState === 'stopped' || trackingState === 'stopping') {
+      return
+    }
+    if (enabled) {
+      await reevaluateState()
+    } else {
+      await deactivate()
+    }
+  })
 }
 
 /**
@@ -582,11 +815,12 @@ export function getUsageSnapshot(): UsageSnapshot {
   }
   return {
     enabled,
-    isActive: active,
+    isActive: trackingState === 'active',
     todaySeconds,
     totalSeconds,
     capturedMsByDate: new Map(),
     reset: false,
+    error: trackingError,
   }
 }
 
@@ -594,8 +828,10 @@ export function getUsageSnapshot(): UsageSnapshot {
  * 立即结算当前前台时段，供设置页手动刷新使用。
  */
 export async function checkpointUsageTracking(): Promise<void> {
-  if (!trackingStarted || !active) return
-  await enqueueWrite(() => doCheckpoint())
+  if (trackingState !== 'active') return
+  await enqueueLifecycle(async () => {
+    if (trackingState === 'active') await doCheckpoint()
+  })
 }
 
 /**
@@ -611,8 +847,8 @@ export function subscribeUsageSnapshot(listener: SnapshotListener): () => void {
  * 先停止结算当前时段，再清空数据库和内存，最后重置基准。
  */
 export async function clearUsageDataWithLifecycle(): Promise<void> {
-  await enqueueWrite(async () => {
-    if (active) {
+  await enqueueLifecycle(async () => {
+    if (trackingState === 'active') {
       const { wallBase, elapsed } = captureAndReset()
       if (elapsed > 0) {
         const segments = splitIntervalByMidnight(wallBase, wallBase + elapsed)
@@ -621,10 +857,11 @@ export async function clearUsageDataWithLifecycle(): Promise<void> {
         }
       }
       // 先结算再清空
-      await flushPending()
+      await flushPendingInternal()
     }
-    clearPending()
     await clearUsageData()
+    clearPending()
+    clearTrackingError('database_write')
     resetBases()
     notifyListeners(new Map(), true)
   })

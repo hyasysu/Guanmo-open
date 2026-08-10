@@ -50,6 +50,52 @@ pub struct BackupPayloadInput {
     version: u32,
     sessions: Vec<BackupSessionInput>,
     memories: Vec<MemoryInput>,
+    // 旧备份缺少成果字段时按空数组兼容
+    #[serde(default)]
+    artifacts: Vec<ReadingArtifactInput>,
+    #[serde(default, rename = "readingReminders")]
+    reading_reminders: Vec<ReadingReminderInput>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadingArtifactInput {
+    id: String,
+    #[serde(rename = "type")]
+    artifact_type: String,
+    title: String,
+    content: String,
+    structured_content: Option<String>,
+    source_file_path: Option<String>,
+    source_file_name: Option<String>,
+    source_content_hash: Option<String>,
+    source_heading_path: Option<String>,
+    source_start_line: Option<i64>,
+    source_end_line: Option<i64>,
+    source_quote: Option<String>,
+    source_message_id: Option<String>,
+    source_scope: Option<String>,
+    status: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadingReminderInput {
+    id: String,
+    title: String,
+    description: Option<String>,
+    due_at_utc: i64,
+    created_timezone: String,
+    status: Option<String>,
+    source_artifact_id: Option<String>,
+    source_file_path: Option<String>,
+    source_message_id: Option<String>,
+    notification_id: Option<i64>,
+    error_code: Option<String>,
+    created_at: i64,
+    updated_at: i64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -107,6 +153,10 @@ pub struct BackupImportSummary {
     sessions: usize,
     messages: usize,
     memories: usize,
+    #[serde(default)]
+    artifacts: usize,
+    #[serde(default, rename = "readingReminders")]
+    reading_reminders: usize,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -357,6 +407,8 @@ async fn import_backup_rows(
 ) -> Result<BackupImportSummary, sqlx::Error> {
     let session_count = payload.sessions.len();
     let memory_count = payload.memories.len();
+    let artifact_count = payload.artifacts.len();
+    let reading_reminder_count = payload.reading_reminders.len();
     let mut message_count = 0;
     for item in payload.sessions {
         sqlx::query(
@@ -435,10 +487,63 @@ async fn import_backup_rows(
         .await?;
     }
 
+    for artifact in &payload.artifacts {
+        sqlx::query(
+            "INSERT OR REPLACE INTO reading_artifacts (id, type, title, content, structured_content, \
+             source_file_path, source_file_name, source_content_hash, source_heading_path, \
+             source_start_line, source_end_line, source_quote, source_message_id, source_scope, \
+             status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&artifact.id)
+        .bind(&artifact.artifact_type)
+        .bind(&artifact.title)
+        .bind(&artifact.content)
+        .bind(&artifact.structured_content)
+        .bind(&artifact.source_file_path)
+        .bind(&artifact.source_file_name)
+        .bind(&artifact.source_content_hash)
+        .bind(&artifact.source_heading_path)
+        .bind(artifact.source_start_line)
+        .bind(artifact.source_end_line)
+        .bind(&artifact.source_quote)
+        .bind(&artifact.source_message_id)
+        .bind(&artifact.source_scope)
+        .bind(artifact.status.as_deref().unwrap_or("active"))
+        .bind(artifact.created_at)
+        .bind(artifact.updated_at)
+        .execute(&mut **transaction)
+        .await?;
+    }
+
+    for reminder in &payload.reading_reminders {
+        sqlx::query(
+            "INSERT OR REPLACE INTO reading_reminders (id, title, description, due_at_utc, created_timezone, \
+             status, source_artifact_id, source_file_path, source_message_id, notification_id, error_code, \
+             created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&reminder.id)
+        .bind(&reminder.title)
+        .bind(&reminder.description)
+        .bind(reminder.due_at_utc)
+        .bind(&reminder.created_timezone)
+        .bind(reminder.status.as_deref().unwrap_or("pending"))
+        .bind(&reminder.source_artifact_id)
+        .bind(&reminder.source_file_path)
+        .bind(&reminder.source_message_id)
+        .bind(reminder.notification_id)
+        .bind(&reminder.error_code)
+        .bind(reminder.created_at)
+        .bind(reminder.updated_at)
+        .execute(&mut **transaction)
+        .await?;
+    }
+
     Ok(BackupImportSummary {
         sessions: session_count,
         messages: message_count,
         memories: memory_count,
+        artifacts: artifact_count,
+        reading_reminders: reading_reminder_count,
     })
 }
 
@@ -553,6 +658,8 @@ mod tests {
             "CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
             "CREATE TABLE chat_messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, parent_id TEXT, role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT, created_at INTEGER NOT NULL, FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE)",
             "CREATE TABLE memories (id TEXT PRIMARY KEY, content TEXT NOT NULL, category TEXT NOT NULL, source TEXT NOT NULL, locked INTEGER NOT NULL, status TEXT NOT NULL, scope_type TEXT NOT NULL, scope_key TEXT, subject TEXT, fact_key TEXT, fact_value TEXT, confidence REAL NOT NULL, evidence TEXT, supersedes_id TEXT, embedding TEXT, embedding_model TEXT, content_hash TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+            "CREATE TABLE reading_artifacts (id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL, structured_content TEXT, source_file_path TEXT, source_file_name TEXT, source_content_hash TEXT, source_heading_path TEXT, source_start_line INTEGER, source_end_line INTEGER, source_quote TEXT, source_message_id TEXT, source_scope TEXT, status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+            "CREATE TABLE reading_reminders (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT, due_at_utc INTEGER NOT NULL, created_timezone TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', source_artifact_id TEXT, source_file_path TEXT, source_message_id TEXT, notification_id INTEGER, error_code TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
         ] {
             sqlx::query(statement).execute(&pool).await.unwrap();
         }
@@ -619,6 +726,8 @@ mod tests {
                     .collect(),
             }],
             memories: Vec::new(),
+            artifacts: Vec::new(),
+            reading_reminders: Vec::new(),
         }
     }
 
@@ -663,6 +772,118 @@ mod tests {
                 .unwrap();
         assert_eq!(summary.messages, 2);
         assert_eq!(parent_id.as_deref(), Some("message-0"));
+    }
+
+    fn backup_with_artifact() -> BackupPayloadInput {
+        let mut payload = backup_with_messages(&["匿名问题", "匿名回答"]);
+        payload.artifacts.push(ReadingArtifactInput {
+            id: "artifact-1".into(),
+            artifact_type: "summary".into(),
+            title: "匿名摘要".into(),
+            content: "这是匿名摘要正文".into(),
+            structured_content: Some(r#"{"points":["要点A"]}"#.into()),
+            source_file_path: Some("C:/anonymous/note.md".into()),
+            source_file_name: Some("note.md".into()),
+            source_content_hash: Some("hash-1".into()),
+            source_heading_path: Some(r#"["章节"]"#.into()),
+            source_start_line: Some(2),
+            source_end_line: Some(4),
+            source_quote: Some("引用快照".into()),
+            source_message_id: Some("message-1".into()),
+            source_scope: Some("document".into()),
+            status: Some("active".into()),
+            created_at: 1,
+            updated_at: 2,
+        });
+        payload
+    }
+
+    #[tokio::test]
+    async fn backup_import_persists_reading_artifacts() {
+        let pool = test_pool().await;
+        let summary = run_import_backup(&pool, backup_with_artifact())
+            .await
+            .unwrap();
+        assert_eq!(summary.artifacts, 1);
+        let (title, structured, scope, status): (String, String, String, String) =
+            sqlx::query_as("SELECT title, structured_content, source_scope, status FROM reading_artifacts WHERE id = 'artifact-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(title, "匿名摘要");
+        assert!(structured.contains("要点A"));
+        assert_eq!(scope, "document");
+        assert_eq!(status, "active");
+    }
+
+    #[tokio::test]
+    async fn backup_import_persists_reading_reminders() {
+        let pool = test_pool().await;
+        let mut payload = backup_with_messages(&["匿名问题", "匿名回答"]);
+        payload.reading_reminders.push(ReadingReminderInput {
+            id: "reminder-1".into(),
+            title: "复习章节".into(),
+            description: Some("回顾重点".into()),
+            due_at_utc: 1_800_000_000_000,
+            created_timezone: "Asia/Shanghai".into(),
+            status: Some("scheduled".into()),
+            source_artifact_id: None,
+            source_file_path: None,
+            source_message_id: Some("message-1".into()),
+            notification_id: Some(42),
+            error_code: None,
+            created_at: 1,
+            updated_at: 2,
+        });
+        let summary = run_import_backup(&pool, payload).await.unwrap();
+        assert_eq!(summary.reading_reminders, 1);
+        let (title, timezone, status, notification_id): (String, String, String, i64) =
+            sqlx::query_as("SELECT title, created_timezone, status, notification_id FROM reading_reminders WHERE id = 'reminder-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(title, "复习章节");
+        assert_eq!(timezone, "Asia/Shanghai");
+        assert_eq!(status, "scheduled");
+        assert_eq!(notification_id, 42);
+    }
+
+    #[tokio::test]
+    async fn backup_import_rolls_back_artifact_when_chat_write_fails() {
+        let pool = test_pool().await;
+        sqlx::query(
+            "CREATE TRIGGER reject_artifact_failure BEFORE INSERT ON chat_messages \
+             WHEN NEW.content = '触发回滚' BEGIN SELECT RAISE(ABORT, 'forced failure'); END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut payload = backup_with_messages(&["先写入", "触发回滚"]);
+        payload.artifacts.push(ReadingArtifactInput {
+            id: "artifact-rollback".into(),
+            artifact_type: "note".into(),
+            title: "应回滚的笔记".into(),
+            content: "不应留存".into(),
+            structured_content: None,
+            source_file_path: None,
+            source_file_name: None,
+            source_content_hash: None,
+            source_heading_path: None,
+            source_start_line: None,
+            source_end_line: None,
+            source_quote: None,
+            source_message_id: None,
+            source_scope: None,
+            status: None,
+            created_at: 1,
+            updated_at: 1,
+        });
+        assert!(run_import_backup(&pool, payload).await.is_err());
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM reading_artifacts")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[tokio::test]

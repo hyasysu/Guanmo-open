@@ -14,6 +14,7 @@ import {
   getPendingSeconds,
   getPendingSnapshot,
   getTwelveMonthRange,
+  limitUsageIncrementMs,
   splitIntervalByMidnight,
 } from '@/services/usageTracking'
 import { DB_SCHEMA, splitDatabaseSchemaStatements } from '@/services/database/schema'
@@ -109,10 +110,60 @@ describe('splitIntervalByMidnight', () => {
     expect(result[1].ms).toBe(1 * 3600 * 1000) // 00:00 → 01:00
   })
 
+  it('跨越多个完整日期', () => {
+    const start = new Date(2026, 7, 4, 22, 0, 0).getTime()
+    const end = new Date(2026, 7, 7, 1, 0, 0).getTime()
+    const result = splitIntervalByMidnight(start, end)
+
+    expect(result).toEqual([
+      { date: '2026-08-04', ms: 2 * 3600 * 1000 },
+      { date: '2026-08-05', ms: 24 * 3600 * 1000 },
+      { date: '2026-08-06', ms: 24 * 3600 * 1000 },
+      { date: '2026-08-07', ms: 1 * 3600 * 1000 },
+    ])
+  })
+
   it('endMs <= startMs 返回空数组', () => {
     const now = Date.now()
     expect(splitIntervalByMidnight(now, now)).toEqual([])
     expect(splitIntervalByMidnight(now, now - 1)).toEqual([])
+  })
+
+  it('小数毫秒在边界统一截断，且小于 1ms 的区间有限返回', () => {
+    const start = new Date(2026, 7, 4, 10, 0, 0).getTime()
+
+    expect(splitIntervalByMidnight(start + 0.25, start + 0.75)).toEqual([])
+    expect(splitIntervalByMidnight(start + 0.75, start + 2000.25)).toEqual([
+      { date: '2026-08-04', ms: 2000 },
+    ])
+  })
+
+  it('非法时间戳和超出 Date 范围的输入有限返回空数组', () => {
+    const invalidIntervals: Array<[number, number]> = [
+      [Number.NaN, 1],
+      [1, Number.NaN],
+      [Number.POSITIVE_INFINITY, 1],
+      [1, Number.NEGATIVE_INFINITY],
+      [0, Number.MAX_VALUE],
+    ]
+
+    for (const [start, end] of invalidIntervals) {
+      expect(splitIntervalByMidnight(start, end)).toEqual([])
+    }
+  })
+
+  it('异常长区间触发有限分段保护', () => {
+    expect(() => splitIntervalByMidnight(0, 1_000_000_000_000)).toThrow(
+      /maximum number of segments/i,
+    )
+  })
+})
+
+describe('limitUsageIncrementMs', () => {
+  it('限制非负值且单次不超过 60 秒', () => {
+    expect(limitUsageIncrementMs(12_345.9, 12_346.9)).toBe(12_345.9)
+    expect(limitUsageIncrementMs(90_000, 90_000)).toBe(60_000)
+    expect(limitUsageIncrementMs(-1, 1)).toBe(0)
   })
 })
 
@@ -123,8 +174,8 @@ describe('formatDuration', () => {
   })
 
   it('小于 1 小时显示分钟', () => {
-    expect(formatDuration(1)).toBe('0 分钟') // 1 秒 → 0 分钟
-    expect(formatDuration(59)).toBe('0 分钟')
+    expect(formatDuration(1)).toBe('少于 1 分钟')
+    expect(formatDuration(59)).toBe('少于 1 分钟')
     expect(formatDuration(60)).toBe('1 分钟')
     expect(formatDuration(3599)).toBe('59 分钟')
   })

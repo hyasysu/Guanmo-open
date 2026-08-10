@@ -55,15 +55,37 @@ describe('SQLite 事务命令桥接', () => {
       exportedAt: 1,
       sessions: [],
       memories: [],
+      artifacts: [],
       note: '匿名备份',
     }
-    invoke.mockResolvedValue({ sessions: 0, messages: 0, memories: 0 })
+    invoke.mockResolvedValue({ sessions: 0, messages: 0, memories: 0, artifacts: 0 })
 
     await expect(importBackupPayload(payload)).resolves.toEqual({
       sessions: 0,
       messages: 0,
       memories: 0,
+      artifacts: 0,
     })
     expect(invoke).toHaveBeenCalledWith('import_backup_transaction', { payload })
+  })
+
+  it('旧备份缺少 artifacts 字段时仍按整包交给事务命令', async () => {
+    // 模拟旧版本备份：缺少 artifacts 字段
+    const legacyPayload = {
+      version: 1,
+      exportedAt: 1,
+      sessions: [],
+      memories: [],
+      note: '旧版本备份',
+    } as unknown as BackupPayload
+    invoke.mockResolvedValue({ sessions: 0, messages: 0, memories: 0, artifacts: 0 })
+
+    await expect(importBackupPayload(legacyPayload)).resolves.toEqual({
+      sessions: 0,
+      messages: 0,
+      memories: 0,
+      artifacts: 0,
+    })
+    expect(invoke).toHaveBeenCalledWith('import_backup_transaction', { payload: legacyPayload })
   })
 })

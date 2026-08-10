@@ -133,7 +133,7 @@
   --animal-table-loading-color: #19c8b9;
 }
 
-:root[data-light-palette='plain']:not([data-theme='dark']) {
+:root[data-theme-id='light'] {
   --gm-canvas: #ffffff;
   --gm-surface: #ffffff;
   --gm-surface-elevated: #fafafa;

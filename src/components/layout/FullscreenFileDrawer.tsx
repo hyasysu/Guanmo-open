@@ -1,16 +1,14 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { isTauri } from '@/hooks/useTauri'
-import { pickDirectory } from '@/services/fileSystem'
 import { isWorkspaceDisplayFile } from '@/services/fileTree'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { readRememberedFile } from '@/services/persistedFileAccess'
 import { toast } from '@/services/toast'
-import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
-import { FileTree, RecentFiles } from '@/components/file-tree/FileTree'
-import { useWorkspaceFileTree } from '@/hooks/useWorkspaceFileTree'
+import { RecentFiles } from '@/components/file-tree/FileTree'
+import { WorkspaceRoots } from '@/components/file-tree/WorkspaceRoots'
 import { Button, Collapse } from 'animal-island-ui'
 
 interface FullscreenFileDrawerProps {
@@ -22,12 +20,10 @@ interface FullscreenFileDrawerProps {
 export function FullscreenFileDrawer({
   open,
   onClose,
-  onOpenSearch,
+  onOpenSearch: _onOpenSearch,
 }: FullscreenFileDrawerProps) {
   const panelRef = useRef<HTMLDivElement | null>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
-  const setWorkspacePath = useAppStore((s) => s.setWorkspacePath)
-  const { workspacePath, workspaceFiles, workspaceHiddenCount, loadWorkspace, refreshWorkspace, closeWorkspace } = useWorkspaceFileTree()
   const tabs = useEditorStore((s) => s.tabs)
   const activeTabId = useEditorStore((s) => s.activeTabId)
   const recentFiles = useEditorStore((s) => s.recentFiles).filter((file) => isWorkspaceDisplayFile(file.path))
@@ -78,9 +74,9 @@ export function FullscreenFileDrawer({
       }
       console.error('Open fullscreen file from tree failed:', err)
       toast.error(describeFileOperationError(err, '打开文件失败'))
-      await refreshWorkspace()
+      window.dispatchEvent(new Event('guanmo:workspace-refresh'))
     }
-  }, [refreshWorkspace])
+  }, [])
 
   const handleOpenFileFromTree = useCallback((path: string) => {
     void openFileByPath(path)
@@ -90,31 +86,9 @@ export function FullscreenFileDrawer({
     void openFileByPath(file.path, file.name)
   }, [openFileByPath])
 
-  const handleSearch = useCallback(() => {
-    onOpenSearch()
-    onClose()
-  }, [onClose, onOpenSearch])
-
-  const handleOpenFolder = useCallback(async () => {
-    if (!isTauri()) {
-      toast.error('浏览器模式下不可用，请下载桌面版')
-      return
-    }
-    try {
-      const dirPath = await pickDirectory()
-      if (!dirPath) return
-      setWorkspacePath(dirPath)
-      await loadWorkspace(dirPath)
-    } catch (err) {
-      console.error('Open fullscreen workspace failed:', err)
-      toast.error('打开文件夹失败')
-    }
-  }, [loadWorkspace, setWorkspacePath])
-
-  const handleRefreshWorkspace = useCallback(async () => {
-    await refreshWorkspace()
-    toast.success('工作区已刷新')
-  }, [refreshWorkspace])
+  const refreshWorkspaces = useCallback(() => {
+    window.dispatchEvent(new Event('guanmo:workspace-refresh'))
+  }, [])
 
   return (
     <div
@@ -172,7 +146,7 @@ export function FullscreenFileDrawer({
                 defaultExpanded
                 answer={
                   recentFiles.length > 0 ? (
-                    <RecentFiles files={recentFiles} onOpen={handleOpenListedFile} onRefreshWorkspace={workspacePath ? () => loadWorkspace(workspacePath) : undefined} />
+                    <RecentFiles files={recentFiles} onOpen={handleOpenListedFile} onRefreshWorkspace={refreshWorkspaces} />
                   ) : (
                     <div className="text-caption text-gm-text-tertiary text-center py-4">暂无最近文件</div>
                   )
@@ -196,57 +170,7 @@ export function FullscreenFileDrawer({
                 question="工作区"
                 defaultExpanded
                 answer={
-                  workspacePath ? (
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-micro text-gm-text-tertiary truncate flex-1" title={workspacePath}>
-                          {workspacePath.split(/[/\\]/).pop()}
-                        </span>
-                        <button
-                          onClick={handleRefreshWorkspace}
-                          className="text-micro text-gm-text-tertiary hover:text-gm-text ml-2"
-                        >
-                          刷新
-                        </button>
-                        <button
-                          onClick={handleOpenFolder}
-                          className="text-micro text-gm-text-tertiary hover:text-gm-text ml-2"
-                        >
-                          打开
-                        </button>
-                        <button
-                          onClick={closeWorkspace}
-                          className="text-micro text-gm-text-tertiary hover:text-gm-text ml-2"
-                        >
-                          关闭
-                        </button>
-                      </div>
-                      {workspaceHiddenCount > 0 && (
-                        <div className="text-micro text-gm-text-disabled mb-1">
-                          已隐藏 {workspaceHiddenCount} 个非文本文件或大型目录
-                        </div>
-                      )}
-                      <div className="max-h-[320px] overflow-y-auto">
-                        <FileTree
-                          nodes={workspaceFiles}
-                          onOpenFile={handleOpenFileFromTree}
-                          workspacePath={workspacePath}
-                          onRefreshWorkspace={refreshWorkspace}
-                          onCloseWorkspace={closeWorkspace}
-                        />
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="text-caption text-gm-text-tertiary text-center py-4">
-                      <button
-                        type="button"
-                        onClick={handleOpenFolder}
-                        className="text-gm-primary hover:underline"
-                      >
-                        打开文件夹
-                      </button>
-                    </div>
-                  )
+                  <WorkspaceRoots onOpenFile={handleOpenFileFromTree} />
                 }
               />
             </>

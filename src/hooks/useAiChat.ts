@@ -1,7 +1,7 @@
 import { useCallback, useRef } from 'react'
 import { useChatStore } from '@/stores/chatStore'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { useAppStore } from '@/stores/appStore'
+import { selectPrimaryWorkspacePath, useAppStore } from '@/stores/appStore'
 import { getAiClient, getEmbeddingClient, getEmbeddingConfig, initAiClient, initEmbeddingClient, isAiReady, isEmbeddingReady, isLocalApi } from '@/services/ai/aiClient'
 import { SYSTEM_TEMPERATURE } from '@/services/ai/types'
 import { initAgent, runAgent } from '@/services/agent'
@@ -9,6 +9,7 @@ import { shouldIncludeFullDocumentContext } from '@/services/agent/intentDetecto
 import { makeRoutingDecision } from '@/services/agent/routingService'
 import type { AgentStep, AgentTaskContext } from '@/services/agent/types'
 import { createAgentTaskContext, decodeAgentStepEvent, decodeKnowledgeSearchOutcome } from '@/services/agent/session'
+import { createActionProposal } from '@/services/agent/actionProposal'
 import type { ContextTag } from '@/types/contextTag'
 import { buildContextFromTags } from '@/services/contextBuilder'
 import { readFile as readTauriFile } from '@/hooks/useTauri'
@@ -22,7 +23,13 @@ import { hydrateSettingsSecrets } from '@/services/settingsSecrets'
 import { singletonManager, SINGLETON_IDS } from '@/services/singletonPromise'
 import { promoteTask } from '@/services/idleScheduler'
 import { buildAgentRunRequest, buildRoutingAppContext } from '@/services/agent/requestBuilder'
-import { buildAgentResultPresentation, toLocalMessageSources } from '@/services/agent/sourceMetadata'
+import {
+  buildScopedAgentResultPresentation,
+  resolveReadingSourceCoverage,
+  toContextTagSources,
+  toLocalMessageSources,
+} from '@/services/agent/sourceMetadata'
+import { READING_REMINDER_FEATURE_AVAILABLE } from '@/services/readingReminderFeature'
 
 function getAgentProgressText(step: AgentStep): string {
   if (step.type === 'progress') {
@@ -59,6 +66,14 @@ function getAgentProgressText(step: AgentStep): string {
       return '正在阅读上下文...'
     case 'replace_current_tab_text':
       return '正在生成文本修改确认卡片...'
+    case 'propose_save_reading_artifact':
+      return '正在生成阅读成果确认卡片...'
+    case 'propose_create_markdown_note':
+      return '正在生成阅读笔记确认卡片...'
+    case 'propose_create_reading_reminder':
+      return READING_REMINDER_FEATURE_AVAILABLE
+        ? '正在生成阅读提醒确认卡片...'
+        : '正在检查提醒功能状态...'
     case 'get_current_time':
       return '正在读取当前系统时间...'
     default:
@@ -77,6 +92,11 @@ function getAgentToolLabel(toolName: string): string {
     read_context_file: '授权文件读取',
     read_selection_context: '上下文读取',
     replace_current_tab_text: '修改确认卡片生成',
+    propose_save_reading_artifact: '阅读成果确认卡片生成',
+    propose_create_markdown_note: '阅读笔记确认卡片生成',
+    propose_create_reading_reminder: READING_REMINDER_FEATURE_AVAILABLE
+      ? '阅读提醒确认卡片生成'
+      : '提醒功能状态检查',
     get_current_time: '系统时间读取',
   }[toolName] || `工具 ${toolName}`
 }
@@ -106,7 +126,7 @@ export function useAiChat() {
   const clearTimeline = useChatStore((s) => s.clearTimeline)
   const setAgentTaskContext = useChatStore((s) => s.setAgentTaskContext)
   const ai = useSettingsStore((s) => s.ai)
-  const workspacePath = useAppStore((s) => s.workspacePath)
+  const workspacePath = useAppStore(selectPrimaryWorkspacePath)
   const lastConfigRef = useRef('')
   const cancelRef = useRef<() => void>(() => {})
   const activeRequestRef = useRef<{ id: string; assistantMessageId: string; cancelled: boolean } | null>(null)
@@ -338,6 +358,7 @@ export function useAiChat() {
         updateRequestMessage('Agent 正在规划工具链路...')
         addTimelineItem({ type: 'local_search_start', label: 'Agent 开始规划工具链路' })
         let pendingEditCount = 0
+        let pendingActionCount = 0
         let liveAgentStepCount = 0
         let hasVisibleStreamContent = false
         const handleAgentStep = (step: AgentStep) => {
@@ -393,20 +414,39 @@ export function useAiChat() {
               type: 'web_search_done',
               label: event.toolName ? `${getAgentToolLabel(event.toolName)}已完成` : '工具结果已返回',
             })
-            if (!event.pendingEdit) return
-            const targetMessageId = pendingEditCount === 0
-              ? assistantMessageId
-              : `assistant-${requestId}-edit-${pendingEditCount}`
-            if (pendingEditCount > 0) {
-              addMessage({ id: targetMessageId, parentId: userMsg.id, role: 'assistant', content: '已生成修改确认卡片，请在下方确认。', timestamp: Date.now() })
+            if (event.pendingEdit) {
+              const targetMessageId = pendingEditCount === 0
+                ? assistantMessageId
+                : `assistant-${requestId}-edit-${pendingEditCount}`
+              if (pendingEditCount > 0) {
+                addMessage({ id: targetMessageId, parentId: userMsg.id, role: 'assistant', content: '已生成修改确认卡片，请在下方确认。', timestamp: Date.now() })
+              }
+              pendingEditCount++
+              useChatStore.getState().setPendingEdit({
+                id: `edit-${Date.now()}`,
+                messageId: targetMessageId,
+                ...event.pendingEdit,
+                status: 'pending',
+              })
             }
-            pendingEditCount++
-            useChatStore.getState().setPendingEdit({
-              id: `edit-${Date.now()}`,
-              messageId: targetMessageId,
-              ...event.pendingEdit,
-              status: 'pending',
-            })
+            if (event.pendingAction) {
+              const targetMessageId = pendingActionCount === 0 && pendingEditCount === 0
+                ? assistantMessageId
+                : `assistant-${requestId}-action-${pendingActionCount}`
+              if (targetMessageId !== assistantMessageId) {
+                addMessage({ id: targetMessageId, parentId: userMsg.id, role: 'assistant', content: '已生成行动确认卡片，请在下方确认。', timestamp: Date.now() })
+              }
+              pendingActionCount++
+              const proposal = createActionProposal(event.pendingAction, {
+                id: `action-${Date.now()}-${pendingActionCount}`,
+                messageId: targetMessageId,
+              })
+              useChatStore.setState((state) => ({
+                messages: state.messages.map((message) => message.id === targetMessageId
+                  ? { ...message, actionProposal: proposal }
+                  : message),
+              }))
+            }
           }
         }
 
@@ -451,7 +491,11 @@ export function useAiChat() {
             if (!isCurrentRequest()) return
             handleAgentStep(step)
           }
-          const presentation = buildAgentResultPresentation(result, tagMetadata.length)
+          const presentation = buildScopedAgentResultPresentation(
+            result,
+            tagMetadata.length,
+            routingDecision.readingScope,
+          )
           const updateAgentSourceMetadata = () => {
             if (!isCurrentRequest()) return
             updateMessageContextMeta(assistantMessageId, presentation.contextMeta)
@@ -617,13 +661,23 @@ export function useAiChat() {
         answerMode: resolveAiAnswerMode(selectionRequestKind, useAgentMode),
       })
 
+      const ragMessageSources = toLocalMessageSources(useChatStore.getState().ragSources)
+      const tagMessageSources = routingDecision.readingScope === 'selection'
+        ? toContextTagSources(contextTags || [])
+        : []
+      const messageSources = ragMessageSources.length > 0 ? ragMessageSources : tagMessageSources
       const contextMeta = createContextMeta({
         tagCount: tagMetadata.length,
         ragSourceCount: countRagSourcesInContext(ragContext),
         webSearchUsed: false,
+        readingScope: routingDecision.readingScope,
+        sourceCoverage: resolveReadingSourceCoverage(
+          routingDecision.readingScope,
+          [],
+          messageSources.length,
+        ),
       })
       if (isCurrentRequest()) updateMessageContextMeta(assistantMessageId, contextMeta)
-      const messageSources = toLocalMessageSources(useChatStore.getState().ragSources)
       if (isCurrentRequest() && messageSources.length > 0) {
         updateMessageSources(assistantMessageId, messageSources)
       }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { invoke } from '@tauri-apps/api/core'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { useAppStore } from '@/stores/appStore'
-import { FULLSCREEN_CONTENT_PADDING, useSettingsStore } from '@/stores/settingsStore'
+import { FULLSCREEN_CONTENT_PADDING, useSettingsStore, type ThemeId } from '@/stores/settingsStore'
 import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
 import { addKnowledgeDocument, isKnowledgeDocumentIndexed } from '@/services/rag/knowledgeBase'
 import { isMarkdownPath } from '@/services/rag/indexer'
@@ -25,6 +25,14 @@ const MODES: Array<{ key: ViewMode; label: string }> = [
   { key: 'dual-preview', label: '对照' },
   { key: 'diff-preview', label: 'Diff' },
 ]
+const FULLSCREEN_THEME_OPTIONS = [
+  { key: 'warm', label: '暖色' },
+  { key: 'light', label: '浅色' },
+  { key: 'dark', label: '深色' },
+  { key: 'paper', label: 'Paper' },
+  { key: 'github-light', label: 'GitHub Light' },
+] satisfies Array<{ key: ThemeId; label: string }>
+
 const PANEL_CONTENT_REVEAL_DELAY = 190
 const FULLSCREEN_PADDING_DEBOUNCE_MS = 150
 
@@ -50,8 +58,9 @@ export function FullscreenControlBar({
   const favorites = useEditorStore((s) => s.favorites)
   const aiPanelOpen = useAppStore((s) => s.aiPanelOpen)
   const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
-  const theme = useSettingsStore((s) => s.appearance.theme)
+  const themeId = useSettingsStore((s) => s.appearance.themeId)
   const fullscreenContentPadding = useSettingsStore((s) => s.editor.fullscreenContentPadding)
+  const updateAppearanceSettings = useSettingsStore((s) => s.updateAppearanceSettings)
   const updateEditorSettings = useSettingsStore((s) => s.updateEditorSettings)
   const { exitFullscreen } = useFullscreen()
   const [visible, setVisible] = useState(false)
@@ -62,8 +71,10 @@ export function FullscreenControlBar({
   const [kbStatus, setKbStatus] = useState<'idle' | 'checking' | 'not-indexed' | 'indexed' | 'adding'>('idle')
   const rename = useFileRename()
   const [paddingCardOpen, setPaddingCardOpen] = useState(false)
+  const [themeCardOpen, setThemeCardOpen] = useState(false)
   const hideTimerRef = useRef<number | null>(null)
   const contentTimerRef = useRef<number | null>(null)
+  const pointerWithinControlRef = useRef(false)
   const shellRef = useRef<HTMLDivElement>(null)
   const widthBeforeRef = useRef<number>(0)
   const widthAnimatingRef = useRef(false)
@@ -118,13 +129,23 @@ export function FullscreenControlBar({
   }, [clearHideTimer, fileDrawerOpen, onCloseFileDrawer, switchPanel])
 
   const scheduleHide = useCallback(() => {
-    if (fileDrawerOpen || paddingCardOpen) return
+    if (fileDrawerOpen || paddingCardOpen || themeCardOpen) return
     clearHideTimer()
     hideTimerRef.current = window.setTimeout(() => {
       setVisible(false)
       if (!contextMenu) switchPanel(false)
     }, tabMode ? 2200 : 700)
-  }, [clearHideTimer, contextMenu, fileDrawerOpen, paddingCardOpen, switchPanel, tabMode])
+  }, [clearHideTimer, contextMenu, fileDrawerOpen, paddingCardOpen, switchPanel, tabMode, themeCardOpen])
+
+  const handleControlMouseEnter = useCallback(() => {
+    pointerWithinControlRef.current = true
+    showBar()
+  }, [showBar])
+
+  const handleControlMouseLeave = useCallback(() => {
+    pointerWithinControlRef.current = false
+    scheduleHide()
+  }, [scheduleHide])
 
   useEffect(() => () => {
     clearHideTimer()
@@ -142,6 +163,11 @@ export function FullscreenControlBar({
   }, [clearHideTimer, contextMenu, fileDrawerOpen, switchPanel])
 
   useEffect(() => {
+    if (!visible || fileDrawerOpen || paddingCardOpen || themeCardOpen) return
+    if (!pointerWithinControlRef.current) scheduleHide()
+  }, [contextMenu, fileDrawerOpen, paddingCardOpen, scheduleHide, themeCardOpen, visible])
+
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       if (document.querySelector('[data-editor-search-overlay]')) return
@@ -155,6 +181,12 @@ export function FullscreenControlBar({
         e.preventDefault()
         e.stopPropagation()
         setPaddingCardOpen(false)
+        return
+      }
+      if (themeCardOpen) {
+        e.preventDefault()
+        e.stopPropagation()
+        setThemeCardOpen(false)
         return
       }
       if (fileDrawerOpen) {
@@ -185,18 +217,19 @@ export function FullscreenControlBar({
 
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [contextMenu, exitFullscreen, fileDrawerOpen, onCloseFileDrawer, paddingCardOpen, switchPanel, tabMode])
+  }, [contextMenu, exitFullscreen, fileDrawerOpen, onCloseFileDrawer, paddingCardOpen, switchPanel, tabMode, themeCardOpen])
 
   useEffect(() => {
-    if (!paddingCardOpen) return
+    if (!paddingCardOpen && !themeCardOpen) return
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null
-      if (target?.closest('[data-fullscreen-padding-control]')) return
+      if (target?.closest('[data-fullscreen-padding-control], [data-fullscreen-theme-control]')) return
       setPaddingCardOpen(false)
+      setThemeCardOpen(false)
     }
     window.addEventListener('pointerdown', handlePointerDown, true)
     return () => window.removeEventListener('pointerdown', handlePointerDown, true)
-  }, [paddingCardOpen])
+  }, [paddingCardOpen, themeCardOpen])
 
   useLayoutEffect(() => {
     const shell = shellRef.current
@@ -233,9 +266,23 @@ export function FullscreenControlBar({
     }
   })
 
-  const toggleTheme = useCallback(() => {
-    useSettingsStore.getState().updateAppearanceSettings({ theme: theme === 'dark' ? 'light' : 'dark' })
-  }, [theme])
+  const togglePaddingCard = useCallback(() => {
+    clearHideTimer()
+    setVisible(true)
+    setThemeCardOpen(false)
+    setPaddingCardOpen((open) => !open)
+  }, [clearHideTimer])
+
+  const toggleThemeCard = useCallback(() => {
+    clearHideTimer()
+    setVisible(true)
+    setPaddingCardOpen(false)
+    setThemeCardOpen((open) => !open)
+  }, [clearHideTimer])
+
+  const selectFullscreenTheme = useCallback((nextTheme: ThemeId) => {
+    updateAppearanceSettings({ themeId: nextTheme })
+  }, [updateAppearanceSettings])
 
   const handleReloadFromDisk = useCallback(async () => {
     const state = useEditorStore.getState()
@@ -251,12 +298,6 @@ export function FullscreenControlBar({
       toast.error(describeFileOperationError(err, '重新读取文件失败'))
     }
   }, [])
-
-  const togglePaddingCard = useCallback(() => {
-    clearHideTimer()
-    setVisible(true)
-    setPaddingCardOpen((open) => !open)
-  }, [clearHideTimer])
 
   const contextTab = contextMenu ? tabs.find((tab) => tab.id === contextMenu.tabId) : null
 
@@ -378,14 +419,19 @@ export function FullscreenControlBar({
 
   return (
     <>
-      <div className="fixed left-1/2 top-0 z-40 h-9 w-[min(960px,calc(100vw-32px))] -translate-x-1/2" onMouseEnter={showBar} />
+      <div
+        data-fullscreen-control-trigger="true"
+        className="fixed left-1/2 top-0 z-40 h-9 w-[min(960px,calc(100vw-32px))] -translate-x-1/2"
+        onMouseEnter={handleControlMouseEnter}
+        onMouseLeave={handleControlMouseLeave}
+      />
       <div
         data-fullscreen-control-bar="true"
         className={`fixed left-1/2 top-4 z-50 max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-visible transition-[opacity,transform] duration-300 ease-out ${
           visible ? 'translate-y-0 opacity-100' : '-translate-y-1.5 opacity-0 pointer-events-none'
         }`}
-        onMouseEnter={showBar}
-        onMouseLeave={scheduleHide}
+        onMouseEnter={handleControlMouseEnter}
+        onMouseLeave={handleControlMouseLeave}
       >
         <div
           ref={shellRef}
@@ -437,9 +483,17 @@ export function FullscreenControlBar({
                   边距
                 </BubbleButton>
               </div>
-              <BubbleButton onClick={toggleTheme} title={theme === 'dark' ? '切换为浅色主题' : '切换为深色主题'}>
-                主题
-              </BubbleButton>
+              <div data-fullscreen-theme-control="true">
+                <BubbleButton
+                  onClick={toggleThemeCard}
+                  active={themeCardOpen}
+                  title="选择主题"
+                  ariaExpanded={themeCardOpen}
+                  ariaControls="fullscreen-theme-card"
+                >
+                  主题
+                </BubbleButton>
+              </div>
               <BubbleButton onClick={() => void exitFullscreen()} title="退出全屏">
                 退出
               </BubbleButton>
@@ -542,6 +596,25 @@ export function FullscreenControlBar({
               <span>紧凑</span>
               <span>宽松</span>
             </div>
+          </div>
+        )}
+
+        {themeCardOpen && (
+          <div
+            id="fullscreen-theme-card"
+            data-fullscreen-theme-control="true"
+            role="dialog"
+            aria-label="选择主题"
+            className="gm-fullscreen-spacing-card absolute left-1/2 top-[calc(100%+10px)] w-[min(340px,calc(100vw-32px))] -translate-x-1/2 rounded-2xl border p-4"
+          >
+            <div>
+              <div className="text-body font-bold text-gm-text">主题</div>
+              <div className="mt-0.5 text-caption text-gm-text-tertiary">选择阅读与控制条配色</div>
+            </div>
+            <FullscreenThemeSegmented
+              value={themeId}
+              onChange={selectFullscreenTheme}
+            />
           </div>
         )}
       </div>
@@ -675,4 +748,30 @@ function BubbleButton({
 
 function Separator() {
   return <div className="mx-1.5 h-4 w-px bg-gm-border-subtle" />
+}
+
+function FullscreenThemeSegmented({
+  value,
+  onChange,
+}: {
+  value: ThemeId
+  onChange: (value: ThemeId) => void
+}) {
+  return (
+    <div className="gm-light-palette-segmented gm-fullscreen-theme-segmented mt-3" role="radiogroup" aria-label="主题">
+      {FULLSCREEN_THEME_OPTIONS.map((option) => (
+        <button
+          key={option.key}
+          type="button"
+          className="gm-light-palette-segmented__item"
+          data-active={value === option.key}
+          role="radio"
+          aria-checked={value === option.key}
+          onClick={() => onChange(option.key)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  )
 }

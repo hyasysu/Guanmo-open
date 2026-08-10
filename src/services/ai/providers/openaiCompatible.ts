@@ -105,6 +105,7 @@ export class OpenAICompatibleProvider implements AiProvider {
         headers: this.headers,
         body: JSON.stringify(body),
         signal: abort.signal,
+        timeoutMs: this.config.timeout,
       })
 
       if (res.status === 401) throw new AiAuthError()
@@ -118,6 +119,7 @@ export class OpenAICompatibleProvider implements AiProvider {
             headers: this.headers,
             body: JSON.stringify(body),
             signal: abort.signal,
+            timeoutMs: this.config.timeout,
           })
           if (retryRes.ok) {
             const data = await retryRes.json()
@@ -217,6 +219,7 @@ export class OpenAICompatibleProvider implements AiProvider {
         headers: this.headers,
         body: JSON.stringify(body),
         signal: abort.signal,
+        timeoutMs: this.config.timeout,
       })
 
       if (res.status === 401) throw new AiAuthError()
@@ -230,6 +233,7 @@ export class OpenAICompatibleProvider implements AiProvider {
             headers: this.headers,
             body: JSON.stringify(body),
             signal: abort.signal,
+            timeoutMs: this.config.timeout,
           })
           if (retryRes.ok) {
             abort.refreshTimeout()
@@ -274,6 +278,7 @@ export class OpenAICompatibleProvider implements AiProvider {
         headers: this.headers,
         body: JSON.stringify(body),
         signal: abort.signal,
+        timeoutMs: this.config.timeout,
       })
 
       if (res.status === 401) throw new AiAuthError()
@@ -317,6 +322,7 @@ export class OpenAICompatibleProvider implements AiProvider {
         headers: this.headers,
         body: JSON.stringify(body),
         signal: abort.signal,
+        timeoutMs: this.config.timeout,
       })
 
       if (res.status === 401) throw new AiAuthError()
@@ -346,6 +352,7 @@ export class OpenAICompatibleProvider implements AiProvider {
     try {
       const res = await externalFetch(`${this.baseUrl}/models`, {
         headers: this.headers,
+        timeoutMs: this.config.timeout,
       })
       if (res.ok) {
         const data = await res.json()
@@ -367,7 +374,7 @@ export class OpenAICompatibleProvider implements AiProvider {
     //    注意：部分 CodingPlan 可能有最小 token 限制或禁用 /models，用实际请求验证
     try {
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 15000)
+      const timeout = setTimeout(() => controller.abort(), this.config.timeout)
       const res = await externalFetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: this.headers,
@@ -378,6 +385,7 @@ export class OpenAICompatibleProvider implements AiProvider {
           stream: false,
         }),
         signal: controller.signal,
+        timeoutMs: this.config.timeout,
       })
       clearTimeout(timeout)
 
@@ -414,6 +422,7 @@ export class OpenAICompatibleProvider implements AiProvider {
   async listModels(): Promise<string[]> {
     const res = await externalFetch(`${this.baseUrl}/models`, {
       headers: this.headers,
+      timeoutMs: this.config.timeout,
     })
 
     if (!res.ok) return []

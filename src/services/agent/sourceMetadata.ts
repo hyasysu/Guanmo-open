@@ -1,4 +1,9 @@
-import type { ChatMessageSource } from '@/services/ai/types'
+import type {
+  ChatMessageSource,
+  ReadingScope,
+  ReadingSourceCoverage,
+} from '@/services/ai/types'
+import type { ContextTag } from '@/types/contextTag'
 import type { AgentResult, AgentStep } from './types'
 import { stripToolCallJson } from './toolCallParser'
 import { createContextMeta } from '@/services/aiChatMessages'
@@ -70,6 +75,49 @@ export function buildAgentResultPresentation(result: AgentResult, tagCount: numb
   }
 }
 
+function hasTruncatedDocumentResult(steps: AgentStep[]): boolean {
+  return steps.some((step) => {
+    if (step.type !== 'observation' || step.toolName !== 'read_context_file') return false
+    try {
+      const parsed = JSON.parse(step.content)
+      return isPlainObject(parsed)
+        && isPlainObject(parsed.source)
+        && parsed.source.truncated === true
+    } catch {
+      return false
+    }
+  })
+}
+
+export function resolveReadingSourceCoverage(
+  readingScope: ReadingScope | undefined,
+  steps: AgentStep[],
+  sourceCount: number,
+): ReadingSourceCoverage | undefined {
+  if (!readingScope) return undefined
+  if (readingScope === 'selection') return sourceCount > 0 ? 'selected_range' : 'none'
+  if (readingScope === 'section') return sourceCount > 0 ? 'section_chunks' : 'none'
+  if (readingScope === 'workspace') return sourceCount > 0 ? 'workspace_topk' : 'none'
+  if (sourceCount === 0) return 'none'
+  return hasTruncatedDocumentResult(steps) ? 'document_partial' : 'document_full'
+}
+
+export function buildScopedAgentResultPresentation(
+  result: AgentResult,
+  tagCount: number,
+  readingScope?: ReadingScope,
+) {
+  const presentation = buildAgentResultPresentation(result, tagCount)
+  return {
+    ...presentation,
+    contextMeta: createContextMeta({
+      ...presentation.contextMeta,
+      readingScope,
+      sourceCoverage: resolveReadingSourceCoverage(readingScope, result.steps, presentation.sources.length),
+    }),
+  }
+}
+
 export function toLocalMessageSources(sources: Array<{
   filePath: string
   fileName: string
@@ -87,4 +135,24 @@ export function toLocalMessageSources(sources: Array<{
     startLine: source.startLine,
     endLine: source.endLine,
   }))
+}
+
+export function toContextTagSources(tags: ContextTag[]): ChatMessageSource[] {
+  return tags.flatMap((tag): ChatMessageSource[] => {
+    if (
+      tag.type !== 'selection'
+      || typeof tag.filePath !== 'string'
+      || typeof tag.startLine !== 'number'
+      || typeof tag.endLine !== 'number'
+    ) {
+      return []
+    }
+    return [{
+      kind: 'local',
+      filePath: tag.filePath,
+      fileName: sourceFileName(tag.filePath, tag.title),
+      startLine: tag.startLine,
+      endLine: tag.endLine,
+    }]
+  })
 }

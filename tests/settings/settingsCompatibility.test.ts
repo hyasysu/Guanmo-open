@@ -14,6 +14,10 @@ async function loadSettingsStore(persisted?: unknown, raw?: string) {
 describe('设置兼容', () => {
   beforeEach(() => {
     localStorage.clear()
+    delete document.documentElement.dataset.theme
+    delete document.documentElement.dataset.themeId
+    delete document.documentElement.dataset.lightPalette
+    document.documentElement.style.colorScheme = ''
   })
 
   it('没有持久配置时使用完整默认值', async () => {
@@ -29,8 +33,10 @@ describe('设置兼容', () => {
       modePerformancePolicy: 'balanced',
       inlinePreviewEdit: true,
     })
-    expect(state.appearance).toMatchObject({ theme: 'light', lightPalette: 'warm' })
-    expect(state.webSearch).toMatchObject({ provider: 'duckduckgo', maxResults: 5 })
+    expect(state.appearance).toMatchObject({ themeId: 'warm', lastLightThemeId: 'warm' })
+    expect(state.webSearch).toMatchObject({ provider: 'duckduckgo', maxResults: 5, timeout: 60000 })
+    expect(state.ai.timeout).toBe(60000)
+    expect(state.ai.embedding.timeout).toBe(60000)
     expect(state.aiShortcutActions).toHaveLength(6)
     expect(state.aiShortcutActions.map((action) => action.label)).toEqual([
       'AI 解释这段',
@@ -57,16 +63,59 @@ describe('设置兼容', () => {
       fullscreenContentPadding: 88,
       inlinePreviewEdit: true,
     })
-    expect(state.appearance).toMatchObject({ theme: 'dark', lightPalette: 'warm', aiMascotAvatarEnabled: false })
+    expect(state.appearance).toMatchObject({ themeId: 'dark', lastLightThemeId: 'warm', aiMascotAvatarEnabled: false })
   })
 
-  it('新的明亮配色会从持久配置中恢复', async () => {
-    const store = await loadSettingsStore({
-      appearance: { lightPalette: 'github-dmmono' },
-    })
-    const state = store.getState()
+  it('将旧主题组合迁移为统一主题 ID', async () => {
+    const warmStore = await loadSettingsStore({ appearance: { theme: 'light', lightPalette: 'warm' } })
+    expect(warmStore.getState().appearance).toMatchObject({ themeId: 'warm', lastLightThemeId: 'warm' })
 
-    expect(state.appearance).toMatchObject({ theme: 'light', lightPalette: 'github-dmmono' })
+    const lightStore = await loadSettingsStore({ appearance: { theme: 'light', lightPalette: 'plain' } })
+    expect(lightStore.getState().appearance).toMatchObject({ themeId: 'light', lastLightThemeId: 'light' })
+
+    const darkStore = await loadSettingsStore({ appearance: { theme: 'dark', lightPalette: 'plain' } })
+    expect(darkStore.getState().appearance).toMatchObject({ themeId: 'dark', lastLightThemeId: 'light' })
+  })
+
+  it('保留合法新主题并回退非法主题', async () => {
+    const paperStore = await loadSettingsStore({ appearance: { themeId: 'paper', lastLightThemeId: 'paper' } })
+    expect(paperStore.getState().appearance).toMatchObject({ themeId: 'paper', lastLightThemeId: 'paper' })
+
+    const fallbackStore = await loadSettingsStore({ appearance: { themeId: 'unknown' } })
+    expect(fallbackStore.getState().appearance).toMatchObject({ themeId: 'warm', lastLightThemeId: 'warm' })
+  })
+
+  it('切换主题时立即同步文档属性并记住非深色主题', async () => {
+    const store = await loadSettingsStore()
+    store.getState().updateAppearanceSettings({ themeId: 'github-light' })
+
+    expect(store.getState().appearance.lastLightThemeId).toBe('github-light')
+    expect(document.documentElement.dataset.themeId).toBe('github-light')
+    expect(document.documentElement.dataset.theme).toBe('light')
+    expect(document.documentElement.style.colorScheme).toBe('light')
+
+    store.getState().updateAppearanceSettings({ themeId: 'dark' })
+    expect(store.getState().appearance.lastLightThemeId).toBe('github-light')
+    expect(document.documentElement.dataset.theme).toBe('dark')
+    expect(document.documentElement.style.colorScheme).toBe('dark')
+  })
+
+  it('旧模型和搜索配置缺少超时时补默认值，越界值会被限制', async () => {
+    const defaultedStore = await loadSettingsStore({
+      ai: { baseUrl: 'http://localhost:11434', embedding: { baseUrl: 'http://localhost:11434' } },
+      webSearch: { provider: 'custom', customUrl: 'https://example.com/search' },
+    })
+    expect(defaultedStore.getState().ai.timeout).toBe(60000)
+    expect(defaultedStore.getState().ai.embedding.timeout).toBe(60000)
+    expect(defaultedStore.getState().webSearch.timeout).toBe(60000)
+
+    const clampedStore = await loadSettingsStore({
+      ai: { timeout: 1000, embedding: { timeout: 300000 } },
+      webSearch: { timeout: 900000 },
+    })
+    expect(clampedStore.getState().ai.timeout).toBe(5000)
+    expect(clampedStore.getState().ai.embedding.timeout).toBe(120000)
+    expect(clampedStore.getState().webSearch.timeout).toBe(120000)
   })
 
   it('未知字段不影响已知配置和默认值加载', async () => {
@@ -94,7 +143,7 @@ describe('设置兼容', () => {
     const store = await loadSettingsStore(undefined, '{not-valid-json')
 
     expect(store.getState().editor.fontSize).toBe(14)
-    expect(store.getState().appearance.theme).toBe('light')
+    expect(store.getState().appearance.themeId).toBe('warm')
   })
 
   it('旧配置缺少 knowledge 字段时默认 autoIndexEnabled=true', async () => {
