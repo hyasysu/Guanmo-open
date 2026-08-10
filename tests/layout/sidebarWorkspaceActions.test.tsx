@@ -35,8 +35,13 @@ describe('Sidebar workspace actions', () => {
 
     const newFile = screen.getByRole('button', { name: '新建文件 workspace' })
     const newFolder = screen.getByRole('button', { name: '新建文件夹 workspace' })
-    expect(screen.getByRole('button', { name: '展开所有文件夹 workspace' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '折叠所有文件夹 workspace' })).toBeInTheDocument()
+    expect(newFile.querySelector('svg')).toBeInTheDocument()
+    expect(newFolder.querySelector('svg')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '索引 workspace' }).querySelector('svg')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '展开所有文件夹 workspace' }).querySelector('svg')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '折叠所有文件夹 workspace' }).querySelector('svg')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '刷新 workspace' }).querySelector('svg')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '移除工作区 workspace' }).querySelector('svg')).toBeInTheDocument()
 
     fireEvent.click(newFile)
     expect(screen.getByDisplayValue('untitled.md')).toBeInTheDocument()

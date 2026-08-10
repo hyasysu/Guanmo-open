@@ -58,7 +58,7 @@ describe('WorkspaceRoots', () => {
   it('removes only the selected root record', () => {
     render(<WorkspaceRoots onOpenFile={vi.fn()} />)
 
-    fireEvent.click(screen.getAllByRole('button', { name: '移除' })[1])
+    fireEvent.click(screen.getByRole('button', { name: '移除工作区 Study' }))
     expect(mocks.removeWorkspace).toHaveBeenCalledWith('root-b')
     expect(mocks.removeWorkspace).toHaveBeenCalledTimes(1)
   })
@@ -67,7 +67,7 @@ describe('WorkspaceRoots', () => {
     mocks.pickDirectory.mockResolvedValue('G:/Archive')
     render(<WorkspaceRoots onOpenFile={vi.fn()} />)
 
-    fireEvent.click(screen.getAllByRole('button', { name: '索引' })[1])
+    fireEvent.click(screen.getByRole('button', { name: '索引 Study' }))
     await waitFor(() => expect(mocks.indexWorkspaceMarkdown).toHaveBeenCalledWith('E:/Study'))
     expect(screen.queryByRole('button', { name: '清理失效索引' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '重建索引' })).not.toBeInTheDocument()
