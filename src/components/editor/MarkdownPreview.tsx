@@ -432,7 +432,17 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     if (changed) {
       setScrollState((s) => ({ ...s }))
     }
-  }, [visible.startIndex, visible.endIndex, model.blocks])
+  }, [
+    visible.startIndex,
+    visible.endIndex,
+    model.blocks,
+    scrollState.viewportWidth,
+    fontSize,
+    lineHeight,
+    previewFontFamily,
+    wordWrap,
+    themeId,
+  ])
 
   const overlayRectRef = useRef<{ top: number; left: number; width: number } | null>(null)
 
