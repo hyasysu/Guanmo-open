@@ -210,6 +210,51 @@ body {
   padding-bottom: 6px !important;
 }
 
+.gm-workspace-roots {
+  container-type: inline-size;
+  container-name: workspace-roots;
+}
+
+.gm-workspace-root-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  column-gap: 4px;
+}
+
+.gm-workspace-root-toggle {
+  width: 100%;
+}
+
+.gm-workspace-root-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+@container workspace-roots (max-width: 320px) {
+  .gm-workspace-root-header {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    row-gap: 2px;
+  }
+
+  .gm-workspace-root-name {
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .gm-workspace-root-actions {
+    width: 100%;
+    box-sizing: border-box;
+    justify-content: flex-start;
+    padding-left: 22px;
+  }
+}
+
 @keyframes gmFullControlIn {
   from {
     opacity: 0;

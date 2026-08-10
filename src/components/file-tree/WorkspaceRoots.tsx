@@ -79,7 +79,7 @@ export function WorkspaceRoots({ onOpenFile }: WorkspaceRootsProps) {
   }, [removeWorkspace, setSummary])
 
   return (
-    <div className="space-y-2">
+    <div className="gm-workspace-roots space-y-2">
       <div className="flex items-center justify-between gap-2 px-1">
         <span className="text-micro text-gm-text-tertiary">共打开 {workspaceRoots.length} 个文件夹</span>
         <button
@@ -104,7 +104,7 @@ export function WorkspaceRoots({ onOpenFile }: WorkspaceRootsProps) {
             key={root.id}
             className={`px-1.5 py-2 ${index > 0 ? 'border-t border-gm-border-subtle' : ''}`}
           >
-            <div className="flex min-w-0 items-center gap-1">
+            <div className="gm-workspace-root-header min-w-0">
               <button
                 type="button"
                 aria-expanded={expanded}
@@ -115,7 +115,7 @@ export function WorkspaceRoots({ onOpenFile }: WorkspaceRootsProps) {
                   else next.add(root.id)
                   return next
                 })}
-                className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text"
+                className="gm-workspace-root-toggle flex min-w-0 items-center gap-1.5 rounded-md px-1 py-1 text-left text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text"
                 title={root.path}
               >
                 <svg
@@ -129,30 +129,52 @@ export function WorkspaceRoots({ onOpenFile }: WorkspaceRootsProps) {
                 >
                   <path d="M9 18l6-6-6-6" />
                 </svg>
-                <span className="min-w-0 flex-1 truncate text-caption font-bold">
+                <span className="gm-workspace-root-name min-w-0 flex-1 truncate text-caption font-bold">
                   {root.name}
                 </span>
               </button>
-              <WorkspaceRootActionButton
-                label={working ? `正在索引 ${root.name}` : `索引 ${root.name}`}
-                disabled={Boolean(workingRootId)}
-                onClick={() => void handleIndex(root.id, root.path)}
-              >
-                {working ? (
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    aria-hidden="true"
-                    className="animate-spin"
-                  >
-                    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-                  </svg>
-                ) : (
+              <div className="gm-workspace-root-actions">
+                <WorkspaceRootActionButton
+                  label={working ? `正在索引 ${root.name}` : `索引 ${root.name}`}
+                  disabled={Boolean(workingRootId)}
+                  onClick={() => void handleIndex(root.id, root.path)}
+                >
+                  {working ? (
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      aria-hidden="true"
+                      className="animate-spin"
+                    >
+                      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                    </svg>
+                  ) : (
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <ellipse cx="12" cy="5" rx="7" ry="3" />
+                      <path d="M5 5v6c0 1.66 3.13 3 7 3s7-1.34 7-3V5" />
+                      <path d="M5 11v6c0 1.66 3.13 3 7 3s7-1.34 7-3v-6" />
+                    </svg>
+                  )}
+                </WorkspaceRootActionButton>
+                <WorkspaceRootActionButton
+                  label={`新建文件 ${root.name}`}
+                  onClick={() => treeRefs.current[root.id]?.startCreate('file')}
+                >
                   <svg
                     width="16"
                     height="16"
@@ -164,130 +186,110 @@ export function WorkspaceRoots({ onOpenFile }: WorkspaceRootsProps) {
                     strokeLinejoin="round"
                     aria-hidden="true"
                   >
-                    <ellipse cx="12" cy="5" rx="7" ry="3" />
-                    <path d="M5 5v6c0 1.66 3.13 3 7 3s7-1.34 7-3V5" />
-                    <path d="M5 11v6c0 1.66 3.13 3 7 3s7-1.34 7-3v-6" />
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+                    <path d="M14 2v6h6M12 12v6M9 15h6" />
                   </svg>
-                )}
-              </WorkspaceRootActionButton>
-              <WorkspaceRootActionButton
-                label={`新建文件 ${root.name}`}
-                onClick={() => treeRefs.current[root.id]?.startCreate('file')}
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
+                </WorkspaceRootActionButton>
+                <WorkspaceRootActionButton
+                  label={`新建文件夹 ${root.name}`}
+                  onClick={() => treeRefs.current[root.id]?.startCreate('folder')}
                 >
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
-                  <path d="M14 2v6h6M12 12v6M9 15h6" />
-                </svg>
-              </WorkspaceRootActionButton>
-              <WorkspaceRootActionButton
-                label={`新建文件夹 ${root.name}`}
-                onClick={() => treeRefs.current[root.id]?.startCreate('folder')}
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+                    <path d="M12 11v6M9 14h6" />
+                  </svg>
+                </WorkspaceRootActionButton>
+                <WorkspaceRootActionButton
+                  label={`展开所有文件夹 ${root.name}`}
+                  onClick={() => setExpandSignals((current) => ({
+                    ...current,
+                    [root.id]: (current[root.id] ?? 0) + 1,
+                  }))}
                 >
-                  <path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
-                  <path d="M12 11v6M9 14h6" />
-                </svg>
-              </WorkspaceRootActionButton>
-              <WorkspaceRootActionButton
-                label={`展开所有文件夹 ${root.name}`}
-                onClick={() => setExpandSignals((current) => ({
-                  ...current,
-                  [root.id]: (current[root.id] ?? 0) + 1,
-                }))}
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="m8 9 4-4 4 4M8 15l4 4 4-4M5 12h14" />
+                  </svg>
+                </WorkspaceRootActionButton>
+                <WorkspaceRootActionButton
+                  label={`折叠所有文件夹 ${root.name}`}
+                  onClick={() => setCollapseSignals((current) => ({
+                    ...current,
+                    [root.id]: (current[root.id] ?? 0) + 1,
+                  }))}
                 >
-                  <path d="m8 9 4-4 4 4M8 15l4 4 4-4M5 12h14" />
-                </svg>
-              </WorkspaceRootActionButton>
-              <WorkspaceRootActionButton
-                label={`折叠所有文件夹 ${root.name}`}
-                onClick={() => setCollapseSignals((current) => ({
-                  ...current,
-                  [root.id]: (current[root.id] ?? 0) + 1,
-                }))}
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="m8 5 4 4 4-4M8 19l4-4 4 4M5 12h14" />
+                  </svg>
+                </WorkspaceRootActionButton>
+                <WorkspaceRootActionButton
+                  label={`刷新 ${root.name}`}
+                  onClick={() => void refreshWorkspaceRoot(root.id)}
                 >
-                  <path d="m8 5 4 4 4-4M8 19l4-4 4 4M5 12h14" />
-                </svg>
-              </WorkspaceRootActionButton>
-              <WorkspaceRootActionButton
-                label={`刷新 ${root.name}`}
-                onClick={() => void refreshWorkspaceRoot(root.id)}
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5" />
+                  </svg>
+                </WorkspaceRootActionButton>
+                <WorkspaceRootActionButton
+                  label={`移除工作区 ${root.name}`}
+                  onClick={() => handleRemove(root.id)}
+                  danger
                 >
-                  <path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5" />
-                </svg>
-              </WorkspaceRootActionButton>
-              <WorkspaceRootActionButton
-                label={`移除工作区 ${root.name}`}
-                onClick={() => handleRemove(root.id)}
-                danger
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
-                  <path d="M9 14h6" />
-                </svg>
-              </WorkspaceRootActionButton>
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+                    <path d="M9 14h6" />
+                  </svg>
+                </WorkspaceRootActionButton>
+              </div>
             </div>
             {expanded && (
               <div className="pt-1">
