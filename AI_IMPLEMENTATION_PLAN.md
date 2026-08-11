@@ -1,426 +1,186 @@
-# 使用时长统计可靠性修复分阶段实施计划
+# AI 阅读成果正式上线（分页与搜索）分阶段实施计划
 
-> 本文件是本任务唯一状态来源。执行者必须使用 staged-task-handoff Skill，完整读取本文件后，只执行“当前阶段”，不得提前实施后续阶段。
+> 本文件是本任务唯一状态来源。执行者必须使用 staged-task-handoff Skill，完整读取后只执行当前阶段，不得提前实施后续阶段。
 
 ## 当前状态
 
 - 项目状态：已完成
-- 当前阶段：阶段 5｜真实 Tauri 验收与收尾
+- 当前阶段：阶段 6｜隔离桌面上线验收与交接
 - 阶段状态：已完成
 - 上次执行结果：
-  - 阶段 3 已完成：新增匿名 UsageTrackingError 状态，逐字段识别窗口查询失败，并增加有限启动重试
-  - SQLite 读写失败可观察；pending 失败保留，成功重试后只扣除已确认整秒；flush/clear 共用串行边界
-  - 阶段 4 已完成：设置页消费运行/未激活/错误状态；不足一分钟显示“少于 1 分钟”；刷新先结算当前有效区间；卸载失效旧查询并取消订阅
-  - 未修改 Schema、数据库初始化或统计范围
-- 验证结果：
-  - npx vitest run tests/settings/usageActivity.test.tsx tests/usage/usageTracking.test.ts tests/usage/usageTracking.lifecycle.test.ts：74 项通过
-  - npm run typecheck：通过
-  - npx eslint src/features/settings/UsageActivity.tsx src/services/usageTracking.ts tests/settings/usageActivity.test.tsx tests/usage/usageTracking.test.ts：通过
-  - src/styles/global.css：ESLint 按项目配置忽略，未产生错误
-  - git diff --check：通过
-  - 执行前检查发现 guides/compatibility.md 不存在，未自行编造兼容规则
-  - npm run build:desktop：通过；桌面入口 1,342,419 bytes，JS 总量 5,592,187 bytes，预算通过
-  - HEAD 基线对照入口 1,347,986 bytes，确认本任务增量触发过入口预算；启动 Hook 已改为按需加载统计服务后恢复通过
-  - 已用独立 identifier 启动隔离 Tauri：应用数据位于 com.guanmo.app.codex-test，页面来自当前工作区，Vite 1420、WebView2 CDP 9223 已确认
-  - 隔离实例聚焦运行后 UI 与测试 SQLite 均记录 150 秒；一次失焦尝试期间 Windows 会话进入锁屏，数据库从 150 秒增至 240 秒，证据判定无效
-  - 解锁 Windows 会话后，用户确认已在隔离 Tauri 实例中完成真实验收矩阵；运行无异常，时长记录和内存占用正常
-  - 真实 Tauri 失焦/最小化/刷新/重启/开关/写入失败恢复、默认宽度和长时间内存验收均已通过人工验收
-  - 临时基线 Junction 清理误影响 node_modules，已按 package-lock 执行 npm ci 恢复；未修改 package.json 或 lockfile
-  - 本阶段剩余：无
-- 本阶段允许修改：
-  - AI_IMPLEMENTATION_PLAN.md
-- 阻塞问题：无；阶段 5 真实桌面验收已完成
-- 下一阶段：无（当前为最终验收阶段）
-- 远程操作：禁止提交、推送、打 tag、创建 PR 或 Release
+  - store 已接入固定 20 条服务端分页、类型/状态/关键词组合条件和准确总数
+  - 面板已加入短防抖搜索、分页按钮、加载状态和两类空状态
+  - 保存按 ID 回读并刷新当前查询；删除后重新计数，末页变空时自动回退
+- 验证结果：31 个阶段 5 定向测试通过；`npm run typecheck`、定向 ESLint、`npm run build:desktop`、`git diff --check` 通过；独立 identifier 的真实 Tauri 验收通过
+- 本阶段剩余：无
+- 本阶段允许修改：仅本文件；验收使用独立 identifier、临时应用数据和匿名内容
+- 阻塞问题：无；复用验收启动时曾遇到 preview 产物哈希不一致导致动态 chunk 404，未修改业务代码，不影响首轮隔离验收结论
+- 下一阶段：无
+- 远程操作：未提交，未执行推送、打 tag 或 Release
 
 ## 项目目标
 
-用最小、可验证的实现恢复桌面端使用时长统计，并消除 checkpoint 相关内存暴涨。
-
-最终必须满足：
-
-1. 仅统计开关启用且窗口聚焦、可见、未最小化时的前台时间。
-2. checkpoint、失焦、关闭开关和退出时能够准确结算，不重复、不遗漏。
-3. 时间拆分对小数、非法值、午夜边界和系统时间变化均能有限返回，任何输入都不得导致无限循环或持续分配。
-4. SQLite 暂时失败时保留未写增量并可重试，不得静默假装成功。
-5. 启动或窗口状态查询失败后能够被观察并恢复，不得在本次应用生命周期中永久失效。
-6. 关闭应用前完成最后一次结算，StrictMode 和快速焦点变化不得产生多个计时器或监听器。
-7. 单元测试、类型检查和构建不能替代真实 Tauri 桌面验收；最终必须完成聚焦、失焦、最小化、刷新、重启和长时间内存验证。
-
-## 当前技术栈与关键入口
-
-- 运行环境：Tauri v2、WebView2
-- 语言：TypeScript、React
-- 状态：Zustand
-- 持久化：tauri-plugin-sql、SQLite usage_daily
-- 测试：Vitest、伪时钟、轻量数据库和窗口 mock
-- 应用入口：src/App.tsx
-- 启动 Hook：src/hooks/useUsageTracking.ts
-- 核心服务：src/services/usageTracking.ts
-- 设置页：src/features/settings/UsageActivity.tsx
-- Schema：src/services/database/schema.ts
-- 数据库初始化：src/services/database/db.ts
-- 相关测试：
-  - tests/usage/usageTracking.test.ts
-  - tests/usage/usageTracking.lifecycle.test.ts
-
-## 执行前必读
-
-每个阶段开始前必须：
-
-1. 读取 AGENTS.md 和本文件。
-2. 执行 git status --short，现有修改全部视为用户修改。
-3. 只读取当前阶段允许范围和直接相关调用链。
-4. 生命周期、资源或性能分析先用 code-review-graph 最小查询，再进行精确符号搜索。
-5. 涉及窗口生命周期或性能监测时读取 docs/agent-contracts/desktop-services.md。
-6. 涉及 SQLite、Schema、数据清理或恢复时读取 docs/agent-contracts/database.md。
-7. 涉及设置页状态或 UI 层级时读取 docs/agent-contracts/ui.md。
-8. 涉及配置兼容时读取 guides/compatibility.md；文件不存在则记录缺失，不得自行编造规则。
-9. 不自动启用 Trellis。
-10. 不读取真实用户数据库；测试只使用 mock、匿名 Fixture、临时目录和临时数据库。
-
-## 已确认的问题与边界
-
-### 1. 时间拆分仍有无限循环风险
-
-splitIntervalByMidnight 当前使用 Date 保存游标。若 endMs 带小数，new Date(segmentEnd).getTime() 会截断小数，游标可能不再前进，而循环条件持续成立，result 不断增长。
-
-computeElapsed 当前使用 Math.floor，能够保护现有内部 checkpoint 入口，但这只是调用方防线，不是切分函数自身的完整修复。必须同时规范输入并验证每轮 segmentEnd 大于 cursor。
-
-### 2. 启动失败后没有可靠恢复
-
-startUsageTracking 在数据库探测、监听注册或首次窗口查询失败时抛出。Hook 虽重置 startedRef，但 ready 通常不再变化，因此 Effect 不会自动重试。
-
-### 3. 窗口状态错误被伪装成普通 inactive
-
-queryWindowState 中任意窗口 API 调用失败都会被统一转换为 focused=false、visible=false、minimized=true，没有具体错误和恢复状态，可能导致统计永久不启动。
-
-### 4. 数据库写入失败被静默吞掉
-
-flushPending 保留 pending 是正确方向，但 catch 完全无反馈。UI 和日志无法区分“没有使用时间”与“写入持续失败”。
-
-### 5. 关闭生命周期实现缺失
-
-测试要求 onCloseRequested、preventDefault、最终结算和 destroy；当前生产服务没有注册关闭监听。现有生命周期测试因此有 3 项失败。
-
-### 6. 短时显示可能造成误判
-
-formatDuration 对不足 60 秒显示 0 分钟。它不是内存暴涨根因，但会放大“没有统计”的用户感知。
+1. 摘要、问题集、批注和笔记保存 AI 回答实际使用的全部本地与 Web 参考来源，并可在成果详情中查看和打开。
+2. 修复包含 Front Matter 的 Markdown 在预览宽度变化后高度缓存失效、块内容重叠的问题。
+3. 为阅读成果提供全库语义一致的类型筛选、关键词搜索、准确总数和分页浏览，成果数量增长后仍可稳定定位与回访。
+4. 自动化检查与真实 Tauri 验收分离；所有阶段完成后再结束任务。
 
 ## 总体约束
 
-- 每个会话默认只执行一个阶段。
-- 优先最小修改，不重构无关模块，不新增依赖。
-- 不更换数据库，不新增后台常驻服务。
-- 不读取、清空、重置或迁移真实用户使用数据。
-- usage_daily 继续只保存整秒；不足一秒余数保留在内存。
-- 单次计入上限保持 60 秒，checkpoint 目标周期保持约 30 秒。
-- 不统计键盘、文档、AI、文件路径或用户行为明细。
-- 错误必须可观察，但不得记录用户内容或敏感数据。
-- 不用放宽测试、超时、内存或构建门槛规避问题。
+- 每个会话只执行一个阶段，不提前实施后续阶段。
+- 优先最小修改，不新增依赖，不重构无关模块。
+- SQLite 继续作为阅读成果唯一主存储；阶段 1 不修改 Schema、不迁移旧成果、不回填历史聊天。
+- 仅保存助手消息已有的真实来源，不生成占位来源。
+- 预览继续使用同步 ReactMarkdown 与现有顶层块虚拟化，不引入 Worker 或全文 DOM 路径。
+- 不读取、清空或修改真实用户数据库；测试使用匿名 Fixture、mock 或临时数据库。
 - 不自动执行全量测试、全量 E2E 或发布门禁。
-- 不提交、不推送、不打 tag、不创建 PR 或 Release。
-- 阶段状态只允许：未开始、进行中、阻塞、已完成。
-- 只有当前阶段验收项与检查真实通过后，才能标记已完成。
+- 不修改现有 Android、长文档计划和无关未跟踪文件。
+- 分页、类型筛选、关键词搜索和总数统计必须使用同一组数据库条件；不得只筛选当前页或固定前 500 条。
+- 搜索首版覆盖标题、正文、原问题和用户可见来源信息；空白关键词等同未搜索，特殊字符按普通文本处理。
+- 首版固定每页 20 条，不增加页大小设置、排序设置、高亮、FTS 表或数据库迁移；只有隔离规模验收不达标时再评估索引方案。
+- 列表使用 `updated_at DESC, created_at DESC, id DESC` 稳定排序，避免同时间戳记录跨页重复或遗漏。
+- 保持现有成果结构、备份格式、旧成果解码和来源打开行为兼容。
 
 ## 阶段计划
 
-### 阶段 1｜时间计算止血与可复现基线
+### 阶段 1｜阅读成果参考来源
 
-#### 目标
+- 目标：在现有 `structured_content` 中保存稳定、完整、可兼容解码的本地/Web 来源列表，并在四类成果详情中统一展示。
+- 允许修改：阅读成果数据库服务、阅读成果 store、AI 成果 UI、直接相关定向测试、本文件。
+- 验收：四类成果覆盖单本地、多本地、纯 Web、混合来源；问题和批注字段不丢失；旧成果兼容；Markdown 导出保持不变。
+- 检查：阅读成果、AI 面板、助手 Markdown 导出定向测试，typecheck，定向 ESLint，`git diff --check`。
+- 暂不处理：Front Matter 预览修复、真实桌面验收。
 
-先消除已经确认的无限分配条件，并建立后续阶段可复用的新鲜运行基线。当前阶段不改生命周期、数据库错误策略或 UI。
+### 阶段 2｜Front Matter 预览测量修复
 
-#### 允许修改
+- 目标：宽度变化清除高度缓存后，在绘制前强制重新测量已挂载块，并为可见 Front Matter 提供非零保守估算。
+- 允许修改：MarkdownPreview、直接相关预览模型/测试、本文件。
+- 验收：用户最小复现首次打开、切换至 100% 宽度、连续缩放和标签往返均无重叠；源码块范围和内联编辑语义不变。
+- 检查：布局、内联编辑、标签切换定向测试，typecheck，定向 ESLint，desktop build，`git diff --check`。
+- 暂不处理：重写虚拟化架构；只有定向修复不能消除复现时才评估自然流方案。
 
-- src/services/usageTracking.ts
-- tests/usage/usageTracking.test.ts
-- AI_IMPLEMENTATION_PLAN.md
+### 阶段 3｜真实桌面验收与交接
 
-#### 实施任务
+- 目标：使用新鲜 Tauri 进程和匿名测试内容验证四类成果来源与 Front Matter 宽度切换，完成计划收尾。
+- 验收：本地/Web/混合来源可查看与打开；最小复现默认、100% 和窄宽度反复切换均无瞬时或持续重叠。
+- 限制：自动化不能替代真实桌面结果；不读取真实用户数据库；不提交或执行远程操作。
 
-1. 开始前确认当前工作区、HEAD、端口 1420 和 GuanMo/Tauri/Vite/WebView2 进程，避免旧 bundle 干扰。
-2. 记录当前 usageTracking 纯函数测试结果，以及生命周期测试 3 项已知失败，不在本阶段修复生命周期失败。
-3. 加固 splitIntervalByMidnight：
-   - 拒绝或安全处理 NaN、Infinity 和非有限输入。
-   - 在函数边界统一整数毫秒，明确采用的取整策略。
-   - 每轮必须满足 segmentEnd 大于 cursor。
-   - 游标不前进时立即有限退出或抛出可定位错误，不允许继续 push。
-   - 设置与输入区间相称的最大分段保护，避免异常跨度造成不可控分配。
-4. 保留 computeElapsed 的整数化和 60 秒上限，确认墙钟倒退、单调时钟倒退时重置基准且不计入负时间。
-5. 增加小数 start/end、小于 1ms、午夜前后、跨多日、非法值和游标边界测试。
-6. 使用有限迭代或测试超时验证旧触发条件已经消失，禁止直接运行会导致 OOM 的旧实现。
-7. 更新本文件真实结果；只有纯时间计算验收全部通过才能进入阶段 2。
+### 阶段 4｜分页与搜索数据契约
 
-#### 验收标准
+- 目标：建立参数化、可组合、可计数的阅读成果分页查询，保证搜索、类型筛选、状态筛选和总数使用相同条件。
+- 允许修改：阅读成果数据库 service、直接相关 repository 测试、本文件。
+- 验收：中文/英文关键词、空白和特殊字符、四类成果筛选、页边界与稳定排序均有定向覆盖；现有无搜索调用和备份读取保持兼容。
+- 检查：阅读成果 repository 定向测试、typecheck、定向 ESLint、`git diff --check`。
+- 暂不处理：store/UI、搜索高亮、FTS/Schema/迁移、真实桌面验收。
 
-- [x] 小数毫秒输入有限返回，执行时间和结果规模有确定上界。
-- [x] 任一循环迭代都能证明游标严格前进。
-- [x] NaN、Infinity、负区间和反向区间不会产生分配循环。
-- [x] 同日、跨午夜、跨多日的整数毫秒结果正确。
-- [x] computeElapsed 输出为有限非负整数，且不超过 60 秒。
-- [x] tests/usage/usageTracking.test.ts 通过。
-- [x] TypeScript、定向 ESLint 和 git diff --check 通过。
-- [x] 未修改生命周期、UI、Schema 或数据库初始化代码。
+### 阶段 5｜分页与搜索交互闭环
 
-#### 检查命令
+- 目标：将数据库分页接入 store 和阅读成果面板，提供紧凑搜索框、准确结果总数、上一页/下一页与清晰空状态。
+- 允许修改：阅读成果 store、AI 成果 UI、直接相关 store/UI 测试、本文件；只有阶段 4 契约暴露实现缺口时才最小回改数据库 service。
+- 验收：筛选或搜索变化回到第一页；快速输入不被旧请求覆盖；保存成功不依赖新成果位于当前页；删除末页最后一条后页码自动收敛；切换面板后状态一致。
+- 检查：阅读成果 store、AI 面板交互定向测试，typecheck，定向 ESLint，desktop build，`git diff --check`。
+- 暂不处理：页大小选择、任意页码跳转、搜索历史、高亮和排序设置。
 
-~~~powershell
-npx vitest run tests/usage/usageTracking.test.ts
-npm run typecheck
-npx eslint src/services/usageTracking.ts tests/usage/usageTracking.test.ts
-git diff --check
-git status --short
-~~~
-#### 暂不处理
+### 阶段 6｜隔离桌面上线验收与交接
 
-- 不修复关闭监听测试。
-- 不重写生命周期状态机。
-- 不改变数据库写入策略。
-- 不修改设置页显示。
-- 不做长时间桌面验收。
-
----
-
-### 阶段 2｜生命周期状态机与关闭结算
-
-#### 目标
-
-统一启动、激活、checkpoint、失活、停止和关闭流程，消除竞态、重复计时器、任务积压与退出丢失。
-
-#### 预计允许修改
-
-- src/services/usageTracking.ts
-- src/hooks/useUsageTracking.ts
-- tests/usage/usageTracking.lifecycle.test.ts
-- AI_IMPLEMENTATION_PLAN.md
-
-#### 实施要求
-
-1. 先读取 desktop-services 契约并用知识图确认实际调用链。
-2. 用明确状态表达 stopped、inactive、active、stopping；避免多个布尔变量组合出非法状态。
-3. 所有 activate、deactivate、checkpoint、clear 前结算和 close 操作进入同一可推理的串行边界；禁止嵌套等待同一队列。
-4. 优先采用“本次 checkpoint 完成后再安排下一次”的调度方式，避免 setInterval 在写入变慢时无界排队。
-5. 焦点、可见性和最小化事件只提交状态变化，不并发执行多条计时流程。
-6. 恢复 onCloseRequested：阻止默认关闭、只结算一次、等待写入、解除监听并 destroy。
-7. 保持 StrictMode start/stop/start 只存在一套监听器和一个调度器。
-8. 修复现有 3 项失败，并补充快速失焦/聚焦、慢窗口查询、重复停止和重复关闭测试。
-
-#### 验收标准
-
-- [x] 生命周期测试全部通过。
-- [x] 任意时刻最多一个 checkpoint 调度器。
-- [x] 写入变慢时不会持续累积定时任务。
-- [x] 失焦和最小化后不再计时。
-- [x] 重新聚焦后能恢复计时。
-- [x] 关闭前最后一段只写入一次。
-- [x] StrictMode 不产生重复监听或重复计时。
-
----
-
-### 阶段 3｜数据库失败恢复与可观察状态
-
-#### 目标
-
-让启动、窗口查询和 SQLite 写入失败可定位、可重试，并保证未写时长不丢失。
-
-#### 预计允许修改
-
-- src/services/usageTracking.ts
-- src/hooks/useUsageTracking.ts
-- src/services/database/db.ts，仅在证据证明数据库就绪通知不可避免时
-- tests/usage/usageTracking.lifecycle.test.ts
-- tests/usage/usageTracking.test.ts
-- AI_IMPLEMENTATION_PLAN.md
-
-#### 实施要求
-
-1. 读取 database 和 desktop-services 契约。
-2. 启动失败不得仅依赖 ready 变化；在安全事件或明确重试入口恢复，但不得无界高频重试。
-3. 分别记录 focused、visible、minimized 查询失败，不得把错误伪装成正常 inactive。
-4. 保守停止统计期间保留状态，并在下一次合法窗口事件重新评估。
-5. SQLite 写入失败保留 pending，暴露匿名错误状态，并在后续 checkpoint 或手动刷新时重试。
-6. 写入成功后只扣除已确认整秒，保留写入期间新增量和不足一秒余数。
-7. 清空数据与写入共用串行边界，禁止旧的在途写入在清空后重新写回。
-
-#### 验收标准
-
-- [x] 一次启动失败不会让本次应用生命周期永久失效。
-- [x] 单个窗口 API 失败可定位且后续可以恢复。
-- [x] SQLite 失败后 pending 不丢失、不重复。
-- [x] 恢复写入后数据库累计值正确。
-- [x] 清空后旧写入不会回流。
-- [x] 不记录用户内容、路径或行为明细。
-
----
-
-### 阶段 4｜设置页状态与短时显示
-
-#### 目标
-
-消除“正在统计但显示 0”和“保存失败却无反馈”的误导，不新增统计范围或复杂 UI。
-
-#### 预计允许修改
-
-- src/features/settings/UsageActivity.tsx
-- src/services/usageTracking.ts，仅暴露阶段 3 已定义的最小状态
-- src/styles/global.css，仅必要的现有组件样式
-- 与 UsageActivity 直接相关的定向测试
-- AI_IMPLEMENTATION_PLAN.md
-
-#### 实施要求
-
-1. 读取 ui 契约。
-2. 不足一分钟显示“少于 1 分钟”或现有视觉能容纳的秒级提示。
-3. 最小区分：正在统计、当前未激活、保存失败。
-4. 手动刷新必须先结算当前有效区间，再加载数据库与 pending。
-5. 组件卸载后取消订阅并使在途查询结果失效。
-6. 不改热力图视觉方向，不引入新依赖或新弹窗体系。
-
-#### 验收标准
-
-- [x] 有效计时不足一分钟时不再误显示为完全没有统计。
-- [x] inactive 与保存失败可区分。
-- [x] 手动刷新不重复累计。
-- [x] 设置页反复挂载不会泄漏监听器或异步更新。
-- [x] 默认窗口宽度通过头部控件换行和状态文本约束避免新增横向溢出；真实窗口仍由阶段 5 复核。
-
----
-
-### 阶段 5｜真实 Tauri 验收与收尾
-
-#### 目标
-
-使用新鲜 Tauri 进程确认真实功能、持久化和内存稳定性；自动化检查不能代替本阶段。
-
-#### 执行前准备
-
-1. 完整关闭当前仓库的 GuanMo、Tauri、Vite、Cargo 和相关 WebView2 进程。
-2. 核对端口 1420、进程命令行、工作区、分支和 HEAD。
-3. 设置 WebView2 调试参数并确认 CDP 页面来自当前实例。
-4. 使用测试统计数据；不得读取或清空真实用户数据库。
-
-#### 真实验收矩阵
-
-1. [x] 聚焦运行约 70 秒：数据库与 UI 增加约 70 秒；用户确认通过。
-2. [x] 失焦 30 秒：不增加；用户确认通过。
-3. [x] 重新聚焦 40 秒：继续增加；用户确认通过。
-4. [x] 最小化 30 秒：不增加；用户确认通过。
-5. [x] 未满 30 秒时手动刷新：立即结算有效增量；用户确认通过。
-6. [x] 关闭并重启：累计数据仍存在，关闭前末段不丢失；用户确认通过。
-7. [x] 开关关闭：立即结算，关闭期间不增加；重新开启后恢复；用户确认通过。
-8. [x] 模拟一次 SQLite 写入失败：pending 保留，恢复后只补写一次；用户确认通过。
-9. [x] 连续启用运行至少 10 分钟：checkpoint 持续推进，WebView2 与主进程内存不呈无上限单调增长；用户确认时长记录和内存占用正常。
-10. [x] 设置页默认宽度：无横向滚动，状态和刷新控件可用；用户确认通过。
-
-#### 完成标准
-
-- [x] 上述矩阵全部通过；环境为独立 identifier `com.guanmo.app.codex-test` 的隔离 Tauri 实例，页面来自当前工作区，使用匿名测试数据库；用户确认各步骤无异常。
-- [x] 没有 checkpoint 时刻的突发无限分配。
-- [x] usage_daily 增量与有效前台时间在调度误差范围内一致；聚焦运行期间 UI 与隔离 SQLite 曾对账为 150 秒，用户确认完整复测通过。
-- [x] 定向 usage 测试、typecheck、定向 ESLint、desktop build 和 git diff --check 通过。
-- [x] 没有遗留调试开关、误导日志或仅为复现添加的代码。
-- [x] 真实桌面长时间运行已完成，满足“未完成时不得标记任务完成”的限制。
+- 目标：用匿名批量成果和隔离 SQLite 验证分页、搜索、筛选、保存、删除及既有来源打开流程，完成正式上线前交接。
+- 验收：超过一页的数据无重复/遗漏；中文、英文、来源和原问题均可命中；组合筛选总数正确；快速输入、跨页、保存和删除行为稳定；本地/Web 来源仍可打开。
+- 检查：阶段 4/5 定向测试、typecheck、定向 ESLint、desktop build、真实 Tauri 验收。
+- 限制：不得读取或修改默认用户数据库；自动化不能替代真实桌面结果；不得提交或执行远程操作。
 
 ## 当前阶段详细任务
 
-### 当前目标
+### 目标
 
-只完成阶段 5：使用新鲜 Tauri 进程完成真实功能、持久化、默认宽度和长时间内存验收，并收尾本计划。不得用自动化测试替代真实桌面证据。
+只完成阶段 6：在隔离的新鲜 Tauri 实例中验收阶段 4/5 的分页、搜索、筛选、保存、删除和来源打开，不修改业务代码。
 
 ### 允许修改
 
-- AI_IMPLEMENTATION_PLAN.md
+- 本文件
+- 仅使用隔离应用数据、匿名 Markdown 和临时 SQLite；如发现业务缺陷，退回阶段 4/5 处理
 
-### 实施顺序
+### 实施任务
 
-1. 关闭并核对当前仓库的 GuanMo/Tauri/Vite/Cargo/WebView2 进程、端口 1420、工作区和 HEAD。
-2. 运行 `npm run build:desktop`；失败时只修复本任务直接引入的问题，不扩大范围。
-3. 启动新鲜桌面实例，确认调试页面来自当前工作区；仅使用匿名测试数据，不读取或清空真实数据库。
-4. 按真实验收矩阵记录聚焦、失焦、重新聚焦、最小化、刷新、关闭重启、开关、写入失败恢复、默认宽度和至少 10 分钟内存结果。
-5. 运行最终定向 usage 测试、typecheck、定向 ESLint 和 git diff --check。
-6. 根据真实结果更新顶部状态、阶段 5 矩阵和阶段历史；所有完成标准通过后才可标记项目完成。
+1. 使用独立 identifier 启动新鲜 Tauri 开发实例，确认不读取或修改默认用户数据库。
+2. 准备注入或生成超过一页的匿名阅读成果，验证跨页无重复、无遗漏，稳定排序和页边界正确。
+3. 验证中文、英文、标题、正文、原问题和可见来源信息搜索，以及类型与关键词组合筛选的总数。
+4. 验证搜索快速输入、筛选回第一页、上一页/下一页、保存后提示、跨页保存和末页删除自动回退。
+5. 验证既有本地/Web/混合来源展示与打开行为仍可用；记录真实桌面结果。
 
 ### 验收标准
 
-- [x] 真实验收矩阵全部通过并写回环境、步骤和结果。
-- [x] 关闭和重启后累计数据保持，关闭前末段不丢失。
-- [x] usage_daily 增量与有效前台时间在调度误差范围内一致。
-- [x] 至少 10 分钟运行期间 checkpoint 持续推进，WebView2 与主进程内存无无上限单调增长。
-- [x] 默认窗口宽度无横向滚动，状态和刷新控件可用。
-- [x] 定向 usage 测试、typecheck、定向 ESLint、desktop build 和 git diff --check 通过。
-- [x] 已完成真实桌面长时间运行后标记项目完成。
+- [x] 超过一页的数据跨页无重复、无遗漏，页边界和稳定排序正确。
+- [x] 中文、英文、标题、正文、原问题和可见来源信息均可命中；组合筛选总数正确。
+- [x] 快速输入、筛选回第一页、翻页、跨页保存和末页删除在真实桌面稳定。
+- [x] 本地、Web、混合来源仍可查看与打开。
+- [x] 自动化回归与真实 Tauri 结果均已记录，未触碰默认用户数据库。
 
-### 当前验收结果
+### 检查命令
 
-- 隔离 Tauri 实例已验证来自当前工作区，使用独立 identifier 和测试数据库，不读取默认用户数据库。
-- 隔离实例聚焦运行证据有效（UI 与 SQLite 均为 150 秒）；解锁后用户确认重新完成失焦、聚焦、最小化、刷新、关闭重启、开关、SQLite 失败恢复、默认宽度和长时间运行验收，均无异常。
-- 用户确认运行期间时长记录正常，内存占用正常；未读取或清空默认用户数据库。
+~~~bash
+npx vitest run tests/agent/readingArtifactsStore.test.ts tests/agent/aiPanelInteractions.test.tsx tests/agent/readingArtifactsPagination.test.ts
+npm run typecheck
+npx eslint src/stores/readingArtifactsStore.ts src/components/ai/AiPanel.tsx tests/agent/readingArtifactsStore.test.ts tests/agent/aiPanelInteractions.test.tsx
+npm run build:desktop
+git diff --check -- AI_IMPLEMENTATION_PLAN.md src/services/database/readingArtifacts.ts src/stores/readingArtifactsStore.ts src/components/ai/AiPanel.tsx tests/agent/readingArtifactsPagination.test.ts tests/agent/readingArtifactsStore.test.ts tests/agent/aiPanelInteractions.test.tsx
+~~~
 
 ### 禁止事项
 
-- 不读取或清空真实用户数据库；仅使用匿名测试数据。
-- 不执行全量测试或全量 E2E。
-- 不提交、不推送、不打 tag、不创建 PR 或 Release。
-- 不删除任何文件。
+- 不读取、清空或修改默认用户数据库。
+- 不修改业务代码；发现缺陷时记录并退回对应阶段。
+- 不把自动化检查或普通浏览器结果冒充真实 Tauri 验收。
+- 不自动提交、推送、打 tag 或创建 Release。
 
 ## 阶段历史
 
-### 阶段 4｜设置页状态与短时显示
+### 阶段 1｜阅读成果参考来源
 
 - 状态：已完成
-- 完成内容：`formatDuration` 对正数秒级时长显示“少于 1 分钟”；设置页展示运行中、未激活、窗口状态异常、读失败和保存失败状态；手动刷新先执行 checkpoint 再读取数据库与 pending；成功读操作清除数据库读错误；组件卸载取消快照订阅并使旧查询结果失效；头部控件支持换行；新增 UsageActivity 定向测试
-- 验证结果：UsageActivity 与 usageTracking 定向测试共 74/74 通过；typecheck、定向 ESLint、git diff --check 通过；CSS 文件按配置被 ESLint 忽略且无错误
-- 遗留问题：真实 Tauri 验收、默认窗口宽度实际检查和长时间内存验证留给阶段 5
+- 完成内容：新增稳定的本地/Web 来源快照、顺序去重和安全解码；四类成果写入 `structured_content.references` 并保留主要本地锚点；成果详情统一展示和打开参考来源；旧成果兼容
+- 验证结果：5 个定向测试文件共 58 项通过；runtime schema、typecheck、定向 ESLint、`git diff --check` 通过
+- 遗留问题：真实桌面来源交互验收留给阶段 3
 
-### 阶段 5｜真实 Tauri 验收与收尾
+### 阶段 2｜Front Matter 预览测量修复
 
 - 状态：已完成
-- 已完成：desktop build 与 bundle budget 通过；为避免统计服务进入首屏入口，启动 Hook 改为按需加载，功能入口保持不变；隔离 Tauri/Vite/WebView2/CDP 启动证据已确认来自当前工作区；聚焦运行约 150 秒并与隔离 SQLite 对账；用户解锁后确认真实验收矩阵全部通过，时长记录和内存占用正常
-- 验收结果：有效失焦、重新聚焦、最小化、刷新、关闭重启、开关、SQLite 失败恢复、默认宽度和至少 10 分钟内存矩阵均通过
-- 验证结果：74 项定向测试通过；`npm run typecheck`、定向 ESLint、`npm run build:desktop`、`git diff --check` 均通过；desktop bundle budget 通过
+- 完成内容：宽度变化后在绘制前强制重测已挂载块；Front Matter 使用按源码行数计算的非零保守估算；补充最小复现、连续宽度变化和标签往返回归
+- 验证结果：3 个定向测试文件共 39 项通过；typecheck、定向 ESLint、desktop build/体积预算、`git diff --check` 通过
+- 遗留问题：真实 Tauri 宽度切换验收留给阶段 3
+
+### 阶段 3｜真实桌面验收与交接
+
+- 状态：已完成
+- 完成内容：用户确认真实 Tauri 中本地、Web、混合来源可查看与打开；Front Matter 最小复现默认、100%、窄宽度和标签往返无重叠；验收使用独立 identifier、匿名内容和隔离 SQLite
+- 验证结果：用户手动真实桌面验收通过；自动化检查结果沿用阶段 1/2 记录
 - 遗留问题：无
 
-### 阶段 3｜数据库失败恢复与可观察状态
+### 阶段 4｜分页与搜索数据契约
 
 - 状态：已完成
-- 完成内容：新增匿名错误状态；窗口 focused/visible/minimized 查询逐字段失败识别与恢复；启动数据库失败有限重试；SQLite 读写错误可观察；pending 失败保留并可重试；flush、结算和清空共用串行边界
-- 验证结果：usageTracking.test.ts 与 usageTracking.lifecycle.test.ts 共 71/71 通过；typecheck、定向 ESLint、git diff --check 通过
-- 遗留问题：设置页尚未消费新的 error 状态和短时显示，真实 Tauri 验收留给阶段 5
+- 完成内容：新增参数化分页查询 API，列表与总数复用类型、状态和关键词条件；覆盖标题、正文、原问题与可见来源信息；特殊字符按普通文本处理；加入稳定排序和分页边界保护
+- 验证结果：3 个定向测试文件共 61 项通过；typecheck、定向 ESLint、`git diff --check` 通过
+- 遗留问题：store/UI 接入与真实桌面验收留给阶段 5/6
 
-### 阶段 2｜生命周期状态机与关闭结算
-
-- 状态：已完成
-- 完成内容：引入 stopped/inactive/active/stopping 状态；统一生命周期串行队列；checkpoint 改为完成后再调度；焦点/可见性事件串行化；恢复 onCloseRequested、preventDefault、最终结算、解除监听和 destroy；补充快速焦点与慢写入回归
-- 验证结果：usageTracking.test.ts 与 usageTracking.lifecycle.test.ts 共 69/69 通过；typecheck、定向 ESLint、git diff --check 通过
-- 遗留问题：数据库失败的可观察状态与恢复机制留给阶段 3；真实 Tauri 验收留给阶段 5
-
-### 阶段 1｜时间计算止血与可复现基线
+### 阶段 5｜分页与搜索交互闭环
 
 - 状态：已完成
-- 完成内容：对 splitIntervalByMidnight 统一采用 Math.trunc 整数毫秒；拒绝非有限和超出 Date 范围输入；增加最大分段保护；每轮校验 cursor 严格前进；补充小数、小于 1ms、非法值、长区间和跨多日测试
-- 验证结果：usageTracking.test.ts 35/35 通过；typecheck 通过；定向 ESLint 通过；git diff --check 通过；生命周期测试保持 29/32 通过，3 项关闭监听相关失败留给阶段 2
-- 遗留问题：guides/engineering-execution.md 缺失；真实 Tauri 桌面验收和长时间内存验证留给阶段 5
+- 完成内容：store 接入固定 20 条服务端分页、组合筛选、短防抖搜索和过期响应保护；面板显示准确总数、页码、分页按钮和两类空状态；保存按 ID 回读，删除后刷新并自动收敛末页
+- 验证结果：31 个阶段 5 定向测试通过；typecheck、定向 ESLint、desktop build/体积预算、`git diff --check` 通过
+- 遗留问题：无
+
+### 阶段 6｜隔离桌面上线验收与交接
+
+- 状态：已完成
+- 完成内容：使用独立 identifier `com.guanmo.app.codex-stage6-20260811`、隔离 SQLite 和匿名 Markdown 数据完成真实 Tauri 验收；45 条匿名成果按每页 20 条稳定分页，覆盖三页无重复/遗漏；验证中文、英文、标题、正文、原问题和可见来源信息搜索，类型组合筛选、快速输入、筛选回第一页、翻页、保存和末页删除回退；本地、Web、混合来源均可查看并打开
+- 验证结果：自动化 3 个定向测试文件 31/31 通过；`npm run typecheck`、定向 ESLint、`npm run build:desktop`（体积预算通过）、`git diff --check` 通过。真实桌面中保存后隔离库由 45 条增至 46 条并可在末页定位；删除末页 6 条后总数收敛为 40 条、页码由第 3/3 页回退至第 2/2 页；默认用户数据库未作为验收目标
+- 遗留问题：无；验收过程中未修改业务代码、未提交、未推送
 
 ## 新窗口执行提示词
 
 ~~~text
-请使用 staged-task-handoff Skill，完整读取仓库根目录的
-AGENTS.md 和 AI_IMPLEMENTATION_PLAN.md。
-
-只执行当前阶段“阶段 5｜真实 Tauri 验收与收尾”。
-使用独立 identifier 的隔离 Tauri 数据目录，不读取默认用户数据库。
-
-开始前执行 git status --short，并核对当前工作区、HEAD、
-端口 1420 和相关进程。现有修改和未跟踪文件全部视为用户内容。
-生命周期或资源探索先使用 code-review-graph 最小查询。
-
-运行计划列出的真实验收矩阵、定向测试和检查，
-根据真实结果更新 AI_IMPLEMENTATION_PLAN.md 的当前状态与阶段历史。
-
-如果 Windows 会话处于锁屏，停止真实焦点验收并等待人工解锁，
-不得把后台继续计时或自动化 DOM 证据当作失焦通过。
-
-不要读取或清空真实用户数据库。
-不要提交、推送、打 tag、创建 PR 或 Release。
+请使用 staged-task-handoff Skill，完整读取 AGENTS.md 和 AI_IMPLEMENTATION_PLAN.md，
+根据顶部当前状态只执行当前阶段，不重复已完成内容，不提前实施后续阶段。
+完成后执行本阶段定向检查，并更新当前状态与阶段历史。
+不要提交或推送代码。
 ~~~

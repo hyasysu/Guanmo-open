@@ -55,8 +55,18 @@ describe('buildAssistantMessageMarkdown', () => {
     const md = buildAssistantMessageMarkdown({ content: '这是匿名正文。' })
     expect(md).toContain('# AI 阅读回复')
     expect(md).toContain('这是匿名正文。')
+    expect(md).not.toContain('ai_question:')
     expect(md).not.toContain('## 来源')
     expect(md).not.toContain('---')
+  })
+
+  it('把多行用户提问写入 YAML Frontmatter，分隔符仍保持缩进', () => {
+    const md = buildAssistantMessageMarkdown({
+      content: '匿名回答',
+      question: '请对比两个方案\r\n---\r\n并说明理由',
+    })
+    expect(md).toMatch(/^---\nai_question: \|-\n[ ]{2}请对比两个方案\n[ ]{2}---\n[ ]{2}并说明理由\n---\n\n# AI 阅读回复/)
+    expect(md).toContain('\n\n匿名回答\n')
   })
 
   it('本地来源只写文件名、标题路径与行号，不写绝对路径', () => {
@@ -100,13 +110,14 @@ describe('saveAssistantMessageAsMarkdown', () => {
       content: '# AI 阅读回复\n\n正文',
     })
 
-    const result = await saveAssistantMessageAsMarkdown('正文', [localSource])
+    const result = await saveAssistantMessageAsMarkdown('正文', [localSource], '对应的匿名问题')
 
     expect(result.saved).toBe(true)
     expect(saveFileAs).toHaveBeenCalledOnce()
     // 写入内容包含正文与来源，但不包含绝对路径
     const written = vi.mocked(saveFileAs).mock.calls[0][0]
     expect(written).toContain('正文')
+    expect(written).toContain('ai_question: |-\n  对应的匿名问题')
     expect(written).toContain('anonymous-note.md')
     expect(written).not.toContain('C:\\Temp')
     expect(addTabMock).toHaveBeenCalledWith(

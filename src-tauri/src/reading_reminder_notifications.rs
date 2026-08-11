@@ -1,11 +1,15 @@
 use serde::Deserialize;
 
+#[cfg(any(windows, test))]
 const REMINDER_GROUP: &str = "guanmo-reminder";
+#[cfg(windows)]
 const APP_USER_MODEL_ID: &str = "com.guanmo.app";
+#[cfg(any(windows, test))]
 const WINDOWS_EPOCH_OFFSET_MS: i64 = 11_644_473_600_000;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub struct ScheduleReadingReminderNotificationInput {
     id: i32,
     title: String,
@@ -13,6 +17,7 @@ pub struct ScheduleReadingReminderNotificationInput {
     due_at_utc: i64,
 }
 
+#[cfg(any(windows, test))]
 fn validate_id(id: i32) -> Result<(), String> {
     if id <= 0 {
         return Err("notification_id_invalid".into());
@@ -20,6 +25,7 @@ fn validate_id(id: i32) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(any(windows, test))]
 fn validate_text(value: &str, max_chars: usize, error: &str) -> Result<(), String> {
     let trimmed = value.trim();
     if trimmed.is_empty()
@@ -33,6 +39,7 @@ fn validate_text(value: &str, max_chars: usize, error: &str) -> Result<(), Strin
     Ok(())
 }
 
+#[cfg(any(windows, test))]
 fn windows_delivery_time(due_at_utc: i64, now_utc: i64) -> Result<i64, String> {
     if due_at_utc <= now_utc {
         return Err("reminder_due_time_invalid".into());
@@ -43,6 +50,7 @@ fn windows_delivery_time(due_at_utc: i64, now_utc: i64) -> Result<i64, String> {
         .ok_or_else(|| "reminder_due_time_overflow".into())
 }
 
+#[cfg(any(windows, test))]
 fn escape_xml_text(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for character in value.chars() {
@@ -58,6 +66,7 @@ fn escape_xml_text(value: &str) -> String {
     escaped
 }
 
+#[cfg(any(windows, test))]
 fn reminder_xml(title: &str, body: &str) -> String {
     format!(
         "<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>",
@@ -66,6 +75,7 @@ fn reminder_xml(title: &str, body: &str) -> String {
     )
 }
 
+#[cfg(any(windows, test))]
 fn belongs_to_reminder_group(group: &str, id: &str, expected_id: Option<i32>) -> bool {
     if group != REMINDER_GROUP {
         return false;

@@ -165,6 +165,7 @@ export function EditorArea() {
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize)
   const editorLineHeight = useSettingsStore((s) => s.editor.lineHeight)
   const editorFontFamily = useSettingsStore((s) => s.editor.fontFamily)
+  const previewFontFamily = useSettingsStore((s) => s.editor.previewFontFamily)
   const editorWordWrap = useSettingsStore((s) => s.editor.wordWrap)
   const editorLineNumbers = useSettingsStore((s) => s.editor.lineNumbers)
   const syncScroll = useSettingsStore((s) => s.editor.syncScroll)
@@ -1381,7 +1382,7 @@ export function EditorArea() {
     }
     // 动态导入：markdownBlocks 仅在块提交时需要，避免进入入口 chunk（阶段 4 定位重构后 bundle budget）
     const { replaceMarkdownBlock } = await import('@/services/markdownBlocks')
-    const result = replaceMarkdownBlock(tab.content, request.block, request.draft)
+    const result = await replaceMarkdownBlock(tab.content, request.block, request.draft)
     if (result.status === 'conflict') {
       toast.warning('该 Markdown 块已被其他操作修改，当前草稿未覆盖原文。')
       return result
@@ -1869,6 +1870,7 @@ export function EditorArea() {
               <div
                 key={`left-${activeTab?.id ?? 'none'}`}
                 ref={leftPreviewRef}
+                data-product-tour="preview-area"
                 className={`${leftPreviewVisible ? 'min-w-0 flex-1' : 'hidden'} ${viewMode === 'dual-preview' ? 'border-r border-gm-border-subtle' : ''} ${viewMode === 'edit-preview' ? 'gm-preview-heading-clickable' : ''} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} ${isFullscreen && viewMode === 'edit-preview' ? 'gm-fullscreen-content-split-right' : isFullscreen && viewMode === 'dual-preview' ? 'gm-fullscreen-content-split-left' : ''} ${fullscreenTocExpanded && viewMode !== 'dual-preview' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-y-auto overflow-x-hidden select-text bg-gm-surface relative`}
                 style={leftPreviewMasked ? { visibility: 'hidden' } : undefined}
                 aria-hidden={!leftPreviewVisible}
@@ -1882,7 +1884,7 @@ export function EditorArea() {
                   filePath={leftPreviewRenderRef.current.filePath}
                   fontSize={editorFontSize}
                   lineHeight={editorLineHeight}
-                  fontFamily={editorFontFamily}
+                  fontFamily={previewFontFamily}
                   wordWrap={editorWordWrap}
                   documentKey={activeTab?.id}
                   documentVersion={getContentSignature(activeTab?.content || '')}
@@ -1928,7 +1930,7 @@ export function EditorArea() {
                   filePath={rightTab.filePath}
                   fontSize={editorFontSize}
                   lineHeight={editorLineHeight}
-                  fontFamily={editorFontFamily}
+                  fontFamily={previewFontFamily}
                   wordWrap={editorWordWrap}
                   documentKey={rightTab.id}
                   documentVersion={getContentSignature(rightTab.content)}

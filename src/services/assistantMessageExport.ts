@@ -14,8 +14,16 @@ import { describeFileOperationError } from '@/services/fileOperationErrors'
 
 export interface AssistantMessageExportInput {
   content: string
+  question?: string
   sources?: ChatMessageSource[]
   timestamp?: number
+}
+
+function formatQuestionFrontmatter(question: string | undefined): string | null {
+  const normalized = question?.trim().replace(/\r\n?/g, '\n')
+  if (!normalized) return null
+  const indented = normalized.split('\n').map((line) => `  ${line}`).join('\n')
+  return `---\nai_question: |-\n${indented}\n---`
 }
 
 function formatExportDate(timestamp: number): string {
@@ -52,8 +60,11 @@ function formatSource(source: ChatMessageSource): string {
  * 不写入绝对路径、聊天隐私或内部调试字段；无来源时不输出来源区块。
  */
 export function buildAssistantMessageMarkdown(input: AssistantMessageExportInput): string {
-  const { content, sources = [], timestamp } = input
-  const sections: string[] = ['# AI 阅读回复']
+  const { content, question, sources = [], timestamp } = input
+  const sections: string[] = []
+  const questionFrontmatter = formatQuestionFrontmatter(question)
+  if (questionFrontmatter) sections.push(questionFrontmatter)
+  sections.push('# AI 阅读回复')
 
   if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
     const dateStr = formatExportDate(timestamp)
@@ -82,8 +93,9 @@ export function buildAssistantMessageMarkdown(input: AssistantMessageExportInput
 export async function saveAssistantMessageAsMarkdown(
   content: string,
   sources?: ChatMessageSource[],
+  question?: string,
 ): Promise<{ saved: boolean }> {
-  const markdown = buildAssistantMessageMarkdown({ content, sources, timestamp: Date.now() })
+  const markdown = buildAssistantMessageMarkdown({ content, question, sources, timestamp: Date.now() })
   try {
     const result = await saveFileAs(markdown)
     if (!result) return { saved: false }

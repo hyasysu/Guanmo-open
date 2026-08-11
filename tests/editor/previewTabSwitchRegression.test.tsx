@@ -287,7 +287,16 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
       // When switching tabs, the preview container's key changes, causing a remount.
       // The new container starts with scrollTop=0, so leftPreviewMasked should be false.
       // The restore useLayoutEffect fires because activePreview.version changes.
-      const tabA = anonymousTab('tab-a', '# 文档 A\n\n' + '段落 A\n'.repeat(40))
+      const tabA = anonymousTab('tab-a', [
+        '---',
+        'ai_question: |-',
+        '  联网搜索一下广东什么时候才会正式进入秋天',
+        '---',
+        '',
+        '# 文档 A',
+        '',
+        '段落 A\n'.repeat(40),
+      ].join('\n'))
       const tabB = anonymousTab('tab-b', '# 文档 B\n\n段落 B\n'.repeat(40))
       setupEditor([tabA, tabB], 'tab-a', 'preview')
       const { container } = render(<EditorArea />)
@@ -316,6 +325,12 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
       expect(previewAfter!.style.visibility).not.toBe('hidden')
       expect(container.textContent).toContain('文档 A')
       expect(container.textContent).toContain('段落 A')
+      const blocks = previewAfter!.querySelectorAll<HTMLElement>('[data-md-block-index]')
+      expect(blocks[0]).toHaveAttribute('data-md-block-type', 'frontmatter')
+      expect(blocks[0]).toHaveAttribute('data-md-line', '1')
+      expect(blocks[0]).toHaveAttribute('data-md-end-line', '5')
+      expect(blocks[1]).toHaveAttribute('data-md-block-type', 'heading')
+      expect(blocks[1]).toHaveAttribute('data-md-line', '6')
     })
 
     it('three-way tab switch preserves preview visibility', () => {

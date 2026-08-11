@@ -16,6 +16,7 @@ export interface Tab {
   originalContent: string
   modified: boolean
   pinned?: boolean
+  ephemeral?: boolean
 }
 
 export interface RecentFile {
@@ -104,6 +105,7 @@ function dedupeRecentFiles(files: RecentFile[] = []) {
 function dedupeRestoredTabs(tabs: Tab[] = []) {
   const restored: Tab[] = []
   for (const tab of tabs) {
+    if (tab.ephemeral) continue
     // 确保 originalContent 存在（兼容旧数据）
     const hydratedTab = {
       ...tab,
@@ -569,7 +571,7 @@ export const useEditorStore = create<EditorState>()(
       partialize: (state) => ({
         recentFiles: state.recentFiles,
         favorites: state.favorites,
-        tabs: state.tabs.map(compactPersistedTab),
+        tabs: state.tabs.filter((tab) => !tab.ephemeral).map(compactPersistedTab),
         activeTabId: state.activeTabId,
         viewMode: state.viewMode,
         rightPaneTabId: state.rightPaneTabId,

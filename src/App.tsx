@@ -31,6 +31,8 @@ import { singletonManager, SINGLETON_IDS } from './services/singletonPromise'
 import { READING_REMINDER_FEATURE_AVAILABLE } from './services/readingReminderFeature'
 import { eventMarker } from './services/eventMarker'
 import './styles/tokens/official-light.css'
+import { requestProductTour } from './features/productTour/productTourEvents'
+import { hasShownProductTourInvite, markProductTourInviteShown } from './features/productTour/productTourStorage'
 
 syncDocumentTheme(useSettingsStore.getState().appearance.themeId)
 
@@ -301,6 +303,19 @@ function App() {
   const themeId = useSettingsStore((s) => s.appearance.themeId)
   useExternalFileOpen(appReady)
   useUsageTracking(appReady)
+
+  useEffect(() => {
+    if (!appReady || !isTauri() || hasShownProductTourInvite()) return
+    markProductTourInviteShown()
+    toast.show({
+      id: 'product-tour-invite',
+      title: '欢迎使用观墨',
+      message: '用 1 分钟了解文件、阅读模式与 AI 助手',
+      type: 'info',
+      duration: null,
+      actions: [{ label: '开始导览', primary: true, onClick: requestProductTour }],
+    })
+  }, [appReady])
 
   // 调试用：控制台调用 __testLegacyModal() 唤起旧版数据检测弹窗
   useEffect(() => {

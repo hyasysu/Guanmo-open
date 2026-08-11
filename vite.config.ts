@@ -48,6 +48,10 @@ export default defineConfig(({ mode }) => ({
                 '@codemirror/lang-markdown',
                 path.resolve(__dirname, './src/services/editorCodeLanguages.ts'),
               ],
+              'react-core': [
+                'react',
+                'react-dom',
+              ],
             },
       },
     },

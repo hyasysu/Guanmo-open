@@ -62,7 +62,7 @@ export function StatusBar() {
         </>
       )}
 
-      <StatusItem className="gap-1.5 cursor-pointer" onClick={toggleAiPanel}>
+      <StatusItem dataTour="ai-assistant" className="gap-1.5 gm-pointer-cursor" onClick={toggleAiPanel}>
         <div className={`w-2 h-2 rounded-full ${STATUS_MAP[aiStatus]?.color ?? STATUS_MAP.unchecked.color}`} />
         <span>{STATUS_MAP[aiStatus]?.label ?? STATUS_MAP.unchecked.label}</span>
       </StatusItem>
@@ -74,14 +74,18 @@ function StatusItem({
   children,
   className = '',
   onClick,
+  dataTour,
 }: {
   children: React.ReactNode
   className?: string
   onClick?: () => void
+  dataTour?: string
 }) {
   return (
     <span
       className={`flex items-center gap-1.5 select-none cursor-default hover:text-gm-text transition-colors ${className}`}
+      data-product-tour={dataTour}
+      style={{ cursor: onClick ? 'pointer' : 'default' }}
       onClick={onClick}
     >
       {children}

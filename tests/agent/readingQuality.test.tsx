@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
-import { ChatBubble } from '@/components/ai/AiPanel'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { buildUserQuestionMap, ChatBubble } from '@/components/ai/AiPanel'
 import {
   createContextMeta,
   decodeReadingScope,
@@ -21,6 +21,10 @@ import type { ContextTag } from '@/types/contextTag'
 
 const selectionContext = { hasSelection: true, hasContextTags: true }
 const fileContext = { hasOpenFile: true, hasContextTags: true }
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 function resultWithSteps(steps: AgentResult['steps'], sourceCount = 0): AgentResult {
   return {
@@ -173,5 +177,74 @@ describe('阅读来源展示', () => {
       startLine: 2,
       endLine: 4,
     }))
+  })
+})
+
+describe('保存回复交互', () => {
+  it('仅按消息 ID 建立用户提问映射并优先保存用户可见文本', () => {
+    const questions = buildUserQuestionMap([
+      { id: 'user-1', role: 'user', content: '包含注入上下文', displayContent: '第一个问题' },
+      { id: 'system-1', role: 'system', content: '系统消息' },
+      { id: 'user-2', role: 'user', content: '第二个问题' },
+    ])
+    expect(questions.get('user-1')).toBe('第一个问题')
+    expect(questions.get('user-2')).toBe('第二个问题')
+    expect(questions.get('system-1')).toBeUndefined()
+    expect(questions.get('missing')).toBeUndefined()
+  })
+
+  it('鼠标移出后延迟 700ms 隐藏，重新进入会取消隐藏', () => {
+    vi.useFakeTimers()
+    render(<ChatBubble
+      role="assistant"
+      content="匿名回答"
+      isLast={false}
+      streaming={false}
+      onSaveAsMarkdown={vi.fn()}
+    />)
+
+    const saveButton = screen.getByRole('button', { name: '保存回复' })
+    const controls = saveButton.parentElement!
+    const message = saveButton.closest('.animate-slideInUp')!
+    expect(controls.className).toContain('opacity-0')
+
+    fireEvent.pointerEnter(message)
+    expect(controls.className).toContain('opacity-100')
+    fireEvent.pointerLeave(message)
+    act(() => vi.advanceTimersByTime(699))
+    expect(controls.className).toContain('opacity-100')
+    fireEvent.pointerEnter(message)
+    act(() => vi.advanceTimersByTime(1))
+    expect(controls.className).toContain('opacity-100')
+
+    fireEvent.pointerLeave(message)
+    act(() => vi.advanceTimersByTime(700))
+    expect(controls.className).toContain('opacity-0')
+  })
+
+  it('菜单项具有悬停和键盘焦点高亮，并包含条件批注项', () => {
+    render(<ChatBubble
+      role="assistant"
+      content="匿名回答"
+      isLast={false}
+      streaming={false}
+      sources={[{
+        kind: 'local',
+        filePath: 'C:\\Temp\\anonymous.md',
+        fileName: 'anonymous.md',
+        startLine: 2,
+        endLine: 4,
+      }]}
+      onSaveAsMarkdown={vi.fn()}
+      onSaveAsArtifact={vi.fn()}
+    />)
+
+    fireEvent.click(screen.getByRole('button', { name: '保存回复' }))
+    expect(screen.getByRole('button', { name: '保存回复' })).toHaveAttribute('aria-haspopup', 'menu')
+    expect(screen.getAllByRole('menuitem')).toHaveLength(5)
+    for (const item of screen.getAllByRole('menuitem')) {
+      expect(item.className).toContain('hover:bg-gm-surface-hover')
+      expect(item.className).toContain('focus-visible:bg-gm-surface-hover')
+    }
   })
 })

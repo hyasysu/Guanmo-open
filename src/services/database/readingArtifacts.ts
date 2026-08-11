@@ -8,8 +8,9 @@
  * - 删除成果不会改动原文。
  */
 import { getDatabase, isDatabaseReady } from './db'
-import type { ReadingScope } from '@/services/ai/types'
+import type { ChatMessageSource, ReadingScope } from '@/services/ai/types'
 import { parseMarkdownBlocks, type MarkdownBlock } from '@/services/markdownBlocks'
+import { normalizeFilePath } from '@/services/pathIdentity'
 
 /** 阅读成果类型，与 schema CHECK 约束保持一致 */
 export type ReadingArtifactType =
@@ -192,6 +193,170 @@ export interface PersistReadingArtifactInput {
   source?: ReadingArtifactSourceAnchor | null
 }
 
+export interface LocalReadingArtifactReference {
+  kind: 'local'
+  filePath: string
+  fileName: string
+  titlePath?: string[]
+  heading?: string
+  startLine: number
+  endLine: number
+}
+
+export interface WebReadingArtifactReference {
+  kind: 'web'
+  title: string
+  url: string
+  siteName?: string
+  publishedAt?: string
+}
+
+/** AI 回答实际使用的完整参考来源快照。 */
+export type ReadingArtifactReference =
+  | LocalReadingArtifactReference
+  | WebReadingArtifactReference
+
+/** 把对应用户提问合并进成果结构化元数据，不改动既有类型专属字段。 */
+export function mergeReadingArtifactQuestionMetadata(
+  structuredContent: unknown | null | undefined,
+  question: string | undefined,
+): unknown | null {
+  const normalizedQuestion = question?.trim()
+  if (!normalizedQuestion) return structuredContent ?? null
+  if (isPlainObject(structuredContent)) {
+    return { ...structuredContent, question: normalizedQuestion }
+  }
+  return structuredContent === null || structuredContent === undefined
+    ? { question: normalizedQuestion }
+    : { question: normalizedQuestion, content: structuredContent }
+}
+
+/** 将聊天消息来源转换为稳定持久化快照，并按原顺序去重。 */
+export function buildReadingArtifactReferences(
+  sources: readonly ChatMessageSource[] | undefined,
+): ReadingArtifactReference[] {
+  const references: ReadingArtifactReference[] = []
+  const seen = new Set<string>()
+  for (const source of sources ?? []) {
+    if (source.kind === 'web') {
+      const title = source.title.trim()
+      const url = source.url.trim()
+      if (!title || !url) continue
+      const key = `web:${url}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      references.push({
+        kind: 'web',
+        title,
+        url,
+        ...(source.siteName?.trim() ? { siteName: source.siteName.trim() } : {}),
+        ...(source.publishedAt?.trim() ? { publishedAt: source.publishedAt.trim() } : {}),
+      })
+      continue
+    }
+
+    const filePath = source.filePath.trim()
+    const fileName = source.fileName.trim()
+    if (!filePath || !fileName || !isValidLineRange(source.startLine, source.endLine)) continue
+    const key = `local:${normalizeFilePath(filePath)}:${source.startLine}:${source.endLine}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    references.push({
+      kind: 'local',
+      filePath,
+      fileName,
+      ...(source.titlePath?.length ? { titlePath: [...source.titlePath] } : {}),
+      ...(source.heading?.trim() ? { heading: source.heading.trim() } : {}),
+      startLine: source.startLine,
+      endLine: source.endLine,
+    })
+  }
+  return references
+}
+
+/** 把完整参考来源合并进成果结构化元数据。 */
+export function mergeReadingArtifactReferencesMetadata(
+  structuredContent: unknown | null | undefined,
+  references: readonly ReadingArtifactReference[],
+): Record<string, unknown> {
+  if (isPlainObject(structuredContent)) {
+    return { ...structuredContent, references: references.map(cloneReadingArtifactReference) }
+  }
+  return structuredContent === null || structuredContent === undefined
+    ? { references: references.map(cloneReadingArtifactReference) }
+    : { content: structuredContent, references: references.map(cloneReadingArtifactReference) }
+}
+
+/** 安全读取成果中保存的用户提问；旧成果或损坏字段返回 null。 */
+export function getReadingArtifactQuestion(artifact: ReadingArtifact): string | null {
+  if (!isPlainObject(artifact.structuredContent)) return null
+  const question = artifact.structuredContent.question
+  return typeof question === 'string' && question.trim() ? question : null
+}
+
+/** 安全读取成果来源；旧成果或损坏项降级为空数组。 */
+export function getReadingArtifactReferences(artifact: ReadingArtifact): ReadingArtifactReference[] {
+  if (!isPlainObject(artifact.structuredContent)) return []
+  const value = artifact.structuredContent.references
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => {
+    const decoded = decodeReadingArtifactReference(item)
+    return decoded ? [decoded] : []
+  })
+}
+
+function decodeReadingArtifactReference(value: unknown): ReadingArtifactReference | null {
+  if (!isPlainObject(value)) return null
+  if (value.kind === 'web') {
+    if (!isNonEmptyString(value.title) || !isNonEmptyString(value.url)) return null
+    return {
+      kind: 'web',
+      title: value.title,
+      url: value.url,
+      ...(isNonEmptyString(value.siteName) ? { siteName: value.siteName } : {}),
+      ...(isNonEmptyString(value.publishedAt) ? { publishedAt: value.publishedAt } : {}),
+    }
+  }
+  if (value.kind !== 'local') return null
+  if (
+    !isNonEmptyString(value.filePath)
+    || !isNonEmptyString(value.fileName)
+    || !isValidLineRange(value.startLine, value.endLine)
+  ) return null
+  const titlePath = Array.isArray(value.titlePath)
+    && value.titlePath.every((item) => typeof item === 'string')
+    ? [...value.titlePath]
+    : undefined
+  return {
+    kind: 'local',
+    filePath: value.filePath,
+    fileName: value.fileName,
+    ...(titlePath?.length ? { titlePath } : {}),
+    ...(isNonEmptyString(value.heading) ? { heading: value.heading } : {}),
+    startLine: value.startLine as number,
+    endLine: value.endLine as number,
+  }
+}
+
+function cloneReadingArtifactReference(reference: ReadingArtifactReference): ReadingArtifactReference {
+  return reference.kind === 'local'
+    ? { ...reference, ...(reference.titlePath ? { titlePath: [...reference.titlePath] } : {}) }
+    : { ...reference }
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function isValidLineRange(startLine: unknown, endLine: unknown): startLine is number {
+  return typeof startLine === 'number'
+    && Number.isInteger(startLine)
+    && startLine > 0
+    && typeof endLine === 'number'
+    && Number.isInteger(endLine)
+    && endLine >= startLine
+}
+
 export async function persistReadingArtifact(
   input: PersistReadingArtifactInput,
 ): Promise<void> {
@@ -234,6 +399,66 @@ export interface LoadReadingArtifactsOptions {
   offset?: number
 }
 
+export interface LoadReadingArtifactsPageOptions {
+  type?: ReadingArtifactType
+  status?: ReadingArtifactStatus
+  query?: string
+  limit?: number
+  offset?: number
+}
+
+export interface ReadingArtifactsPage {
+  artifacts: ReadingArtifact[]
+  total: number
+}
+
+const DEFAULT_READING_ARTIFACT_PAGE_SIZE = 20
+const MAX_READING_ARTIFACT_PAGE_SIZE = 100
+
+function buildReadingArtifactWhere(
+  options: Pick<LoadReadingArtifactsPageOptions, 'type' | 'status' | 'query'>,
+): { where: string; params: unknown[] } {
+  const clauses: string[] = []
+  const params: unknown[] = []
+  if (options.type) {
+    params.push(options.type)
+    clauses.push(`type = $${params.length}`)
+  }
+  if (options.status) {
+    params.push(options.status)
+    clauses.push(`status = $${params.length}`)
+  }
+  const query = options.query?.trim()
+  if (query) {
+    const escapedQuery = query.replace(/!/g, '!!').replace(/%/g, '!%').replace(/_/g, '!_')
+    params.push(`%${escapedQuery}%`)
+    const queryParam = `$${params.length}`
+    clauses.push(`(
+      title LIKE ${queryParam} ESCAPE '!'
+      OR content LIKE ${queryParam} ESCAPE '!'
+      OR COALESCE(source_file_name, '') LIKE ${queryParam} ESCAPE '!'
+      OR COALESCE(source_quote, '') LIKE ${queryParam} ESCAPE '!'
+      OR COALESCE(structured_content, '') LIKE ${queryParam} ESCAPE '!'
+    )`)
+  }
+  return {
+    where: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '',
+    params,
+  }
+}
+
+function normalizeReadingArtifactPageLimit(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_READING_ARTIFACT_PAGE_SIZE
+  }
+  return Math.min(Math.floor(value), MAX_READING_ARTIFACT_PAGE_SIZE)
+}
+
+function normalizeReadingArtifactPageOffset(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) return 0
+  return Math.floor(value)
+}
+
 export async function loadReadingArtifacts(
   options: LoadReadingArtifactsOptions = {},
 ): Promise<ReadingArtifact[]> {
@@ -255,10 +480,35 @@ export async function loadReadingArtifacts(
   params.push(options.offset ?? 0)
   const offsetParam = `$${params.length}`
   const rows = await db.select<ReadingArtifactRow>(
-    `SELECT * FROM reading_artifacts ${where} ORDER BY updated_at DESC, created_at DESC LIMIT ${limitParam} OFFSET ${offsetParam}`,
+    `SELECT * FROM reading_artifacts ${where} ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT ${limitParam} OFFSET ${offsetParam}`,
     params,
   )
   return rows.map(decodeReadingArtifact)
+}
+
+export async function loadReadingArtifactsPage(
+  options: LoadReadingArtifactsPageOptions = {},
+): Promise<ReadingArtifactsPage> {
+  if (!isDatabaseReady()) return { artifacts: [], total: 0 }
+  const db = getDatabase()
+  const { where, params } = buildReadingArtifactWhere(options)
+  const countRows = await db.select<{ total: number }>(
+    `SELECT COUNT(*) AS total FROM reading_artifacts ${where}`,
+    params,
+  )
+  const pageParams = [...params]
+  pageParams.push(normalizeReadingArtifactPageLimit(options.limit))
+  const limitParam = `$${pageParams.length}`
+  pageParams.push(normalizeReadingArtifactPageOffset(options.offset))
+  const offsetParam = `$${pageParams.length}`
+  const rows = await db.select<ReadingArtifactRow>(
+    `SELECT * FROM reading_artifacts ${where} ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT ${limitParam} OFFSET ${offsetParam}`,
+    pageParams,
+  )
+  return {
+    artifacts: rows.map(decodeReadingArtifact),
+    total: Number(countRows[0]?.total) || 0,
+  }
 }
 
 export async function loadReadingArtifactById(
@@ -404,6 +654,7 @@ export async function checkReadingArtifactSource(
 export interface AnnotationStructuredContent {
   quote: string
   note: string
+  question?: string
   contextFingerprint?: string | null
   startOffset?: number | null
   endOffset?: number | null
@@ -426,6 +677,9 @@ export function decodeAnnotationStructuredContent(value: unknown): AnnotationStr
   }
   const quote = assertNonEmptyString(value.quote, 'quote')
   const note = assertNonEmptyString(value.note, 'note')
+  const question = typeof value.question === 'string' && value.question.trim()
+    ? value.question
+    : undefined
   const contextFingerprint =
     typeof value.contextFingerprint === 'string' ? value.contextFingerprint : null
   const startOffset =
@@ -436,7 +690,7 @@ export function decodeAnnotationStructuredContent(value: unknown): AnnotationStr
     typeof value.endOffset === 'number' && Number.isFinite(value.endOffset)
       ? value.endOffset
       : null
-  return { quote, note, contextFingerprint, startOffset, endOffset }
+  return { quote, note, ...(question ? { question } : {}), contextFingerprint, startOffset, endOffset }
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

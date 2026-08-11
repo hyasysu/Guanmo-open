@@ -64,6 +64,7 @@ import { UsageActivity } from '@/features/settings/UsageActivity'
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/services/requestTimeout'
 import { AdvancedTimeoutSettings } from '@/features/settings/AdvancedTimeoutSettings'
 import { ThemePicker } from '@/features/settings/ThemePicker'
+import { requestProductTour } from '@/features/productTour/productTourEvents'
 
 const AI_ROUTING_GUIDE_URL = 'https://github.com/we-used-to-be/Guanmo-open/blob/main/docs/AI_ROUTING_GUIDE.md'
 
@@ -1530,6 +1531,11 @@ function GeneralSettings() {
           <Button type="default" size="small" onClick={handleStarRepository}>
             点亮stars
           </Button>
+          {isTauri() && (
+            <Button type="default" size="small" onClick={requestProductTour}>
+              产品导览
+            </Button>
+          )}
           <Button
             type="default"
             size="small"

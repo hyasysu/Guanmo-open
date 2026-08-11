@@ -251,6 +251,7 @@ export function TitleBar() {
         <div className="w-px h-5 bg-gm-border-subtle mx-1" />
         <button
           onClick={() => void toggleFullscreen()}
+          data-product-tour="fullscreen"
           className="h-full w-12 flex items-center justify-center text-gm-text-secondary hover:bg-gm-surface-hover transition-colors"
           title={isFullscreen ? '退出全屏 F11' : '进入全屏 F11'}
         >

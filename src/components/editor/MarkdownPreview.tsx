@@ -4,6 +4,7 @@ import remarkMath from 'remark-math'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
 import { createContext, forwardRef, isValidElement, memo, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '@/hooks/useTauri'
 import { createHeadingId, type TocItem } from '@/services/markdownToc'
@@ -16,6 +17,7 @@ import { InlineMarkdownBlockEditor } from './InlineMarkdownBlockEditor'
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath, remarkStandaloneDisplayMath]
 const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex, rehypeHighlight]
 const EMBEDDED_HTML_PATTERN = /<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*|\/?)>/
+const DEFAULT_PREVIEW_MEASUREMENT_FONT_FAMILY = "'JetBrains Mono', 'Cascadia Code', monospace"
 type RehypePlugins = NonNullable<Options['rehypePlugins']>
 let markdownHtmlPluginsPromise: Promise<RehypePlugins> | null = null
 
@@ -157,7 +159,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   filePath,
   fontSize = 14,
   lineHeight = 1.65,
-  fontFamily = "'JetBrains Mono', 'Cascadia Code', monospace",
+  fontFamily,
   wordWrap = true,
   skipHtml = false,
   documentKey,
@@ -194,8 +196,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     || model.footnoteDefinitions.length > 0
   const [htmlRehypePlugins, setHtmlRehypePlugins] = useState<RehypePlugins | null>(null)
   const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
-  const previewFontFamily = useSettingsStore((state) => state.editor.previewFontFamily)
   const themeId = useSettingsStore((state) => state.appearance.themeId)
+  const measurementFontFamily = fontFamily ?? DEFAULT_PREVIEW_MEASUREMENT_FONT_FAMILY
   // Virtual scrolling state
   const scrollContainerRef = useRef<HTMLElement | null>(null)
   const measuredHeightsRef = useRef<Map<string, number>>(new Map())
@@ -210,7 +212,10 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     theme: string
   } | null>(null)
   const [scrollState, setScrollState] = useState<{ scrollTop: number; viewportHeight: number; viewportWidth: number }>({ scrollTop: 0, viewportHeight: 800, viewportWidth: 0 })
+  const scrollStateRef = useRef(scrollState)
   const overscanBlocks = 5
+
+  scrollStateRef.current = scrollState
 
   const measurementKey = measurementKeyRef.current
   if (
@@ -218,12 +223,12 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     || measurementKey.content !== displayedContent
     || measurementKey.fontSize !== fontSize
     || measurementKey.lineHeight !== lineHeight
-    || measurementKey.fontFamily !== previewFontFamily
+    || measurementKey.fontFamily !== measurementFontFamily
     || measurementKey.wordWrap !== wordWrap
     || measurementKey.theme !== themeId
   ) {
     measuredHeightsRef.current = new Map()
-    measurementKeyRef.current = { content: displayedContent, fontSize, lineHeight, fontFamily: previewFontFamily, wordWrap, theme: themeId }
+    measurementKeyRef.current = { content: displayedContent, fontSize, lineHeight, fontFamily: measurementFontFamily, wordWrap, theme: themeId }
   }
 
   activeEditRef.current = activeEdit
@@ -286,18 +291,31 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     scrollRestoreRef.current = null
   }, [activeEdit, displayedContent])
 
+  const remeasureMountedBlocks = useCallback(() => {
+    const nextHeights = new Map<string, number>()
+    for (const [index, element] of blockRefs.current) {
+      const block = model.blocks[index]
+      if (!element || !block) continue
+      const height = element.getBoundingClientRect().height
+      if (height > 0) nextHeights.set(block.blockId, height)
+    }
+    measuredHeightsRef.current = nextHeights
+  }, [model.blocks])
+
   // Observe parent scroll container
   useEffect(() => {
     const el = rootRef.current?.parentElement
     if (!el) return
     scrollContainerRef.current = el
     const update = () => {
-      setScrollState((current) => {
-        if (current.viewportWidth !== el.clientWidth && current.viewportWidth !== 0) {
-          measuredHeightsRef.current = new Map()
-        }
-        return { scrollTop: el.scrollTop, viewportHeight: el.clientHeight, viewportWidth: el.clientWidth }
-      })
+      const nextState = { scrollTop: el.scrollTop, viewportHeight: el.clientHeight, viewportWidth: el.clientWidth }
+      const currentWidth = scrollStateRef.current.viewportWidth
+      if (currentWidth !== 0 && currentWidth !== el.clientWidth) {
+        remeasureMountedBlocks()
+        flushSync(() => setScrollState(nextState))
+        return
+      }
+      setScrollState(nextState)
     }
     update()
     const ro = new ResizeObserver(update)
@@ -350,7 +368,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       blockResizeObserverRef.current = null
       el.removeEventListener('scroll', update)
     }
-  }, [fontSize, lineHeight, model])
+  }, [fontSize, lineHeight, model, remeasureMountedBlocks])
 
   const setBlockElement = useCallback((index: number, element: HTMLDivElement | null) => {
     const previous = blockRefs.current.get(index)
@@ -432,17 +450,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     if (changed) {
       setScrollState((s) => ({ ...s }))
     }
-  }, [
-    visible.startIndex,
-    visible.endIndex,
-    model.blocks,
-    scrollState.viewportWidth,
-    fontSize,
-    lineHeight,
-    previewFontFamily,
-    wordWrap,
-    themeId,
-  ])
+  }, [visible.startIndex, visible.endIndex, model.blocks, scrollState.viewportWidth])
 
   const overlayRectRef = useRef<{ top: number; left: number; width: number } | null>(null)
 
@@ -933,7 +941,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     <div
       ref={rootRef}
       className="prose gm-markdown-preview max-w-none min-w-0 text-gm-text"
-      style={{ fontSize: `${fontSize}px`, lineHeight, fontFamily: previewFontFamily, position: 'relative' }}
+      style={{ fontSize: `${fontSize}px`, lineHeight, fontFamily, position: 'relative' }}
       onPointerDownCapture={handlePointerDownCapture}
       onPointerMoveCapture={handlePointerMoveCapture}
       onPointerUpCapture={handlePointerUpCapture}
@@ -985,7 +993,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
             initialCursor={activeEdit.initialCursor}
             fontSize={fontSize}
             lineHeight={lineHeight}
-            fontFamily={fontFamily}
+            fontFamily={measurementFontFamily}
             wordWrap={wordWrap}
             conflict={activeEdit.conflict}
             onDraftChange={(draft) => { draftRef.current = draft }}
@@ -1037,7 +1045,7 @@ function estimatePreviewBlockHeight(block: PreviewBlock, fontSize: number, lineH
   const lines = Math.max(1, block.endLine - block.startLine + 1)
   switch (block.type) {
     case 'frontmatter':
-      return 0
+      return Math.max(48, lines * baseLinePx * 1.15 + 12)
     case 'thematicBreak':
       return 32
     case 'heading': {

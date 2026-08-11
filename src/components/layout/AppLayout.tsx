@@ -25,6 +25,14 @@ import {
   OVERVIEW_FEATURES,
   getVersionFeatures,
 } from '@/features/featureIntro/featureIntroContent'
+import { ProductTourOverlay } from '@/features/productTour/ProductTourOverlay'
+import {
+  OPEN_PRODUCT_TOUR_EVENT,
+} from '@/features/productTour/productTourEvents'
+import {
+  PRODUCT_TOUR_DEMO_CONTENT,
+  PRODUCT_TOUR_DEMO_TAB_ID,
+} from '@/features/productTour/productTourContent'
 
 const AiPanel = lazy(() => import('../ai/AiPanel').then((module) => ({ default: module.AiPanel })))
 const SettingsPage = lazy(() => import('@/features/settings/SettingsPage').then((module) => ({ default: module.SettingsPage })))
@@ -52,6 +60,16 @@ export function AppLayout() {
   const [featureIntroMode, setFeatureIntroMode] = useState<'overview' | 'version'>('overview')
   const [featureIntroVersion, setFeatureIntroVersion] = useState<string | undefined>()
   const [fullscreenFileDrawerOpen, setFullscreenFileDrawerOpen] = useState(false)
+  const [productTourOpen, setProductTourOpen] = useState(false)
+  const [productTourStep, setProductTourStep] = useState(0)
+  const productTourSnapshotRef = useRef<{
+    activeTabId: string | null
+    viewMode: ReturnType<typeof useEditorStore.getState>['viewMode']
+    previewVisible: boolean
+    rightPaneTabId: string | null
+    rightPaneUserSelected: boolean
+    createdDemoTab: boolean
+  } | null>(null)
   const [fullscreenAiPosition, setFullscreenAiPosition] = useState(() => getDefaultFullscreenAiPosition())
   const fullscreenAiDragRef = useRef<{
     pointerId: number
@@ -82,6 +100,61 @@ export function AppLayout() {
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
   }, [])
+
+  const finishProductTour = useCallback(() => {
+    const snapshot = productTourSnapshotRef.current
+    if (snapshot) {
+      const editor = useEditorStore.getState()
+      if (snapshot.createdDemoTab && editor.tabs.some((tab) => tab.id === PRODUCT_TOUR_DEMO_TAB_ID)) {
+        editor.closeTab(PRODUCT_TOUR_DEMO_TAB_ID)
+      }
+      useEditorStore.setState({
+        viewMode: snapshot.viewMode,
+        previewVisible: snapshot.previewVisible,
+        rightPaneTabId: snapshot.rightPaneTabId,
+        rightPaneUserSelected: snapshot.rightPaneUserSelected,
+        activeTabId: snapshot.activeTabId && useEditorStore.getState().tabs.some((tab) => tab.id === snapshot.activeTabId)
+          ? snapshot.activeTabId
+          : null,
+        previewSwitchingTabId: null,
+      })
+    }
+    productTourSnapshotRef.current = null
+    setProductTourOpen(false)
+    setProductTourStep(0)
+  }, [])
+
+  const startProductTour = useCallback(() => {
+    if (productTourOpen) return
+    const editor = useEditorStore.getState()
+    const createdDemoTab = editor.tabs.length === 0
+    productTourSnapshotRef.current = {
+      activeTabId: editor.activeTabId,
+      viewMode: editor.viewMode,
+      previewVisible: editor.previewVisible,
+      rightPaneTabId: editor.rightPaneTabId,
+      rightPaneUserSelected: editor.rightPaneUserSelected,
+      createdDemoTab,
+    }
+    if (createdDemoTab) {
+      editor.openTab({
+        id: PRODUCT_TOUR_DEMO_TAB_ID,
+        title: '观墨产品导览.md',
+        filePath: null,
+        content: PRODUCT_TOUR_DEMO_CONTENT,
+        savedContent: PRODUCT_TOUR_DEMO_CONTENT,
+        originalContent: PRODUCT_TOUR_DEMO_CONTENT,
+        modified: false,
+        ephemeral: true,
+      })
+    }
+    editor.setViewMode('preview')
+    useAppStore.getState().closeAiPanel()
+    if (!useAppStore.getState().sidebarCollapsed) useAppStore.getState().toggleSidebar()
+    setSettingsOpen(false)
+    setProductTourStep(0)
+    setProductTourOpen(true)
+  }, [productTourOpen])
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -228,6 +301,16 @@ export function AppLayout() {
     }
     await action()
   }, [exitFullscreen])
+
+  useEffect(() => {
+    const handleOpenProductTour = () => {
+      void runAfterNormalLayout(() => {
+        startProductTour()
+      })
+    }
+    window.addEventListener(OPEN_PRODUCT_TOUR_EVENT, handleOpenProductTour)
+    return () => window.removeEventListener(OPEN_PRODUCT_TOUR_EVENT, handleOpenProductTour)
+  }, [runAfterNormalLayout, startProductTour])
 
   const openSettings = useCallback(() => {
     void runAfterNormalLayout(() => {
@@ -438,6 +521,13 @@ export function AppLayout() {
               : []
         }
         onClose={() => setFeatureIntroOpen(false)}
+      />
+
+      <ProductTourOverlay
+        open={productTourOpen}
+        stepIndex={productTourStep}
+        onStepChange={setProductTourStep}
+        onClose={finishProductTour}
       />
 
       {/* Search highlight styles (CSS Highlight API) */}

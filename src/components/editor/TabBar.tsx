@@ -395,7 +395,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
         </div>
 
         {/* View mode switcher */}
-        <div className="flex items-center gap-0.5 px-2 border-l border-gm-border-subtle flex-shrink-0">
+        <div data-product-tour="mode-switcher" className="flex items-center gap-0.5 px-2 border-l border-gm-border-subtle flex-shrink-0">
           <button
             type="button"
             onClick={() => void handleReloadFromDisk()}
