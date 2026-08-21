@@ -43,6 +43,8 @@ describe('Sidebar workspace actions', () => {
     const rootHeader = rootToggle.closest('.gm-workspace-root-header')
     const rootActions = rootHeader?.querySelector('.gm-workspace-root-actions')
     expect(rootHeader).not.toBeNull()
+    expect(rootHeader?.firstElementChild).toBe(rootActions)
+    expect(rootHeader?.lastElementChild).toBe(rootToggle)
     expect(rootToggle.querySelector('.gm-workspace-root-name')).toHaveTextContent('workspace')
     expect(rootActions).toContainElement(newFile)
     expect(rootActions).toContainElement(newFolder)
@@ -54,7 +56,8 @@ describe('Sidebar workspace actions', () => {
     expect(screen.getByRole('button', { name: '刷新 workspace' }).querySelector('svg')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '移除工作区 workspace' }).querySelector('svg')).toBeInTheDocument()
     expect(globalStyles).toMatch(/@container workspace-roots \(max-width: 320px\)[\s\S]*?\.gm-workspace-root-name \{[\s\S]*?white-space: normal;/)
-    expect(globalStyles).toMatch(/@container workspace-roots \(max-width: 320px\)[\s\S]*?\.gm-workspace-root-actions \{[\s\S]*?justify-content: flex-start;[\s\S]*?padding-left: 22px;/)
+    expect(globalStyles).toMatch(/\.gm-workspace-root-header \{[\s\S]*?flex-direction: column;[\s\S]*?align-items: flex-start;/)
+    expect(globalStyles).toMatch(/\.gm-workspace-root-actions \{[\s\S]*?justify-content: flex-start;[\s\S]*?width: max-content;/)
 
     fireEvent.click(newFile)
     expect(screen.getByDisplayValue('untitled.md')).toBeInTheDocument()

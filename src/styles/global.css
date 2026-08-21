@@ -226,10 +226,10 @@ body {
 }
 
 .gm-workspace-root-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  align-items: center;
-  column-gap: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  row-gap: 2px;
 }
 
 .gm-workspace-root-toggle {
@@ -240,14 +240,14 @@ body {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
+  width: max-content;
+  max-width: 100%;
 }
 
 @container workspace-roots (max-width: 320px) {
   .gm-workspace-root-header {
-    grid-template-columns: minmax(0, 1fr);
     align-items: start;
-    row-gap: 2px;
   }
 
   .gm-workspace-root-name {
@@ -257,12 +257,6 @@ body {
     white-space: normal;
   }
 
-  .gm-workspace-root-actions {
-    width: 100%;
-    box-sizing: border-box;
-    justify-content: flex-start;
-    padding-left: 22px;
-  }
 }
 
 @keyframes gmFullControlIn {

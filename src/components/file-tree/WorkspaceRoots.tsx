@@ -105,34 +105,6 @@ export function WorkspaceRoots({ onOpenFile }: WorkspaceRootsProps) {
             className={`px-1.5 py-2 ${index > 0 ? 'border-t border-gm-border-subtle' : ''}`}
           >
             <div className="gm-workspace-root-header min-w-0">
-              <button
-                type="button"
-                aria-expanded={expanded}
-                aria-label={`${expanded ? '折叠' : '展开'} ${root.name}`}
-                onClick={() => setCollapsedRootIds((current) => {
-                  const next = new Set(current)
-                  if (next.has(root.id)) next.delete(root.id)
-                  else next.add(root.id)
-                  return next
-                })}
-                className="gm-workspace-root-toggle flex min-w-0 items-center gap-1.5 rounded-md px-1 py-1 text-left text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text"
-                title={root.path}
-              >
-                <svg
-                  width="12"
-                  height="12"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  className={`shrink-0 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
-                >
-                  <path d="M9 18l6-6-6-6" />
-                </svg>
-                <span className="gm-workspace-root-name min-w-0 flex-1 truncate text-caption font-bold">
-                  {root.name}
-                </span>
-              </button>
               <div className="gm-workspace-root-actions">
                 <WorkspaceRootActionButton
                   label={working ? `正在索引 ${root.name}` : `索引 ${root.name}`}
@@ -290,6 +262,34 @@ export function WorkspaceRoots({ onOpenFile }: WorkspaceRootsProps) {
                   </svg>
                 </WorkspaceRootActionButton>
               </div>
+              <button
+                type="button"
+                aria-expanded={expanded}
+                aria-label={`${expanded ? '折叠' : '展开'} ${root.name}`}
+                onClick={() => setCollapsedRootIds((current) => {
+                  const next = new Set(current)
+                  if (next.has(root.id)) next.delete(root.id)
+                  else next.add(root.id)
+                  return next
+                })}
+                className="gm-workspace-root-toggle flex min-w-0 items-center gap-1.5 rounded-md px-1 py-1 text-left text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text"
+                title={root.path}
+              >
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  className={`shrink-0 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
+                >
+                  <path d="M9 18l6-6-6-6" />
+                </svg>
+                <span className="gm-workspace-root-name min-w-0 flex-1 truncate text-caption font-bold">
+                  {root.name}
+                </span>
+              </button>
             </div>
             {expanded && (
               <div className="pt-1">
