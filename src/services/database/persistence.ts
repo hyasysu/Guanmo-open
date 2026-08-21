@@ -49,6 +49,7 @@ interface EmbeddingRow {
 export interface DocumentIndexMetadata {
   id: string
   filePath: string
+  title: string
   contentHash?: string
   totalChunks: number
   embeddedChunks: number
@@ -300,6 +301,7 @@ export async function loadDocumentIndexMetadata(
   return {
     id: row.id,
     filePath: row.file_path,
+    title: row.title,
     contentHash: row.content_hash || undefined,
     totalChunks: counts?.total_chunks || 0,
     embeddedChunks: counts?.embedded_chunks || 0,

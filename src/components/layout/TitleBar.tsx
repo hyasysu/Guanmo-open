@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { undo, redo } from '@codemirror/commands'
 import { useEditorHistoryStore } from '@/stores/editorHistoryStore'
 import { useSettingsStore, type ThemeId } from '@/stores/settingsStore'
 import { THEME_OPTIONS } from '@/features/settings/ThemePicker'
@@ -88,12 +87,18 @@ export function TitleBar() {
 
   const handleUndo = useCallback(() => {
     const view = getActiveEditorView()
-    if (view) undo({ state: view.state, dispatch: view.dispatch })
+    if (!view) return
+    void import('@codemirror/commands').then(({ undo }) => {
+      undo({ state: view.state, dispatch: view.dispatch })
+    })
   }, [])
 
   const handleRedo = useCallback(() => {
     const view = getActiveEditorView()
-    if (view) redo({ state: view.state, dispatch: view.dispatch })
+    if (!view) return
+    void import('@codemirror/commands').then(({ redo }) => {
+      redo({ state: view.state, dispatch: view.dispatch })
+    })
   }, [])
 
   const themeId = useSettingsStore((s) => s.appearance.themeId)

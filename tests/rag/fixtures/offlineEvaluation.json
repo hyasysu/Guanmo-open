@@ -1,0 +1,40 @@
+{
+  "version": 2,
+  "topK": 3,
+  "documents": [
+    {
+      "id": "anon-doc-alpha",
+      "title": "匿名项目手册.md",
+      "chunks": [
+        { "id": "alpha-install", "heading": "安装", "content": "匿名工具使用 package alpha install 完成安装。", "embedding": [1, 0, 0, 0, 0, 0] },
+        { "id": "alpha-config", "heading": "配置", "content": "匿名工具的默认配置文件名是 alpha.config.json。", "embedding": [0, 1, 0, 0, 0, 0] }
+      ]
+    },
+    {
+      "id": "anon-doc-beta",
+      "title": "匿名故障指南.md",
+      "chunks": [
+        { "id": "beta-timeout", "heading": "超时", "content": "出现匿名超时码 BETA-408 时应先检查本地代理。", "embedding": [0, 0, 1, 0, 0, 0] },
+        { "id": "beta-cache", "heading": "缓存", "content": "匿名缓存可通过 beta cache inspect 命令只读检查。", "embedding": [0, 0, 0, 1, 0, 0] }
+      ]
+    },
+    {
+      "id": "anon-doc-gamma",
+      "title": "匿名数据规范.md",
+      "chunks": [
+        { "id": "gamma-backup", "heading": "备份", "content": "匿名备份必须先写入临时副本，再执行完整性检查。", "embedding": [0, 0, 0, 0, 1, 0] },
+        { "id": "gamma-restore", "heading": "恢复", "content": "匿名恢复失败时保留原始数据，不得清空正式库。", "embedding": [0, 0, 0, 0, 0, 1] }
+      ]
+    }
+  ],
+  "neighborScenarios": [
+    { "queryId": "q-config", "primaryChunkId": "alpha-config", "neighborChunkId": "alpha-config-detail", "neighborContent": "修改配置后运行 alpha config verify 校验匿名配置。", "answerEvidence": "alpha config verify" }
+  ],
+  "queries": [
+    { "id": "q-install", "query": "package alpha install 如何安装匿名工具", "embedding": [1, 0, 0, 0, 0, 0], "relevantChunkIds": ["alpha-install"], "answerEvidence": "package alpha install" },
+    { "id": "q-timeout", "query": "匿名超时码 BETA-408 怎么处理", "embedding": [0, 0, 1, 0, 0, 0], "relevantChunkIds": ["beta-timeout"], "answerEvidence": "检查本地代理" },
+    { "id": "q-backup", "query": "匿名备份的安全步骤", "embedding": [0, 0, 0, 0, 1, 0], "relevantChunkIds": ["gamma-backup"], "answerEvidence": "临时副本" },
+    { "id": "q-config", "query": "alpha.config.json 是什么", "embedding": [0, 1, 0, 0, 0, 0], "relevantChunkIds": ["alpha-config"], "answerEvidence": "alpha.config.json" },
+    { "id": "q-no-answer", "query": "火星轨道编号 ZETA-999", "embedding": null, "relevantChunkIds": [], "answerEvidence": null }
+  ]
+}

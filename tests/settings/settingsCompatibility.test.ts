@@ -36,6 +36,7 @@ describe('设置兼容', () => {
     expect(state.appearance).toMatchObject({ themeId: 'warm', lastLightThemeId: 'warm' })
     expect(state.webSearch).toMatchObject({ provider: 'duckduckgo', maxResults: 5, timeout: 60000 })
     expect(state.ai.timeout).toBe(60000)
+    expect(state.ai.maxContextLength).toBe(8192)
     expect(state.ai.embedding.timeout).toBe(60000)
     expect(state.aiShortcutActions).toHaveLength(6)
     expect(state.aiShortcutActions.map((action) => action.label)).toEqual([
@@ -116,6 +117,14 @@ describe('设置兼容', () => {
     expect(clampedStore.getState().ai.timeout).toBe(5000)
     expect(clampedStore.getState().ai.embedding.timeout).toBe(120000)
     expect(clampedStore.getState().webSearch.timeout).toBe(120000)
+  })
+
+  it('完整保留旧配置和自定义模型上下文窗口', async () => {
+    const oldStore = await loadSettingsStore({ ai: { maxContextLength: 8192 } })
+    expect(oldStore.getState().ai.maxContextLength).toBe(8192)
+
+    const customStore = await loadSettingsStore({ ai: { maxContextLength: 24576 } })
+    expect(customStore.getState().ai.maxContextLength).toBe(24576)
   })
 
   it('未知字段不影响已知配置和默认值加载', async () => {

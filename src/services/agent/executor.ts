@@ -28,10 +28,18 @@ import {
 import { getAgentScopeContext } from '@/services/aiScope'
 import { BASE_SYSTEM_PROMPT, CONTEXT_SAFETY_PROMPT, CUSTOM_PROMPT_POLICY, buildUntrustedContextMessage } from '@/services/ai/systemPrompts'
 import {
+  createSourceReferenceRegistry,
+  findSourceReferenceId,
+  parseSourceReferences,
+  registerSourceReferences,
+  type SourceReferenceRegistry,
+} from '@/services/ai/sourceReferences'
+import {
   FILE_SUMMARY_ANSWER_PROMPT,
   LOCAL_RESEARCH_ANSWER_PROMPT,
   WEB_COMPARISON_ANSWER_PROMPT,
 } from './answerInstructions'
+import { dropOldestCompleteTurns, isModelContextOverflowError } from '@/services/ai/contextBudget'
 
 let toolsRegistered = false
 
@@ -57,6 +65,7 @@ const DEFAULT_CONFIG: AgentConfig = {
   maxSteps: 6,
   maxToolCalls: 8,
   stepTimeout: 30000,
+  deadlineMs: 120000,
   systemPrompt: `${BASE_SYSTEM_PROMPT}
 
 ${CONTEXT_SAFETY_PROMPT}
@@ -148,12 +157,7 @@ function buildSystemPrompt(config: AgentConfig, toolNames?: readonly string[], c
   const prompt = config.systemPrompt.replace('{{tool_descriptions}}', toolDesc)
   const preference = customPreferencePrompt?.trim()
   if (!preference) return prompt
-  return `${prompt}
-
-${CUSTOM_PROMPT_POLICY}
-
-【用户偏好层】
-${preference}`
+  return `${prompt}\n\n${CUSTOM_PROMPT_POLICY}\n\n【用户偏好层】\n${preference}`
 }
 
 /**
@@ -162,6 +166,47 @@ ${preference}`
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text
   return text.slice(0, maxLen) + `\n... (已截断，共 ${text.length} 字符)`
+}
+
+function truncateKnowledgeResult(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text
+  try {
+    const parsed = JSON.parse(text)
+    if (!isPlainObject(parsed) || !Array.isArray(parsed.results)) return truncate(text, maxLen)
+    const totalResultCount = parsed.results.length
+    const included: unknown[] = []
+    for (const result of parsed.results) {
+      const candidate = JSON.stringify({
+        ...parsed,
+        resultCount: included.length + 1,
+        totalResultCount,
+        omittedResultCount: totalResultCount - included.length - 1,
+        results: [...included, result],
+      }, null, 2)
+      if (candidate.length > maxLen) break
+      included.push(result)
+    }
+    return JSON.stringify({
+      ...parsed,
+      status: included.length > 0 ? parsed.status : 'truncated',
+      resultCount: included.length,
+      totalResultCount,
+      omittedResultCount: totalResultCount - included.length,
+      results: included,
+    }, null, 2)
+  } catch {
+    return truncate(text, maxLen)
+  }
+}
+
+function truncateToolResultForModel(toolName: string, text: string, maxLen: number): string {
+  return toolName === 'search_knowledge'
+    ? truncateKnowledgeResult(text, maxLen)
+    : truncate(text, maxLen)
+}
+
+function resolveToolResultMaxChars(toolName: string): number {
+  return getToolTokenBudget(toolName)
 }
 
 function buildFinalAnswerMessages(messages: ChatMessage[], finalInstruction?: string): ChatMessage[] {
@@ -180,6 +225,55 @@ function buildFinalAnswerMessages(messages: ChatMessage[], finalInstruction?: st
 interface ToolExecutionResult {
   result: string
   rawResult: string
+  status: 'success' | 'timeout' | 'cancelled' | 'tool_error'
+}
+
+interface ToolRunResult {
+  status: ToolExecutionResult['status']
+  value?: string
+  error?: unknown
+}
+
+async function runToolWithTimeout(
+  execute: (signal: AbortSignal) => Promise<string>,
+  timeout: number,
+  signal?: AbortSignal,
+): Promise<ToolRunResult> {
+  const controller = new AbortController()
+  let settleControl: (result: ToolRunResult) => void = () => undefined
+  const control = new Promise<ToolRunResult>((resolve) => {
+    settleControl = resolve
+  })
+  const forwardAbort = () => {
+    controller.abort(signal?.reason || 'aborted')
+    settleControl({ status: 'cancelled' })
+  }
+  signal?.addEventListener('abort', forwardAbort, { once: true })
+
+  const timer = setTimeout(() => {
+    controller.abort('timeout')
+    settleControl({ status: 'timeout' })
+  }, timeout)
+
+  try {
+    if (signal?.aborted) {
+      forwardAbort()
+      return await control
+    }
+    const execution = Promise.resolve().then(() => execute(controller.signal)).then<ToolRunResult, ToolRunResult>(
+      value => ({ status: 'success', value }),
+      error => ({
+        status: controller.signal.aborted
+          ? controller.signal.reason === 'timeout' ? 'timeout' : 'cancelled'
+          : 'tool_error',
+        error,
+      }),
+    )
+    return await Promise.race([execution, control])
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', forwardAbort)
+  }
 }
 
 function buildToolCallKey(name: string, args: Record<string, unknown>): string {
@@ -314,16 +408,83 @@ function extractSourcesFromToolResult(toolName: string, result: string): ChatMes
   return []
 }
 
-function addUniqueSources(target: ChatMessageSource[], sources: ChatMessageSource[]) {
-  const sourceKey = (source: ChatMessageSource) => source.kind === 'web'
-    ? `web:${source.url}`
-    : `local:${source.filePath}:${source.startLine}:${source.endLine}`
-  const seen = new Set(target.map(sourceKey))
-  for (const source of sources) {
-    const key = sourceKey(source)
-    if (seen.has(key)) continue
-    seen.add(key)
-    target.push(source)
+function withSourceReferenceId<T extends Record<string, unknown>>(value: T, id: string | undefined): T {
+  return id ? { ...value, referenceId: `[${id}]` } : value
+}
+
+function findSourceReferenceIdForToolPayload(
+  toolName: string,
+  payload: Record<string, unknown>,
+  registry: SourceReferenceRegistry,
+): string | undefined {
+  const parsed = toolName === 'read_selection_context'
+    ? { source: payload.source, chunks: [payload.chunk] }
+    : toolName === 'read_context_file'
+      ? { source: payload.source }
+      : { results: [payload] }
+  const source = extractSourcesFromToolResult(toolName, JSON.stringify(parsed))[0]
+  return source ? findSourceReferenceId(registry, source) : undefined
+}
+
+function annotateToolResultWithSourceReferences(
+  toolName: string,
+  result: string,
+  registry: SourceReferenceRegistry,
+): string {
+  if (!['search_knowledge', 'read_selection_context', 'read_context_file', 'web_search'].includes(toolName)) {
+    return result
+  }
+
+  try {
+    const parsed = JSON.parse(result)
+    if (!isPlainObject(parsed)) return result
+
+    if ((toolName === 'search_knowledge' || toolName === 'web_search') && Array.isArray(parsed.results)) {
+      return JSON.stringify({
+        ...parsed,
+        results: parsed.results.map((item) => {
+          if (!isPlainObject(item)) return item
+          const id = findSourceReferenceIdForToolPayload(toolName, item, registry)
+          return withSourceReferenceId(item, id)
+        }),
+      }, null, 2)
+    }
+
+    if (toolName === 'read_selection_context' && Array.isArray(parsed.chunks)) {
+      return JSON.stringify({
+        ...parsed,
+        chunks: parsed.chunks.map((chunk) => {
+          if (!isPlainObject(chunk)) return chunk
+          const id = findSourceReferenceIdForToolPayload(toolName, { source: parsed.source, chunk }, registry)
+          return withSourceReferenceId(chunk, id)
+        }),
+      }, null, 2)
+    }
+
+    if (toolName === 'read_context_file' && isPlainObject(parsed.source)) {
+      const id = findSourceReferenceIdForToolPayload(toolName, parsed, registry)
+      return JSON.stringify({
+        ...parsed,
+        source: withSourceReferenceId(parsed.source, id),
+      }, null, 2)
+    }
+  } catch {
+    return result
+  }
+
+  return result
+}
+
+export function prepareAgentToolResultForModel(
+  registry: SourceReferenceRegistry,
+  toolName: string,
+  result: string,
+): { registry: SourceReferenceRegistry; result: string } {
+  const sources = extractSourcesFromToolResult(toolName, result)
+  const nextRegistry = registerSourceReferences(registry, sources)
+  return {
+    registry: nextRegistry,
+    result: annotateToolResultWithSourceReferences(toolName, result, nextRegistry),
   }
 }
 
@@ -341,14 +502,14 @@ async function executeTool(
   const tool = getTool(name)
   if (!tool) {
     const result = `错误：工具 "${name}" 不存在。可用工具: ${getAllTools().map((t) => t.name).join(', ')}`
-    return { result, rawResult: result }
+    return { result, rawResult: result, status: 'tool_error' }
   }
 
   const knownParameters = new Set(tool.parameters.map((param) => param.name))
   for (const key of Object.keys(args)) {
     if (!knownParameters.has(key)) {
       const result = `错误：工具参数 "${key}" 不在允许列表中。`
-      return { result, rawResult: result }
+      return { result, rawResult: result, status: 'tool_error' }
     }
   }
 
@@ -356,35 +517,35 @@ async function executeTool(
   for (const param of tool.parameters) {
     if (param.required && !(param.name in args)) {
       const result = `错误：缺少必需参数 "${param.name}"（${param.description}）`
-      return { result, rawResult: result }
+      return { result, rawResult: result, status: 'tool_error' }
     }
     if (param.name in args && typeof args[param.name] !== param.type) {
       const result = `错误：参数 "${param.name}" 必须是 ${param.type} 类型。`
-      return { result, rawResult: result }
+      return { result, rawResult: result, status: 'tool_error' }
     }
   }
 
   if (name === 'save_memory' && !shouldAllowMemoryWrite(userIntent)) {
     const result = '保存被拒绝：只有用户本轮明确要求记住或保存信息时，才能写入长期记忆。'
-    return { result, rawResult: result }
+    return { result, rawResult: result, status: 'tool_error' }
   }
 
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort('timeout'), timeout)
-  const forwardAbort = () => controller.abort(signal?.reason || 'aborted')
-  signal?.addEventListener('abort', forwardAbort, { once: true })
+  const execution = await runToolWithTimeout(
+    toolSignal => tool.execute(args, { signal: toolSignal, onProgress }),
+    timeout,
+    signal,
+  )
+  if (execution.status !== 'success') {
+    const result = execution.status === 'timeout'
+      ? '工具执行超时。'
+      : execution.status === 'cancelled'
+        ? '工具执行已取消。'
+        : `工具执行出错: ${execution.error instanceof Error ? execution.error.message : String(execution.error)}`
+    return { result, rawResult: result, status: execution.status }
+  }
 
+  const result = execution.value || ''
   try {
-    if (signal?.aborted) {
-      const result = '工具执行已取消。'
-      return { result, rawResult: result }
-    }
-    const result = await Promise.race([
-      tool.execute(args, { signal: controller.signal, onProgress }),
-      new Promise<string>((_, reject) =>
-        setTimeout(() => reject(new Error('工具执行超时')), timeout)
-      ),
-    ])
     const isRejectedResult = /^(?:错误：|参数 |修改被拒绝|替换失败|整文替换被拒绝|保存被拒绝)/.test(result.trim())
     if (
       tool.confirmationPolicy === 'required'
@@ -393,20 +554,20 @@ async function executeTool(
       && !isRejectedResult
     ) {
       const blocked = `错误：工具 "${name}" 声明为必须确认，但未返回受支持的行动提案。`
-      return { result: blocked, rawResult: blocked }
+      return { result: blocked, rawResult: blocked, status: 'tool_error' }
     }
-    if (isPendingEditResult(result) || isPendingActionResult(result)) return { result, rawResult: result }
+    if (isPendingEditResult(result) || isPendingActionResult(result)) return { result, rawResult: result, status: 'success' }
     return {
-      result: name === 'read_selection_context' ? result : truncate(result, getToolTokenBudget(name)),
+      // search_knowledge 必须走结构化截断：observation 的 content 会被时间线
+      // 与来源提取用 JSON.parse 解析，硬截断会破坏 JSON 导致误报"检索失败"。
+      result: name === 'read_selection_context' ? result : truncateToolResultForModel(name, result, getToolTokenBudget(name)),
       rawResult: result,
+      status: 'success',
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     const result = `工具执行出错: ${msg}`
-    return { result, rawResult: result }
-  } finally {
-    clearTimeout(timer)
-    signal?.removeEventListener('abort', forwardAbort)
+    return { result, rawResult: result, status: 'tool_error' }
   }
 }
 
@@ -423,12 +584,12 @@ async function executeToolCalls(
   readResultCache?: Map<string, Promise<ToolExecutionResult>>,
   maxNewToolCalls = Number.POSITIVE_INFINITY,
   allowWriteBeyondBudget = false,
-): Promise<Array<{ name: string; result: string; rawResult?: string; executed?: boolean; reused?: boolean }>> {
+): Promise<Array<{ name: string; result: string; rawResult?: string; status?: ToolExecutionResult['status']; executed?: boolean; reused?: boolean }>> {
   // 分离读取类和写入类工具
   const readCalls = toolCalls.filter(tc => isReadTool(tc.name))
   const writeCalls = toolCalls.filter(tc => isWriteTool(tc.name))
 
-  const results: Array<{ name: string; result: string; rawResult?: string; executed?: boolean }> = []
+  const results: Array<{ name: string; result: string; rawResult?: string; status?: ToolExecutionResult['status']; executed?: boolean }> = []
 
   const regularReadCalls = readCalls.filter((call) => call.name !== 'read_selection_context')
   const selectionContextCalls = readCalls.filter((call) => call.name === 'read_selection_context')
@@ -446,6 +607,7 @@ async function executeToolCalls(
             name: tc.name,
             result: reused.result,
             rawResult: reused.rawResult,
+            status: reused.status,
             executed: false,
             reused: true,
           }
@@ -465,6 +627,7 @@ async function executeToolCalls(
           name: tc.name,
           result: executed.result,
           rawResult: executed.rawResult,
+          status: executed.status,
         }
       })
     )
@@ -519,7 +682,7 @@ async function executeToolCalls(
       succeeded = false
     }
     if (succeeded) selectionContextReadLevels?.set(targetId, level)
-    results.push({ name: call.name, result: executed.result, rawResult: executed.rawResult })
+    results.push({ name: call.name, result: executed.result, rawResult: executed.rawResult, status: executed.status })
   }
 
   // 写入类工具本轮只允许执行第一个，避免多个确认卡片之间出现授权范围错配。
@@ -534,7 +697,7 @@ async function executeToolCalls(
     } else {
       if (remainingNewToolCalls > 0) remainingNewToolCalls--
       const executed = await executeTool(firstWriteCall.name, firstWriteCall.args, timeout, userIntent, signal, onProgress)
-      results.push({ name: firstWriteCall.name, result: executed.result, rawResult: executed.rawResult })
+      results.push({ name: firstWriteCall.name, result: executed.result, rawResult: executed.rawResult, status: executed.status })
     }
   }
   for (const tc of writeCalls.slice(1)) {
@@ -562,7 +725,7 @@ export function validateSelectionContextReadLevel(completedLevel: 0 | 1 | 2, req
  * Run the agent with a user query.
  * Uses structured JSON tool calling with intent-based tool selection.
  */
-export async function runAgent({
+async function runAgentInternal({
   query,
   chatHistory = [],
   config = {},
@@ -581,7 +744,7 @@ export async function runAgent({
   customPreferencePrompt,
   streamEnabled = true,
   routingDecision,
-}: AgentRunRequest): Promise<AgentResult> {
+}: AgentRunRequest, deadlineAt: number): Promise<AgentResult> {
   initAgent()
 
   if (!isAiReady()) {
@@ -690,7 +853,7 @@ export async function runAgent({
   const contextMessage = buildUntrustedContextMessage(untrustedContext || '')
   const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
-    ...chatHistory.slice(-4), // Keep last 4 messages for context
+    ...chatHistory,
     ...(contextMessage ? [contextMessage] : []),
     ...(answerInstruction ? [{ role: 'user' as const, content: answerInstruction }] : []),
     { role: 'user', content: query },
@@ -699,10 +862,31 @@ export async function runAgent({
   const steps: AgentStep[] = []
   let toolCalls = 0
   let editToolCalls = 0
-  const knowledgeSources: ChatMessageSource[] = []
+  let sourceRegistry = createSourceReferenceRegistry()
   const calledToolNames: string[] = []
   const selectionContextReadLevels = new Map<string, 1 | 2>()
   const readResultCache = new Map<string, Promise<ToolExecutionResult>>()
+  const remainingDeadlineMs = () => Math.max(0, deadlineAt - Date.now())
+  const sourceMetadata = () => ({
+    sources: sourceRegistry.entries.map((entry) => entry.source),
+    sourceRegistry,
+  })
+  const prepareVisibleToolResult = (name: string, result: string): string => {
+    const prepared = prepareAgentToolResultForModel(sourceRegistry, name, result)
+    sourceRegistry = prepared.registry
+    return prepared.result
+  }
+  const deadlineResult = (): AgentResult => ({
+    answer: '',
+    steps,
+    toolCalls,
+    reason: 'deadline',
+    finalMessages: buildFinalAnswerMessages(
+      messages,
+      '本轮已达到整次任务时限。请仅基于已有证据给出可确认的结论，并明确声明尚未取得或验证的信息。',
+    ),
+    ...sourceMetadata(),
+  })
   if (hasPrefetchedMemoryLookup) {
     calledToolNames.push('search_memory')
   }
@@ -719,62 +903,74 @@ export async function runAgent({
   })
 
   const requestAgentCompletion = async () => {
-    if (!streamEnabled) {
-      return client.chat({
-        messages,
+    const send = async (currentMessages: ChatMessage[]) => {
+      if (remainingDeadlineMs() <= 0) throw new DOMException('Agent deadline exceeded', 'TimeoutError')
+      if (!streamEnabled) {
+        return client.chat({
+          messages: currentMessages,
+          signal,
+          temperature,
+          tools: llmTools,
+          toolChoice: 'auto',
+        })
+      }
+
+      let content = ''
+      const toolCallBuffers = new Map<number, { id?: string; name: string; arguments: string }>()
+
+      for await (const chunk of client.streamChat({
+        messages: currentMessages,
         signal,
         temperature,
         tools: llmTools,
         toolChoice: 'auto',
-      })
-    }
-
-    let content = ''
-    const toolCallBuffers = new Map<number, { id?: string; name: string; arguments: string }>()
-
-    for await (const chunk of client.streamChat({
-      messages,
-      signal,
-      temperature,
-      tools: llmTools,
-      toolChoice: 'auto',
-    })) {
-      if (chunk.toolCallDeltas?.length) {
-        for (const delta of chunk.toolCallDeltas) {
-          const current = toolCallBuffers.get(delta.index) || { name: '', arguments: '' }
-          toolCallBuffers.set(delta.index, {
-            id: delta.id || current.id,
-            name: current.name + (delta.name || ''),
-            arguments: current.arguments + (delta.arguments || ''),
-          })
-        }
-      }
-      if (chunk.content) {
-        content += chunk.content
-        onStreamContent?.(content)
-      }
-      if (chunk.done) break
-    }
-
-    return {
-      id: '',
-      content,
-      role: 'assistant' as const,
-      toolCalls: Array.from(toolCallBuffers.values())
-        .filter((call) => call.name)
-        .map((call) => {
-          let args: Record<string, unknown> = {}
-          try {
-            args = call.arguments ? JSON.parse(call.arguments) : {}
-          } catch {
-            args = {}
+      })) {
+        if (chunk.toolCallDeltas?.length) {
+          for (const delta of chunk.toolCallDeltas) {
+            const current = toolCallBuffers.get(delta.index) || { name: '', arguments: '' }
+            toolCallBuffers.set(delta.index, {
+              id: delta.id || current.id,
+              name: current.name + (delta.name || ''),
+              arguments: current.arguments + (delta.arguments || ''),
+            })
           }
-          return { id: call.id, name: call.name, args }
-        }),
+        }
+        if (chunk.content) {
+          content += chunk.content
+          onStreamContent?.(content)
+        }
+        if (chunk.done) break
+      }
+
+      return {
+        id: '',
+        content,
+        role: 'assistant' as const,
+        toolCalls: Array.from(toolCallBuffers.values())
+          .filter((call) => call.name)
+          .map((call) => {
+            let args: Record<string, unknown> = {}
+            try {
+              args = call.arguments ? JSON.parse(call.arguments) : {}
+            } catch {
+              args = {}
+            }
+            return { id: call.id, name: call.name, args }
+          }),
+      }
+    }
+
+    try {
+      return await send(messages)
+    } catch (error) {
+      if (!isModelContextOverflowError(error) || signal?.aborted) throw error
+      console.warn('[Agent context] provider reported context overflow; retrying after dropping oldest turn')
+      return send(dropOldestCompleteTurns(messages))
     }
   }
 
   const repairUnmetReadCapabilities = async (): Promise<boolean> => {
+    if (remainingDeadlineMs() <= 0) return false
     const unmetCapabilities = checkRequiredCapabilities(mergedRequired, calledToolNames)
     const repairTools = getRepairTools(unmetCapabilities)
       .filter((name) => candidateTools.includes(name))
@@ -815,7 +1011,7 @@ export async function runAgent({
           : name === 'get_current_time' ? {}
           : { query: userIntent },
       })),
-      mergedConfig.stepTimeout,
+      Math.min(mergedConfig.stepTimeout, remainingDeadlineMs()),
       userIntent,
       signal,
       selectionContextReadLevels,
@@ -827,7 +1023,6 @@ export async function runAgent({
 
     for (const { name, result, rawResult, executed } of repairResults) {
       if (executed !== false) {
-        addUniqueSources(knowledgeSources, extractSourcesFromToolResult(name, rawResult || result))
         calledToolNames.push(name)
         toolCalls++
       }
@@ -837,9 +1032,11 @@ export async function runAgent({
         toolName: name,
         timestamp: Date.now(),
       })
+      const modelResult = truncateToolResultForModel(name, rawResult || result, resolveToolResultMaxChars(name))
+      const visibleModelResult = prepareVisibleToolResult(name, modelResult)
       messages.push({
         role: 'user',
-        content: `系统已补调 ${name} 工具。请依据结果回答：\n${result}`,
+        content: `系统已补调 ${name} 工具。请依据结果回答：\n${visibleModelResult}`,
       })
     }
 
@@ -855,13 +1052,26 @@ export async function runAgent({
     })
 
     try {
-      const response = await client.chat({
-        messages,
-        signal,
-        temperature,
-        tools: [],
-        toolChoice: 'none',
-      })
+      let response
+      try {
+        response = await client.chat({
+          messages,
+          signal,
+          temperature,
+          tools: [],
+          toolChoice: 'none',
+        })
+      } catch (error) {
+        if (!isModelContextOverflowError(error) || signal?.aborted) throw error
+        console.warn('[Agent context] provider reported context overflow; retrying after dropping oldest turn')
+        response = await client.chat({
+          messages: dropOldestCompleteTurns(messages),
+          signal,
+          temperature,
+          tools: [],
+          toolChoice: 'none',
+        })
+      }
 
       return {
         answer: response.content,
@@ -870,12 +1080,14 @@ export async function runAgent({
         reason: 'completed',
       }
     } catch (err) {
+      if (signal?.reason === 'deadline' || remainingDeadlineMs() <= 0) return deadlineResult()
       const msg = err instanceof Error ? err.message : String(err)
       return {
         answer: `AI 请求失败: ${msg}`,
         steps,
         toolCalls: 0,
         reason: 'error',
+        ...sourceMetadata(),
       }
     }
   }
@@ -883,7 +1095,8 @@ export async function runAgent({
   // 有候选工具，进入 Agent 循环
   for (let i = 0; i < mergedConfig.maxSteps; i++) {
     if (signal?.aborted) {
-      return { answer: '已取消本次 Agent 请求。', steps, toolCalls, reason: 'error', sources: knowledgeSources }
+      if (signal.reason === 'deadline') return deadlineResult()
+      return { answer: '已取消本次 Agent 请求。', steps, toolCalls, reason: 'error', ...sourceMetadata() }
     }
     if (toolCalls >= mergedConfig.maxToolCalls && (!requiresEditConfirmation || editToolCalls > 0)) {
       return {
@@ -895,7 +1108,7 @@ export async function runAgent({
           messages,
           '本轮已达到工具调用上限。请仅基于已有结果给出当前可确认的结论，并明确说明仍缺少的信息。',
         ),
-        sources: knowledgeSources,
+        ...sourceMetadata(),
       }
     }
 
@@ -916,12 +1129,14 @@ export async function runAgent({
         }
       }
     } catch (err) {
+      if (signal?.reason === 'deadline' || remainingDeadlineMs() <= 0) return deadlineResult()
       const msg = err instanceof Error ? err.message : String(err)
       return {
         answer: `AI 请求失败: ${msg}`,
         steps,
         toolCalls,
         reason: 'error',
+        ...sourceMetadata(),
       }
     }
 
@@ -983,16 +1198,18 @@ export async function runAgent({
 
       // 最终答案
       const cleanAnswer = stripToolCallJson(content)
+      const parsedAnswer = parseSourceReferences(cleanAnswer || content, sourceRegistry)
       if (cleanAnswer || content) {
         return {
-          answer: cleanAnswer || content,
+          answer: parsedAnswer.content,
           steps,
           toolCalls,
           reason: 'completed',
-          sources: knowledgeSources,
+          referencedSourceIds: parsedAnswer.referencedIds,
+          ...sourceMetadata(),
         }
       }
-      return { answer: '', steps, toolCalls, reason: 'completed', sources: knowledgeSources }
+      return { answer: '', steps, toolCalls, reason: 'completed', ...sourceMetadata() }
     }
 
     // 过滤工具调用 JSON 从思考步骤
@@ -1020,7 +1237,7 @@ export async function runAgent({
 
     const toolResults = await executeToolCalls(
       parsedToolCalls.map(tc => ({ name: tc.name, args: tc.args })),
-      mergedConfig.stepTimeout,
+      Math.min(mergedConfig.stepTimeout, remainingDeadlineMs()),
       userIntent,
       signal,
       selectionContextReadLevels,
@@ -1035,9 +1252,6 @@ export async function runAgent({
       const { name } = toolResult
       const executed = toolResult.executed !== false
       if (executed) {
-        addUniqueSources(knowledgeSources, extractSourcesFromToolResult(name, toolResult.rawResult || toolResult.result))
-      }
-      if (executed) {
         calledToolNames.push(name)
         toolCalls++
       }
@@ -1047,7 +1261,7 @@ export async function runAgent({
     }
 
     // 添加工具结果到消息
-    for (const { name, result, executed, reused } of toolResults) {
+    for (const { name, result, rawResult, executed, reused } of toolResults) {
       pushStep({
         type: 'observation',
         content: result,
@@ -1055,15 +1269,17 @@ export async function runAgent({
         timestamp: Date.now(),
       })
 
+      const modelResult = name === 'read_selection_context'
+        ? result
+        : truncateToolResultForModel(name, rawResult || result, resolveToolResultMaxChars(name))
+      const visibleModelResult = prepareVisibleToolResult(name, modelResult)
       messages.push({
         role: 'assistant',
         content: reused ? `复用本轮工具结果: ${name}` : executed === false ? `未执行工具: ${name}` : `调用工具: ${name}`,
       })
       messages.push({
         role: 'user',
-        content: name === 'read_selection_context'
-          ? `工具返回结果：\n${result}\n\n请根据以上信息继续思考或给出最终答案。`
-          : truncate(`工具返回结果：\n${result}\n\n请根据以上信息继续思考或给出最终答案。`, getToolTokenBudget(name)),
+        content: `工具返回结果：\n${visibleModelResult}\n\n请根据以上信息继续思考或给出最终答案。`,
       })
     }
 
@@ -1072,63 +1288,9 @@ export async function runAgent({
       (tr) => isPendingEditResult(tr.result) || isPendingActionResult(tr.result),
     )
     if (hasPendingConfirmation) {
-      return { answer: '', steps, toolCalls, reason: 'completed', sources: knowledgeSources }
+      return { answer: '', steps, toolCalls, reason: 'completed', ...sourceMetadata() }
     }
 
-    // 智能裁剪历史（保留最近的用户消息和工具结果）
-    if (messages.length > 20) {
-      const systemMessage = messages[0]
-      const userMessage = messages[messages.length - 1] // 最近的用户消息
-
-      // 找到最近的工具结果消息
-      let lastToolResultIndex = -1
-      for (let j = messages.length - 1; j >= 0; j--) {
-        if (messages[j].role === 'user' && messages[j].content.includes('工具返回结果')) {
-          lastToolResultIndex = j
-          break
-        }
-      }
-
-      // 找到最近的用户消息（非工具结果）
-      let lastUserMessageIndex = -1
-      for (let j = messages.length - 1; j >= 0; j--) {
-        if (messages[j].role === 'user' && !messages[j].content.includes('工具返回结果')) {
-          lastUserMessageIndex = j
-          break
-        }
-      }
-
-      // 确定保留的起始位置
-      let keepFromIndex = 1 // 默认从第二条消息开始保留
-
-      if (lastToolResultIndex > 0) {
-        // 如果有工具结果，从工具结果前一条消息开始保留
-        keepFromIndex = Math.max(1, lastToolResultIndex - 1)
-      } else if (lastUserMessageIndex > 0) {
-        // 如果没有工具结果，从最近用户消息前一条开始保留
-        keepFromIndex = Math.max(1, lastUserMessageIndex - 1)
-      }
-
-      // 计算要保留的消息数量（最多保留15条）
-      const maxKeep = 15
-      const availableMessages = messages.length - keepFromIndex
-      const keepCount = Math.min(maxKeep, availableMessages)
-
-      // 如果需要裁剪
-      if (keepCount < availableMessages) {
-        keepFromIndex = messages.length - keepCount
-      }
-
-      // 重建消息数组
-      const recentMessages = messages.slice(keepFromIndex)
-      messages.length = 0
-      messages.push(systemMessage, ...recentMessages)
-
-      // 确保最近的用户消息在最后
-      if (messages[messages.length - 1].role !== 'user') {
-        messages.push(userMessage)
-      }
-    }
   }
 
   // 达到最大步数，检查强依赖
@@ -1139,7 +1301,7 @@ export async function runAgent({
       toolCalls,
       reason: 'completed',
       finalMessages: buildFinalAnswerMessages(messages, answerInstruction),
-      sources: knowledgeSources,
+      ...sourceMetadata(),
     }
   }
 
@@ -1151,7 +1313,7 @@ export async function runAgent({
       toolCalls,
       reason: 'max_steps',
       finalMessages: buildFinalAnswerMessages(messages, answerInstruction),
-      sources: knowledgeSources,
+      ...sourceMetadata(),
     }
   }
 
@@ -1160,7 +1322,25 @@ export async function runAgent({
     steps,
     toolCalls,
     reason: 'max_steps',
-    sources: knowledgeSources,
+    ...sourceMetadata(),
+  }
+}
+
+export async function runAgent(request: AgentRunRequest): Promise<AgentResult> {
+  const deadlineMs = Math.max(1, Math.floor(request.config?.deadlineMs ?? DEFAULT_CONFIG.deadlineMs))
+  const deadlineAt = Date.now() + deadlineMs
+  const controller = new AbortController()
+  const parentSignal = request.signal
+  const forwardCancellation = () => controller.abort(parentSignal?.reason)
+  if (parentSignal?.aborted) forwardCancellation()
+  else parentSignal?.addEventListener('abort', forwardCancellation, { once: true })
+  const timer = setTimeout(() => controller.abort('deadline'), deadlineMs)
+
+  try {
+    return await runAgentInternal({ ...request, signal: controller.signal }, deadlineAt)
+  } finally {
+    clearTimeout(timer)
+    parentSignal?.removeEventListener('abort', forwardCancellation)
   }
 }
 

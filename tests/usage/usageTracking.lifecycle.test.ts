@@ -368,7 +368,7 @@ describe('窗口生命周期', () => {
 
     expect(getUsageSnapshot().isActive).toBe(true)
     expect(mockWindow.focusListeners.size).toBe(1)
-    expect(mockWindow.closeListeners.size).toBe(1)
+    expect(mockWindow.closeListeners.size).toBe(0)
     expect(docListeners.get('visibilitychange')?.size).toBe(1)
   })
 
@@ -390,7 +390,7 @@ describe('窗口生命周期', () => {
 
     expect(getUsageSnapshot().isActive).toBe(true)
     expect(mockWindow.focusListeners.size).toBe(1)
-    expect(mockWindow.closeListeners.size).toBe(1)
+    expect(mockWindow.closeListeners.size).toBe(0)
   })
 
   it('停止后在途的焦点查询不得重新激活统计', async () => {
@@ -765,59 +765,6 @@ describe('写入失败重试', () => {
 
     expect(mockDbRows[0].foreground_seconds).toBe(2)
     expect(getPendingSnapshot().get(today)).toBe(2)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// 关闭处理
-// ---------------------------------------------------------------------------
-
-describe('关闭请求处理', () => {
-  beforeEach(() => {
-    resetMockWindow()
-    mockEnabled = true
-  })
-
-  afterEach(async () => {
-    await cleanUpTracking()
-  })
-
-  it('关闭请求时 preventDefault 并结算写入', async () => {
-    mockWindow.focused = true
-    await startUsageTracking()
-
-    await vi.advanceTimersByTimeAsync(5_000)
-    await flushMicrotasks()
-
-    mockDestroy.mockClear()
-
-    const closeEvent = { preventDefault: vi.fn() }
-    const closePromise = Promise.all(
-      Array.from(mockWindow.closeListeners).map((l) => l(closeEvent)),
-    )
-    await closePromise
-    await flushMicrotasks()
-
-    expect(closeEvent.preventDefault).toHaveBeenCalled()
-    expect(mockDestroy).toHaveBeenCalled()
-  })
-
-  it('重复关闭请求只执行一次保存和窗口销毁', async () => {
-    mockWindow.focused = true
-    await startUsageTracking()
-    mockDestroy.mockClear()
-
-    const listeners = Array.from(mockWindow.closeListeners)
-    const firstEvent = { preventDefault: vi.fn() }
-    const secondEvent = { preventDefault: vi.fn() }
-    await Promise.all([
-      ...listeners.map((listener) => listener(firstEvent)),
-      ...listeners.map((listener) => listener(secondEvent)),
-    ])
-
-    expect(firstEvent.preventDefault).toHaveBeenCalled()
-    expect(secondEvent.preventDefault).toHaveBeenCalled()
-    expect(mockDestroy).toHaveBeenCalledTimes(1)
   })
 })
 

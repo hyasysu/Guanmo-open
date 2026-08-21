@@ -1,0 +1,110 @@
+/* Startup Shell：静态骨架，颜色同步用户持久化主题；React 首次 commit 后由 main.tsx 移除。
+   注意：此样式必须经 <link>/import 加载而非 index.html 内联 <style>——
+   Tauri 的 CSP 资产改写会给内联样式注入 nonce，nonce 的存在会使 CSP 忽略
+   'unsafe-inline'，导致 CodeMirror 等运行时动态创建的 <style> 全部被拦截。 */
+:root {
+  --gmss-canvas: #f8f4e8;
+  --gmss-surface: #f7f3df;
+  --gmss-border: #f0ece2;
+  --gmss-text: #794f27;
+  --gmss-placeholder: rgba(121, 79, 39, 0.08);
+  --gmss-placeholder-strong: rgba(121, 79, 39, 0.12);
+}
+:root[data-theme-id='light'] {
+  --gmss-canvas: #ffffff;
+  --gmss-surface: #ffffff;
+  --gmss-border: #f1f3f5;
+  --gmss-text: #1f2937;
+  --gmss-placeholder: rgba(31, 41, 55, 0.06);
+  --gmss-placeholder-strong: rgba(31, 41, 55, 0.1);
+}
+:root[data-theme-id='dark'] {
+  --gmss-canvas: #15130f;
+  --gmss-surface: #1d1a15;
+  --gmss-border: #2d271f;
+  --gmss-text: #eee4d2;
+  --gmss-placeholder: rgba(224, 190, 132, 0.1);
+  --gmss-placeholder-strong: rgba(224, 190, 132, 0.16);
+}
+:root[data-theme-id='paper'] {
+  --gmss-canvas: #f1eadc;
+  --gmss-surface: #f7f0e3;
+  --gmss-border: #e9dfcf;
+  --gmss-text: #4e4033;
+  --gmss-placeholder: rgba(78, 64, 51, 0.07);
+  --gmss-placeholder-strong: rgba(78, 64, 51, 0.12);
+}
+:root[data-theme-id='github-light'] {
+  --gmss-canvas: #f5f7f9;
+  --gmss-surface: #ffffff;
+  --gmss-border: #eaeef2;
+  --gmss-text: #20262d;
+  --gmss-placeholder: rgba(32, 38, 45, 0.06);
+  --gmss-placeholder-strong: rgba(32, 38, 45, 0.1);
+}
+#guanmo-startup-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: flex;
+  flex-direction: column;
+  background: var(--gmss-canvas);
+  pointer-events: none;
+  font-family: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+}
+.gmss-title {
+  height: 38px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
+  background: var(--gmss-surface);
+  border-bottom: 1px solid var(--gmss-border);
+}
+.gmss-brand {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--gmss-text);
+}
+.gmss-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.gmss-rail {
+  width: 56px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  background: var(--gmss-surface);
+  border-right: 1px solid var(--gmss-border);
+}
+.gmss-tool {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: var(--gmss-placeholder-strong);
+}
+.gmss-main {
+  flex: 1;
+  padding: 24px 32px;
+  background: var(--gmss-surface);
+}
+.gmss-line {
+  height: 10px;
+  border-radius: 5px;
+  background: var(--gmss-placeholder);
+  margin-bottom: 12px;
+}
+.gmss-line-heading {
+  height: 14px;
+  width: 32%;
+  background: var(--gmss-placeholder-strong);
+}
+.gmss-line-1 { width: 46%; }
+.gmss-line-2 { width: 72%; }
+.gmss-line-3 { width: 58%; }

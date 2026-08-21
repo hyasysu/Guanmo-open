@@ -7,7 +7,15 @@ interface RestorePersistedTabsOptions {
   activeTabId?: string | null
   concurrency?: number
   readFile?: (path: string) => Promise<string>
+  detectExternalChanges?: boolean
   onTabRestored?: (tab: Tab, index: number) => void
+  onTabRestoreIssue?: (issue: PersistedTabRestoreIssue, index: number) => void
+}
+
+export interface PersistedTabRestoreIssue {
+  kind: 'external-change' | 'unavailable'
+  tabId: string
+  title: string
 }
 
 export function getRestorablePersistedTabs(tabs: Tab[]): Tab[] {
@@ -16,39 +24,57 @@ export function getRestorablePersistedTabs(tabs: Tab[]): Tab[] {
 
 async function restorePersistedTab(
   tab: Tab,
-  readFile: (path: string) => Promise<string>
-): Promise<Tab> {
+  readFile: (path: string) => Promise<string>,
+  detectExternalChanges: boolean,
+): Promise<{ tab: Tab; issue?: PersistedTabRestoreIssue }> {
   if (!tab.filePath) {
     return {
-      ...tab,
-      originalContent: tab.originalContent ?? tab.savedContent ?? tab.content,
+      tab: {
+        ...tab,
+        originalContent: tab.originalContent ?? tab.savedContent ?? tab.content,
+      },
     }
   }
 
   try {
     const diskContent = await readFile(tab.filePath)
+    const externallyChanged = tab.modified
+      ? diskContent !== tab.savedContent
+      : detectExternalChanges && diskContent !== tab.content
+    const issue = externallyChanged
+      ? { kind: 'external-change' as const, tabId: tab.id, title: tab.title }
+      : undefined
     if (tab.modified) {
       return {
-        ...tab,
-        originalContent: tab.originalContent ?? tab.savedContent ?? tab.content,
-        savedContent: diskContent,
-        modified: tab.content !== diskContent,
+        tab: {
+          ...tab,
+          originalContent: tab.originalContent ?? tab.savedContent ?? tab.content,
+          savedContent: diskContent,
+          modified: tab.content !== diskContent,
+        },
+        issue,
       }
     }
     return {
-      ...tab,
-      content: diskContent,
-      savedContent: diskContent,
-      originalContent: diskContent,
-      modified: false,
+      tab: {
+        ...tab,
+        content: diskContent,
+        savedContent: diskContent,
+        originalContent: diskContent,
+        modified: false,
+      },
+      issue,
     }
   } catch (error) {
     console.warn('[SessionRestore] Failed to read persisted tab', {
       errorType: error instanceof Error ? error.name : typeof error,
     })
     return {
-      ...tab,
-      originalContent: tab.originalContent ?? tab.savedContent ?? tab.content,
+      tab: {
+        ...tab,
+        originalContent: tab.originalContent ?? tab.savedContent ?? tab.content,
+      },
+      issue: { kind: 'unavailable', tabId: tab.id, title: tab.title },
     }
   }
 }
@@ -76,9 +102,15 @@ export async function restorePersistedTabs(
     while (pendingIndexes.length > 0) {
       const index = pendingIndexes.shift()
       if (index === undefined) return
-      const tab = await restorePersistedTab(restorableTabs[index], readFile)
+      const result = await restorePersistedTab(
+        restorableTabs[index],
+        readFile,
+        options.detectExternalChanges ?? false,
+      )
+      const tab = result.tab
       restored[index] = tab
       options.onTabRestored?.(tab, index)
+      if (result.issue) options.onTabRestoreIssue?.(result.issue, index)
     }
   }))
 

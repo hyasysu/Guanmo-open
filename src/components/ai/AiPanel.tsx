@@ -22,6 +22,7 @@ import type {
   LocalChatMessageSource,
   ActionProposal,
 } from '@/services/ai/types'
+import { resolveStoredSourceReferences, type SourceReferenceId } from '@/services/ai/sourceReferences'
 import { AI_SHORTCUT_SUBMIT_EVENT } from '@/services/aiContext'
 import { applyPendingEditCommand } from '@/services/pendingEditCommand'
 import { saveAssistantMessageAsMarkdown } from '@/services/assistantMessageExport'
@@ -35,12 +36,12 @@ import {
   getAnnotationStructuredContent,
   getReadingArtifactQuestion,
   getReadingArtifactReferences,
-  loadReadingArtifactById,
   resolveAnnotationPosition,
 } from '@/services/database/readingArtifacts'
 import { loadReadingReminders, type ReadingReminder } from '@/services/database/readingReminders'
 import {
   cancelReadingReminder,
+  deleteReadingReminder,
   editReadingReminderTime,
   retryReadingReminder,
 } from '@/services/readingReminders'
@@ -184,6 +185,16 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
       await refreshReminders()
       toast.error(error instanceof Error ? error.message : '修改提醒失败')
       throw error
+    }
+  }, [refreshReminders])
+
+  const handleDeleteReminder = useCallback(async (id: string) => {
+    try {
+      await deleteReadingReminder(id)
+      await refreshReminders()
+      toast.success('提醒已删除')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '删除提醒失败')
     }
   }, [refreshReminders])
 
@@ -418,30 +429,6 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     }
   }, [])
 
-  const handleOpenReminderSource = useCallback(async (reminder: ReadingReminder) => {
-    if (reminder.sourceArtifactId) {
-      const artifact = await loadReadingArtifactById(reminder.sourceArtifactId)
-      if (artifact) {
-        await handleOpenArtifactSource(artifact)
-        return
-      }
-    }
-    if (reminder.sourceFilePath) {
-      await handleOpenRagSource({ filePath: reminder.sourceFilePath, startLine: 1, endLine: 1 })
-      return
-    }
-    if (reminder.sourceMessageId && messages.some((message) => message.id === reminder.sourceMessageId)) {
-      setPanelView('chat')
-      window.setTimeout(() => {
-        const target = Array.from(document.querySelectorAll<HTMLElement>('[data-chat-message-id]'))
-          .find((element) => element.dataset.chatMessageId === reminder.sourceMessageId)
-        target?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-      }, 0)
-      return
-    }
-    toast.error('提醒来源当前不可用')
-  }, [handleOpenArtifactSource, handleOpenRagSource, messages])
-
   const handleReturnToChat = useCallback(() => {
     autoFollowRef.current = true
     streamScrollInterruptedRef.current = false
@@ -648,7 +635,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
               onCancel={handleCancelReminder}
               onRetry={handleRetryReminder}
               onEdit={handleEditReminder}
-              onOpenSource={handleOpenReminderSource}
+              onDelete={handleDeleteReminder}
             />
           ) : (
             <div className="flex h-full flex-col items-center justify-center p-6 text-center">
@@ -712,6 +699,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
                   isLast={i === visibleMessages.length - 1}
                   streaming={streaming}
                   sources={msg.sources}
+                  referencedSourceIds={msg.referencedSourceIds}
                   onOpenSource={handleOpenRagSource}
                   onSaveAsMarkdown={
                     msg.role === 'assistant'
@@ -815,14 +803,14 @@ function ReadingRemindersPanel({
   onCancel,
   onRetry,
   onEdit,
-  onOpenSource,
+  onDelete,
 }: {
   reminders: ReadingReminder[]
   loading: boolean
   onCancel: (id: string) => void | Promise<void>
   onRetry: (id: string) => void | Promise<void>
   onEdit: (id: string, dueAtUtc: number, timezone: string) => void | Promise<void>
-  onOpenSource: (reminder: ReadingReminder) => void | Promise<void>
+  onDelete: (id: string) => void | Promise<void>
 }) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingTime, setEditingTime] = useState('')
@@ -845,7 +833,6 @@ function ReadingRemindersPanel({
         const editable = reminder.dueAtUtc > Date.now()
           && !['cancelled', 'fired', 'cancel_pending'].includes(reminder.status)
           && reminder.errorCode !== 'notification_cancel_failed'
-        const hasSource = Boolean(reminder.sourceArtifactId || reminder.sourceFilePath || reminder.sourceMessageId)
         const editing = editingId === reminder.id
         return (
           <div key={reminder.id} className="rounded-xl border border-gm-border bg-gm-surface-elevated p-3">
@@ -905,9 +892,6 @@ function ReadingRemindersPanel({
                 )}
               </div>
               <div className="flex shrink-0 flex-col items-end gap-1">
-                {hasSource && (
-                  <Button type="text" size="small" onClick={() => void onOpenSource(reminder)}>查看来源</Button>
-                )}
                 {reminder.status === 'failed' && (
                   <Button type="default" size="small" onClick={() => void onRetry(reminder.id)}>重试</Button>
                 )}
@@ -933,6 +917,7 @@ function ReadingRemindersPanel({
                     取消
                   </Button>
                 )}
+                <Button danger size="small" onClick={() => void onDelete(reminder.id)}>删除</Button>
               </div>
             </div>
           </div>
@@ -1448,6 +1433,7 @@ export const ChatBubble = memo(function ChatBubble({
   isLast,
   streaming,
   sources,
+  referencedSourceIds,
   onOpenSource,
   onSaveAsMarkdown,
   onSaveAsArtifact,
@@ -1457,6 +1443,7 @@ export const ChatBubble = memo(function ChatBubble({
   isLast: boolean
   streaming: boolean
   sources?: ChatMessageSource[]
+  referencedSourceIds?: SourceReferenceId[]
   onOpenSource?: (source: LocalChatMessageSource) => void
   onSaveAsMarkdown?: () => void
   onSaveAsArtifact?: (type: ReadingArtifactType) => void
@@ -1464,6 +1451,10 @@ export const ChatBubble = memo(function ChatBubble({
   const isUser = role === 'user'
   const isEmpty = !content && isLast && streaming
   const isAssistantStreaming = !isUser && isLast && streaming
+  const displayedSources = useMemo(
+    () => resolveStoredSourceReferences(sources, referencedSourceIds),
+    [referencedSourceIds, sources],
+  )
   const bubbleRef = useRef<HTMLDivElement>(null)
   const saveMenuRef = useRef<HTMLDivElement>(null)
   const saveControlsHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1576,8 +1567,12 @@ export const ChatBubble = memo(function ChatBubble({
           ) : (
             <AssistantMarkdown content={content} />
           )}
-          {!isUser && sources && sources.length > 0 && onOpenSource && (
-            <MessageSources sources={sources} onOpenSource={onOpenSource} />
+          {!isUser && displayedSources.sources.length > 0 && onOpenSource && (
+            <MessageSources
+              sources={displayedSources.sources}
+              hasValidReferences={displayedSources.hasValidReferences}
+              onOpenSource={onOpenSource}
+            />
           )}
         </div>
         {canSave && (
@@ -1681,7 +1676,15 @@ function AiAvatar({
   )
 }
 
-function MessageSources({ sources, onOpenSource }: { sources: ChatMessageSource[]; onOpenSource: (source: LocalChatMessageSource) => void }) {
+function MessageSources({
+  sources,
+  hasValidReferences,
+  onOpenSource,
+}: {
+  sources: ChatMessageSource[]
+  hasValidReferences: boolean
+  onOpenSource: (source: LocalChatMessageSource) => void
+}) {
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -1694,7 +1697,7 @@ function MessageSources({ sources, onOpenSource }: { sources: ChatMessageSource[
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`flex-shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}>
           <path d="M9 18l6-6-6-6" />
         </svg>
-        <span>Sources {sources.length}</span>
+        <span>{hasValidReferences ? '引用来源' : '检索来源/未确认引用'} {sources.length}</span>
       </button>
       {expanded && (
         <div className="mt-2 space-y-1">

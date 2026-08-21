@@ -5,6 +5,13 @@ import { mergeBackgroundRestoredTab } from '@/services/sessionRestorePolicy'
 import { eventMarker } from '@/services/eventMarker'
 import type { ReadingPosition } from '@/services/editorSession'
 import { useSettingsStore } from '@/stores/settingsStore'
+import {
+  applyBootSnapshot,
+  createBootSnapshot,
+  flushBootSnapshotWrite,
+  readBootSnapshot,
+  scheduleBootSnapshotWrite,
+} from '@/services/bootSnapshot'
 
 export interface Tab {
   id: string
@@ -149,6 +156,7 @@ function createDeferredEditorStorage(delayMs: number): PersistStorage<PersistedE
     const { name, value } = pending
     pending = null
     localStorage.setItem(name, JSON.stringify(value))
+    flushBootSnapshotWrite()
   }
 
   window.addEventListener('beforeunload', flush)
@@ -582,10 +590,18 @@ export const useEditorStore = create<EditorState>()(
       }),
       merge: (persisted, current) => {
         const saved = persisted as Partial<EditorState>
-        const tabs = dedupeRestoredTabs(saved.tabs ?? current.tabs)
-        const activeTabId = tabs.some((tab) => tab.id === saved.activeTabId)
+        const persistedTabs = dedupeRestoredTabs(saved.tabs ?? current.tabs)
+        const persistedActiveTabId = persistedTabs.some((tab) => tab.id === saved.activeTabId)
           ? saved.activeTabId ?? null
-          : tabs[0]?.id ?? null
+          : persistedTabs[0]?.id ?? null
+        const bootSnapshot = readBootSnapshot()
+        const tabs = applyBootSnapshot(persistedTabs, persistedActiveTabId, bootSnapshot)
+        const snapshotMatchesActiveTab = Boolean(
+          bootSnapshot?.activeTab
+          && bootSnapshot.activeTab.id === persistedActiveTabId
+          && tabs.some((tab) => tab.id === persistedActiveTabId && tab.filePath === bootSnapshot.activeTab?.filePath),
+        )
+        const activeTabId = persistedActiveTabId
         const rightPaneTabId = tabs.some((tab) => tab.id === saved.rightPaneTabId)
           ? saved.rightPaneTabId ?? null
           : null
@@ -598,8 +614,14 @@ export const useEditorStore = create<EditorState>()(
           activeTabId,
           rightPaneTabId,
           rightPaneUserSelected,
+          viewMode: snapshotMatchesActiveTab ? bootSnapshot!.viewMode : (saved.viewMode ?? current.viewMode),
           viewModeUsage: saved.viewModeUsage ?? current.viewModeUsage,
-          readingPositions: saved.readingPositions ?? current.readingPositions,
+          readingPositions: snapshotMatchesActiveTab && bootSnapshot?.readingPosition && activeTabId
+            ? {
+                ...(saved.readingPositions ?? current.readingPositions),
+                [activeTabId]: bootSnapshot.readingPosition,
+              }
+            : (saved.readingPositions ?? current.readingPositions),
           recentFiles: dedupeRecentFiles(saved.recentFiles ?? current.recentFiles),
           pendingReveal: null,
           previewSwitchingTabId: null,
@@ -608,3 +630,7 @@ export const useEditorStore = create<EditorState>()(
     }
   )
 )
+
+useEditorStore.subscribe((state) => {
+  scheduleBootSnapshotWrite(createBootSnapshot(state))
+})

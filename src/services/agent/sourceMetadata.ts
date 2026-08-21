@@ -7,6 +7,7 @@ import type { ContextTag } from '@/types/contextTag'
 import type { AgentResult, AgentStep } from './types'
 import { stripToolCallJson } from './toolCallParser'
 import { createContextMeta } from '@/services/aiChatMessages'
+import { parseSourceReferences, type SourceReferenceRegistry } from '@/services/ai/sourceReferences'
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -59,11 +60,16 @@ export function extractKnowledgeSourcesFromSteps(steps: AgentStep[]): ChatMessag
 }
 
 export function buildAgentResultPresentation(result: AgentResult, tagCount: number) {
-  const sources = result.sources?.length
+  const candidateSources = result.sources?.length
     ? result.sources
-    : extractKnowledgeSourcesFromSteps(result.steps)
+    : result.sourceRegistry
+      ? result.sourceRegistry.entries.map((entry) => entry.source)
+      : extractKnowledgeSourcesFromSteps(result.steps)
+  const resolved = resolveAgentAnswerSources(result.answer, result.sourceRegistry, candidateSources)
+  const sources = candidateSources
   return {
     sources,
+    referencedSourceIds: resolved.referencedIds,
     contextMeta: createContextMeta({
       tagCount,
       ragSourceCount: sources.length,
@@ -72,6 +78,28 @@ export function buildAgentResultPresentation(result: AgentResult, tagCount: numb
       ),
     }),
     answer: stripToolCallJson(result.answer) || '已生成修改确认卡片，请在下方确认。',
+  }
+}
+
+export function resolveAgentAnswerSources(
+  content: string,
+  registry: SourceReferenceRegistry | undefined,
+  fallbackSources: ChatMessageSource[],
+) {
+  if (!registry) {
+    return {
+      content,
+      referencedIds: [],
+      referencedSources: [],
+      hasValidReferences: false,
+      sources: fallbackSources,
+    }
+  }
+
+  const parsed = parseSourceReferences(content, registry)
+  return {
+    ...parsed,
+    sources: parsed.hasValidReferences ? parsed.referencedSources : fallbackSources,
   }
 }
 

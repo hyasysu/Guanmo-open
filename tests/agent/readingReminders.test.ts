@@ -7,8 +7,7 @@ const repository = vi.hoisted(() => ({
 }))
 const notificationRuntime = vi.hoisted(() => ({
   invoke: vi.fn(async () => undefined as unknown),
-  isPermissionGranted: vi.fn(async () => true),
-  requestPermission: vi.fn(async () => 'granted'),
+  toastShow: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -16,9 +15,8 @@ vi.mock('@tauri-apps/api/core', () => ({
   isTauri: () => true,
 }))
 
-vi.mock('@tauri-apps/plugin-notification', () => ({
-  isPermissionGranted: notificationRuntime.isPermissionGranted,
-  requestPermission: notificationRuntime.requestPermission,
+vi.mock('@/services/toast', () => ({
+  toast: { show: notificationRuntime.toastShow },
 }))
 
 vi.mock('@/services/database/readingReminders', () => ({
@@ -68,6 +66,7 @@ import {
   reconcileReadingReminders,
   retryReadingReminder,
 } from '@/services/readingReminders'
+import { processDueReadingReminders } from '@/services/readingReminderRuntime'
 
 function reminder(overrides: Partial<ReadingReminder> = {}): ReadingReminder {
   const now = Date.now()
@@ -103,8 +102,7 @@ describe('reading reminder lifecycle', () => {
   beforeEach(() => {
     repository.reminders.clear()
     notificationRuntime.invoke.mockReset().mockResolvedValue(undefined)
-    notificationRuntime.isPermissionGranted.mockReset().mockResolvedValue(true)
-    notificationRuntime.requestPermission.mockReset().mockResolvedValue('granted')
+    notificationRuntime.toastShow.mockReset()
   })
 
   it('uses the restricted native commands and a nonempty default body', async () => {
@@ -122,6 +120,16 @@ describe('reading reminder lifecycle', () => {
       'cancel_reading_reminder_notification',
       { id: 11 },
     )
+  })
+
+  it('uses the native Windows registration status as permission state', async () => {
+    notificationRuntime.invoke.mockResolvedValueOnce({
+      supported: true,
+      registered: true,
+      errorCode: null,
+    })
+    await expect(readingReminderNotificationAdapter.ensurePermission(true)).resolves.toBe(true)
+    expect(notificationRuntime.invoke).toHaveBeenCalledWith('get_windows_notification_status')
   })
 
   it('derives a stable positive 32-bit notification id', () => {
@@ -160,15 +168,34 @@ describe('reading reminder lifecycle', () => {
     })
   })
 
-  it('reconciles missing registrations and marks overdue reminders fired', async () => {
+  it('reconciles missing registrations and lets the runtime fire overdue reminders', async () => {
     const now = Date.now()
     repository.reminders.set('missing', reminder({ id: 'missing', notificationId: 7 }))
     repository.reminders.set('overdue', reminder({ id: 'overdue', dueAtUtc: now - 1_000 }))
     const notifications = adapter()
     const result = await reconcileReadingReminders(notifications, now)
-    expect(result).toEqual({ scheduled: 1, fired: 1, failed: 0, cancelled: 0 })
+    expect(result).toEqual({ scheduled: 1, fired: 0, failed: 0, cancelled: 0 })
     expect(repository.reminders.get('missing')?.status).toBe('scheduled')
+    await processDueReadingReminders(now)
     expect(repository.reminders.get('overdue')?.status).toBe('fired')
+    expect(notificationRuntime.toastShow).toHaveBeenCalledWith(expect.objectContaining({
+      title: '阅读提醒',
+      duration: null,
+    }))
+  })
+
+  it('combines reminders that become due in the same processing pass', async () => {
+    const now = Date.now()
+    repository.reminders.set('due-a', reminder({ id: 'due-a', title: '章节 A', dueAtUtc: now - 2 }))
+    repository.reminders.set('due-b', reminder({ id: 'due-b', title: '章节 B', dueAtUtc: now - 1 }))
+    await processDueReadingReminders(now)
+    expect(notificationRuntime.toastShow).toHaveBeenCalledTimes(1)
+    expect(notificationRuntime.toastShow).toHaveBeenCalledWith(expect.objectContaining({
+      message: '2 个阅读提醒已到期：章节 A、章节 B',
+      duration: null,
+    }))
+    expect(repository.reminders.get('due-a')?.status).toBe('fired')
+    expect(repository.reminders.get('due-b')?.status).toBe('fired')
   })
 
   it('finishes cancellation only after the notification adapter succeeds', async () => {

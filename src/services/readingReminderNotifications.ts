@@ -9,9 +9,24 @@ export interface ReadingReminderNotificationAdapter {
   cancel(id: number): Promise<void>
 }
 
-async function loadNotificationPlugin() {
+export interface WindowsNotificationStatus {
+  supported: boolean
+  registered: boolean
+  errorCode: string | null
+}
+
+function ensureDesktopRuntime(): void {
   if (!isTauri()) throw new Error('notification_unavailable')
-  return import('@tauri-apps/plugin-notification')
+}
+
+export async function getWindowsNotificationStatus(): Promise<WindowsNotificationStatus> {
+  ensureDesktopRuntime()
+  return invoke<WindowsNotificationStatus>('get_windows_notification_status')
+}
+
+export async function showWindowsNotification(input: { title: string; body: string }): Promise<void> {
+  ensureDesktopRuntime()
+  await invoke('show_windows_notification', { input })
 }
 
 export function notificationIdForReminder(reminderId: string): number {
@@ -24,11 +39,12 @@ export function notificationIdForReminder(reminderId: string): number {
 }
 
 export const readingReminderNotificationAdapter: ReadingReminderNotificationAdapter = {
-  async ensurePermission(request) {
-    const plugin = await loadNotificationPlugin()
-    if (await plugin.isPermissionGranted()) return true
-    if (!request) return false
-    return (await plugin.requestPermission()) === 'granted'
+  async ensurePermission(_request) {
+    const status = await getWindowsNotificationStatus()
+    if (status.errorCode && status.errorCode !== 'unsupported_platform') {
+      throw new Error(status.errorCode)
+    }
+    return status.supported && status.registered
   },
 
   async schedule(input) {
@@ -36,7 +52,7 @@ export const readingReminderNotificationAdapter: ReadingReminderNotificationAdap
     if (!Number.isFinite(input.dueAtUtc) || input.dueAtUtc <= Date.now()) {
       throw new Error('reminder_due_time_invalid')
     }
-    await loadNotificationPlugin()
+    ensureDesktopRuntime()
     await invoke('schedule_reading_reminder_notification', {
       input: {
         id: input.id,
@@ -48,13 +64,13 @@ export const readingReminderNotificationAdapter: ReadingReminderNotificationAdap
   },
 
   async pendingIds() {
-    await loadNotificationPlugin()
+    ensureDesktopRuntime()
     const ids = await invoke<number[]>('list_pending_reading_reminder_notification_ids')
     return new Set(ids.filter((id) => Number.isInteger(id) && id > 0))
   },
 
   async cancel(id) {
-    await loadNotificationPlugin()
+    ensureDesktopRuntime()
     if (!Number.isInteger(id) || id <= 0) throw new Error('notification_id_invalid')
     await invoke('cancel_reading_reminder_notification', { id })
   },

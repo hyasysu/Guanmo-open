@@ -54,29 +54,65 @@ function removeLegacyWebSearchApiKey(): void {
   }
 }
 
-export async function hydrateSettingsSecrets(): Promise<void> {
-  const legacyApiKey = readLegacyApiKey()
-  if (legacyApiKey) {
-    await saveSecret(AI_API_KEY_SECRET, legacyApiKey)
-    removeLegacyApiKey()
-  }
-  const legacyWebSearchApiKey = readLegacyWebSearchApiKey()
-  if (legacyWebSearchApiKey) {
-    await saveSecret(WEB_SEARCH_API_KEY_SECRET, legacyWebSearchApiKey)
-    removeLegacyWebSearchApiKey()
-  }
+let hydrationPromise: Promise<void> | null = null
 
-  const apiKey = await loadSecret(AI_API_KEY_SECRET)
-  if (apiKey) {
-    useSettingsStore.getState().updateAiConfig({ apiKey })
-  }
-  const webSearchApiKey = await loadSecret(WEB_SEARCH_API_KEY_SECRET)
-  if (webSearchApiKey) {
-    useSettingsStore.getState().updateWebSearchConfig({ apiKey: webSearchApiKey })
-  }
-  const embeddingApiKey = await loadSecret(EMBEDDING_API_KEY_SECRET)
-  if (embeddingApiKey) {
-    useSettingsStore.getState().updateEmbeddingConfig({ apiKey: embeddingApiKey })
-  }
+async function hydrateSettingsSecretsOnce(): Promise<void> {
+  const initialSettings = useSettingsStore.getState()
+  const initialApiKey = initialSettings.ai.apiKey
+  const initialEmbeddingApiKey = initialSettings.ai.embedding.apiKey
+  const initialWebSearchApiKey = initialSettings.webSearch.apiKey
+  const legacyApiKey = readLegacyApiKey()
+  const legacyWebSearchApiKey = readLegacyWebSearchApiKey()
+  await Promise.all([
+    legacyApiKey
+      ? saveSecret(AI_API_KEY_SECRET, legacyApiKey).then(removeLegacyApiKey)
+      : Promise.resolve(),
+    legacyWebSearchApiKey
+      ? saveSecret(WEB_SEARCH_API_KEY_SECRET, legacyWebSearchApiKey).then(removeLegacyWebSearchApiKey)
+      : Promise.resolve(),
+  ])
+
+  const [apiKey, webSearchApiKey, embeddingApiKey] = await Promise.all([
+    loadSecret(AI_API_KEY_SECRET),
+    loadSecret(WEB_SEARCH_API_KEY_SECRET),
+    loadSecret(EMBEDDING_API_KEY_SECRET),
+  ])
+  const current = useSettingsStore.getState()
+  useSettingsStore.setState({
+    ai: {
+      ...current.ai,
+      ...(apiKey && current.ai.apiKey === initialApiKey ? { apiKey } : {}),
+      embedding: {
+        ...current.ai.embedding,
+        ...(embeddingApiKey && current.ai.embedding.apiKey === initialEmbeddingApiKey
+          ? { apiKey: embeddingApiKey }
+          : {}),
+      },
+    },
+    webSearch: {
+      ...current.webSearch,
+      ...(webSearchApiKey && current.webSearch.apiKey === initialWebSearchApiKey
+        ? { apiKey: webSearchApiKey }
+        : {}),
+    },
+  })
   updateSearchConfig(useSettingsStore.getState().webSearch)
+}
+
+export function ensureSettingsSecretsHydrated(): Promise<void> {
+  if (!hydrationPromise) {
+    hydrationPromise = hydrateSettingsSecretsOnce().catch((error) => {
+      hydrationPromise = null
+      throw error
+    })
+  }
+  return hydrationPromise
+}
+
+export function hydrateSettingsSecrets(): Promise<void> {
+  return ensureSettingsSecretsHydrated()
+}
+
+export function resetSettingsSecretsHydrationForTest(): void {
+  hydrationPromise = null
 }

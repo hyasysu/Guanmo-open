@@ -19,8 +19,9 @@ export function canSkipDocumentIndex(
   existing: Document | undefined,
   contentHash: string,
   embeddingModel: string | null,
+  title = existing?.title,
 ): boolean {
-  if (!existing || existing.contentHash !== contentHash) return false
+  if (!existing || existing.contentHash !== contentHash || existing.title !== title) return false
   if (embeddingModel === null) return true
   return existing.chunks.every((chunk) => (
     chunk.embeddingModel === embeddingModel
@@ -33,8 +34,9 @@ export function canSkipDocumentIndexMetadata(
   metadata: DocumentIndexMetadata | undefined,
   contentHash: string,
   embeddingModel: string | null,
+  title = metadata?.title,
 ): boolean {
-  if (!metadata || metadata.contentHash !== contentHash) return false
+  if (!metadata || metadata.contentHash !== contentHash || metadata.title !== title) return false
   return embeddingModel === null || metadata.compatibleChunks === metadata.totalChunks
 }
 
@@ -52,18 +54,8 @@ export async function reconcileDocumentChunks(
   parsedChunks: Chunk[],
   embeddingModel: string | null,
 ): Promise<ReconciledDocument> {
-  const oldByInputHash = new Map<string, Chunk[]>()
   const oldChunks = existing?.chunks || []
-  const oldInputHashes = await Promise.all(oldChunks.map((chunk) => (
-    chunk.embeddingInputHash || createEmbeddingInputHash(chunk)
-  )))
-  for (let index = 0; index < oldChunks.length; index += 1) {
-    const oldChunk = oldChunks[index]
-    const inputHash = oldInputHashes[index]
-    const matches = oldByInputHash.get(inputHash)
-    if (matches) matches.push(oldChunk)
-    else oldByInputHash.set(inputHash, [oldChunk])
-  }
+  const usedOldIds = new Set<string>()
 
   const usedIds = new Set((existing?.chunks || []).map((chunk) => chunk.id))
   const nextIdIndex = { value: 0 }
@@ -72,13 +64,24 @@ export async function reconcileDocumentChunks(
   let added = 0
   let reembedded = 0
 
-  const nextInputHashes = await Promise.all(parsedChunks.map(createEmbeddingInputHash))
+  const nextInputHashes = await Promise.all(parsedChunks.map((chunk) => (
+    createEmbeddingInputHash(chunk, nextDocument.title)
+  )))
   for (let index = 0; index < parsedChunks.length; index += 1) {
     const parsedChunk = parsedChunks[index]
     const embeddingInputHash = nextInputHashes[index]
-    const matches = oldByInputHash.get(embeddingInputHash)
-    const oldChunk = matches?.shift()
-    if (matches?.length === 0) oldByInputHash.delete(embeddingInputHash)
+    const candidates = oldChunks.filter((candidate) => (
+      !usedOldIds.has(candidate.id) && candidate.content === parsedChunk.content
+    ))
+    const oldChunk = candidates.sort((left, right) => {
+      const affinity = (candidate: Chunk) => (
+        (candidate.titlePath?.join('\0') === parsedChunk.titlePath?.join('\0') ? 4 : 0)
+        + (candidate.sourceType === parsedChunk.sourceType ? 2 : 0)
+        - Math.abs(candidate.index - parsedChunk.index)
+      )
+      return affinity(right) - affinity(left)
+    })[0]
+    if (oldChunk) usedOldIds.add(oldChunk.id)
 
     const canReuseEmbedding = Boolean(
       oldChunk?.embedding && (
@@ -109,7 +112,7 @@ export async function reconcileDocumentChunks(
     })
   }
 
-  const deleted = Array.from(oldByInputHash.values()).reduce((count, matches) => count + matches.length, 0)
+  const deleted = oldChunks.length - usedOldIds.size
   return {
     document: { ...nextDocument, chunks },
     stats: { total: chunks.length, reused, added, deleted, reembedded },

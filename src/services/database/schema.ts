@@ -268,6 +268,28 @@ export const DB_MIGRATIONS = [
   },
 ] as const
 
+export const CURRENT_DB_SCHEMA_VERSION = 1
+
+export const DB_LEGACY_BACKFILL_STATEMENTS = [
+  `WITH ordered_messages AS (
+     SELECT
+       id,
+       role,
+       LAG(id) OVER (PARTITION BY session_id ORDER BY created_at ASC, rowid ASC) AS previous_id,
+       LAG(role) OVER (PARTITION BY session_id ORDER BY created_at ASC, rowid ASC) AS previous_role
+     FROM chat_messages
+   )
+   UPDATE chat_messages
+   SET parent_id = (
+     SELECT previous_id FROM ordered_messages WHERE ordered_messages.id = chat_messages.id
+   )
+   WHERE role = 'assistant'
+     AND parent_id IS NULL
+     AND id IN (
+       SELECT id FROM ordered_messages WHERE role = 'assistant' AND previous_role = 'user'
+     )`,
+] as const
+
 export const DB_POST_MIGRATION_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_memories_retrieval
    ON memories(status, scope_type, scope_key, category, updated_at DESC)`,

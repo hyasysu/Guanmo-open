@@ -139,4 +139,33 @@ describe('MarkdownPreview Front Matter 布局', () => {
     expect(heading?.style.top).toBe('128px')
     expect(heightReads.get('frontmatter')).toBeGreaterThan(readsAtFullWidth)
   })
+
+  it('宽度变化后保持原顶部块及其块内偏移', () => {
+    let viewportWidth = 600
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const blockType = this.dataset.mdBlockType
+      if (!blockType) return rect(viewportWidth, 0)
+      const height = blockType === 'frontmatter'
+        ? (viewportWidth >= 900 ? 96 : 128)
+        : blockType === 'heading'
+          ? 52
+          : blockType === 'blockquote'
+            ? 48
+            : 32
+      return rect(viewportWidth, height)
+    })
+    const host = createPreviewHost(() => viewportWidth)
+
+    render(<MarkdownPreview content={MINIMAL_FRONT_MATTER_DOCUMENT} />, { container: host })
+
+    const heading = host.querySelector<HTMLElement>('[data-md-block-type="heading"]')
+    const containerObserver = TestResizeObserver.instances.find((observer) => observer.targets.has(host))
+    host.scrollTop = 136
+
+    viewportWidth = 1000
+    containerObserver?.trigger()
+
+    expect(heading?.style.top).toBe('96px')
+    expect(host.scrollTop).toBe(104)
+  })
 })

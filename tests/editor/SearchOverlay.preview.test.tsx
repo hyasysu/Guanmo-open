@@ -30,4 +30,34 @@ describe('SearchOverlay 预览全文搜索', () => {
     expect(screen.getByText('2/2')).toBeInTheDocument()
     expect(scrollToOffset).toHaveBeenLastCalledWith(content.lastIndexOf('隐藏目标'))
   })
+
+  it('提供视口锚点时跳到离锚点最近的匹配（而不是文档首个匹配）', () => {
+    const paneRef = createRef<HTMLDivElement>()
+    const scrollToOffset = vi.fn()
+    const previewRef = {
+      current: {
+        scrollToOffset,
+        // 视口停在第二个匹配之后：首个匹配 offset 0，第二个在 offset 13
+        getViewportOffset: () => 20,
+      },
+    }
+    const content = '隐藏目标一\n\n隐藏目标二'
+
+    render(
+      <>
+        <div ref={paneRef}>隐藏目标一</div>
+        <SearchOverlay
+          onClose={vi.fn()}
+          previewSources={[{ content, paneRef, previewRef }]}
+        />
+      </>,
+    )
+
+    fireEvent.change(screen.getByPlaceholderText('搜索...'), { target: { value: '隐藏目标' } })
+
+    // 初始即选中第二个匹配 → 计数显示 2/2
+    expect(screen.getByText('2/2')).toBeInTheDocument()
+    // 锚点 20 距首个匹配（offset 0）更远、距第二个匹配（offset 7）更近 → 初始即跳第二个
+    expect(scrollToOffset).toHaveBeenLastCalledWith(content.lastIndexOf('隐藏目标'))
+  })
 })

@@ -367,9 +367,7 @@ let monotonicBase = 0
 let generation = 0
 let unlistenFocus: (() => void) | null = null
 let unlistenVisibility: (() => void) | null = null
-let unlistenClose: (() => void) | null = null
 let trackingRequested = false
-let closeHandled = false
 let trackingError: UsageTrackingError | null = null
 let startupRetryTimer: ReturnType<typeof setTimeout> | null = null
 let startupRetryAttempt = 0
@@ -677,23 +675,6 @@ async function registerWindowListeners(): Promise<void> {
   unlistenVisibility = () => {
     document.removeEventListener('visibilitychange', handleVisibility)
   }
-
-  unlistenClose = await win.onCloseRequested((event) => {
-    event.preventDefault()
-    trackingRequested = false
-    generation += 1
-    if (closeHandled) return
-    closeHandled = true
-
-    return enqueueLifecycle(async () => {
-      try {
-        await stopTrackingInternal()
-      } finally {
-        unregisterWindowListeners()
-        await win.destroy()
-      }
-    })
-  })
 }
 
 function unregisterWindowListeners(): void {
@@ -701,8 +682,6 @@ function unregisterWindowListeners(): void {
   unlistenFocus = null
   unlistenVisibility?.()
   unlistenVisibility = null
-  unlistenClose?.()
-  unlistenClose = null
 }
 
 // ---------------------------------------------------------------------------
@@ -716,7 +695,6 @@ function unregisterWindowListeners(): void {
 export function startUsageTracking(): Promise<void> {
   if (!isTauri()) return Promise.resolve()
   trackingRequested = true
-  if (trackingState === 'stopped') closeHandled = false
 
   return enqueueLifecycle(async () => {
     if (!trackingRequested || trackingState !== 'stopped') return

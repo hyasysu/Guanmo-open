@@ -166,7 +166,10 @@ export function decodeReadingSourceCoverage(value: unknown): ReadingSourceCovera
 }
 
 export function countRagSourcesInContext(ragContext: string): number {
-  return ragContext ? (ragContext.match(/\[知识来源/g) || []).length : 0
+  if (!ragContext) return 0
+  const stableIds = ragContext.match(/\[S[1-9]\d*\]/g) || []
+  if (stableIds.length > 0) return new Set(stableIds).size
+  return new Set(ragContext.match(/\[知识来源\s+\d+\]/g) || []).size
 }
 
 export function buildAgentFinalAnswerMessages(

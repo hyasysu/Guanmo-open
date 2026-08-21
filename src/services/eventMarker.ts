@@ -1,6 +1,18 @@
 import type { PerfData } from '@/services/perfTypes'
 
 export type PerfEventType =
+  | 'frontend-bootstrap'
+  | 'first-react-render'
+  | 'app-shell-first-visible'
+  | 'app-shell-interactive'
+  | 'secrets-hydrated'
+  | 'database-init-start'
+  | 'database-plugin-loaded'
+  | 'database-connection-opened'
+  | 'database-schema-gate-complete'
+  | 'database-ready'
+  | 'active-tab-disk-read-complete'
+  | 'active-document-first-visible'
   | 'app-start'
   | 'app-ready'
   | 'open-file-start'

@@ -1,9 +1,11 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[cfg(any(windows, test))]
 const REMINDER_GROUP: &str = "guanmo-reminder";
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 const APP_USER_MODEL_ID: &str = "com.guanmo.app";
+#[cfg(windows)]
+const APP_DISPLAY_NAME: &str = "观墨";
 #[cfg(any(windows, test))]
 const WINDOWS_EPOCH_OFFSET_MS: i64 = 11_644_473_600_000;
 
@@ -15,6 +17,22 @@ pub struct ScheduleReadingReminderNotificationInput {
     title: String,
     body: String,
     due_at_utc: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub struct ShowWindowsNotificationInput {
+    title: String,
+    body: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowsNotificationStatus {
+    supported: bool,
+    registered: bool,
+    error_code: Option<String>,
 }
 
 #[cfg(any(windows, test))]
@@ -94,8 +112,30 @@ mod platform {
         core::HSTRING,
         Data::Xml::Dom::XmlDocument,
         Foundation::DateTime,
-        UI::Notifications::{ScheduledToastNotification, ToastNotificationManager, ToastNotifier},
+        UI::Notifications::{
+            ScheduledToastNotification, ToastNotification, ToastNotificationManager, ToastNotifier,
+        },
     };
+    use windows_registry::CURRENT_USER;
+
+    const REGISTRY_PATH: &str = r"Software\Classes\AppUserModelId\com.guanmo.app";
+
+    pub fn ensure_registration() -> Result<(), String> {
+        let icon_path = std::env::current_exe()
+            .map_err(|_| "notification_registration_failed")?
+            .to_string_lossy()
+            .into_owned();
+        let key = CURRENT_USER
+            .create(REGISTRY_PATH)
+            .map_err(|_| "notification_registration_failed")?;
+        key.set_string("DisplayName", APP_DISPLAY_NAME)
+            .map_err(|_| "notification_registration_failed")?;
+        key.set_string("IconUri", &icon_path)
+            .map_err(|_| "notification_registration_failed")?;
+        key.set_string("IconBackgroundColor", "0")
+            .map_err(|_| "notification_registration_failed")?;
+        Ok(())
+    }
 
     fn now_utc_millis() -> Result<i64, String> {
         let millis = SystemTime::now()
@@ -106,8 +146,23 @@ mod platform {
     }
 
     fn notifier(error_code: &str) -> Result<ToastNotifier, String> {
+        ensure_registration()?;
         ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_USER_MODEL_ID))
             .map_err(|_| error_code.into())
+    }
+
+    pub fn show(input: ShowWindowsNotificationInput) -> Result<(), String> {
+        validate_text(&input.title, 200, "notification_title_invalid")?;
+        validate_text(&input.body, 2_000, "notification_body_invalid")?;
+        let document = XmlDocument::new().map_err(|_| "notification_show_failed")?;
+        document
+            .LoadXml(&HSTRING::from(reminder_xml(&input.title, &input.body)))
+            .map_err(|_| "notification_show_failed".to_string())?;
+        let notification = ToastNotification::CreateToastNotification(&document)
+            .map_err(|_| "notification_show_failed".to_string())?;
+        notifier("notification_show_failed")?
+            .Show(&notification)
+            .map_err(|_| "notification_show_failed".to_string())
     }
 
     fn scheduled_notifications(
@@ -216,7 +271,15 @@ mod platform {
 
 #[cfg(not(windows))]
 mod platform {
-    use super::ScheduleReadingReminderNotificationInput;
+    use super::{ScheduleReadingReminderNotificationInput, ShowWindowsNotificationInput};
+
+    pub fn ensure_registration() -> Result<(), String> {
+        Err("unsupported_platform".into())
+    }
+
+    pub fn show(_: ShowWindowsNotificationInput) -> Result<(), String> {
+        Err("unsupported_platform".into())
+    }
 
     pub fn schedule(_: ScheduleReadingReminderNotificationInput) -> Result<(), String> {
         Err("unsupported_platform".into())
@@ -229,6 +292,31 @@ mod platform {
     pub fn cancel(_: i32) -> Result<(), String> {
         Err("unsupported_platform".into())
     }
+}
+
+pub fn ensure_windows_notification_registration() -> Result<(), String> {
+    platform::ensure_registration()
+}
+
+#[tauri::command]
+pub fn get_windows_notification_status() -> WindowsNotificationStatus {
+    match platform::ensure_registration() {
+        Ok(()) => WindowsNotificationStatus {
+            supported: cfg!(windows),
+            registered: true,
+            error_code: None,
+        },
+        Err(error_code) => WindowsNotificationStatus {
+            supported: cfg!(windows),
+            registered: false,
+            error_code: Some(error_code),
+        },
+    }
+}
+
+#[tauri::command]
+pub fn show_windows_notification(input: ShowWindowsNotificationInput) -> Result<(), String> {
+    platform::show(input)
 }
 
 #[tauri::command]
@@ -286,6 +374,7 @@ mod tests {
 
     #[test]
     fn only_matches_positive_ids_in_the_fixed_group() {
+        assert_eq!(APP_USER_MODEL_ID, "com.guanmo.app");
         assert!(belongs_to_reminder_group(REMINDER_GROUP, "42", None));
         assert!(belongs_to_reminder_group(REMINDER_GROUP, "42", Some(42)));
         assert!(!belongs_to_reminder_group("other", "42", None));

@@ -3,31 +3,32 @@ import { useChatStore } from '@/stores/chatStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { selectPrimaryWorkspacePath, useAppStore } from '@/stores/appStore'
 import { getAiClient, getEmbeddingClient, getEmbeddingConfig, initAiClient, initEmbeddingClient, isAiReady, isEmbeddingReady, isLocalApi } from '@/services/ai/aiClient'
-import { SYSTEM_TEMPERATURE } from '@/services/ai/types'
+import { SYSTEM_TEMPERATURE, type ChatMessage } from '@/services/ai/types'
 import { initAgent, runAgent } from '@/services/agent'
 import { shouldIncludeFullDocumentContext } from '@/services/agent/intentDetector'
 import { makeRoutingDecision } from '@/services/agent/routingService'
 import type { AgentStep, AgentTaskContext } from '@/services/agent/types'
+import type { SourceReferenceRegistry } from '@/services/ai/sourceReferences'
 import { createAgentTaskContext, decodeAgentStepEvent, decodeKnowledgeSearchOutcome } from '@/services/agent/session'
 import { createActionProposal } from '@/services/agent/actionProposal'
 import type { ContextTag } from '@/types/contextTag'
 import { buildContextFromTags } from '@/services/contextBuilder'
 import { readFile as readTauriFile } from '@/hooks/useTauri'
 import { setAgentScopeContext } from '@/services/aiScope'
-import { searchScopedKnowledge, shouldTriggerScopedRag, streamFinalAnswer } from '@/services/aiChatFlow'
+import { resolveDirectRagSources, searchScopedKnowledge, shouldTriggerScopedRag, streamFinalAnswer } from '@/services/aiChatFlow'
 import { buildAgentFinalAnswerMessages, buildChatMessageTags, buildMessagesForModel, buildSupplementalAiContext, countRagSourcesInContext, createContextMeta, createUserChatMessage, prepareChatHistoryForModel, resolveAiAnswerMode } from '@/services/aiChatMessages'
 import { hideLikelyToolJsonPrefix, stripToolCallJson } from '@/services/agent/toolCallParser'
 import { buildMemoryContext, isPersonalizedRewriteMemoryIntent, processMemoryCandidateExtraction, searchMemories } from '@/services/memory/memoryService'
 import type { ManualCapability } from '@/components/ai/ManualToolToggle'
-import { hydrateSettingsSecrets } from '@/services/settingsSecrets'
+import { ensureSettingsSecretsHydrated } from '@/services/settingsSecrets'
 import { singletonManager, SINGLETON_IDS } from '@/services/singletonPromise'
 import { promoteTask } from '@/services/idleScheduler'
 import { buildAgentRunRequest, buildRoutingAppContext } from '@/services/agent/requestBuilder'
 import {
   buildScopedAgentResultPresentation,
+  resolveAgentAnswerSources,
   resolveReadingSourceCoverage,
   toContextTagSources,
-  toLocalMessageSources,
 } from '@/services/agent/sourceMetadata'
 import { READING_REMINDER_FEATURE_AVAILABLE } from '@/services/readingReminderFeature'
 
@@ -119,6 +120,7 @@ export function useAiChat() {
   const updateMessageContent = useChatStore((s) => s.updateMessageContent)
   const updateMessageContextMeta = useChatStore((s) => s.updateMessageContextMeta)
   const updateMessageSources = useChatStore((s) => s.updateMessageSources)
+  const updateMessageReferencedSourceIds = useChatStore((s) => s.updateMessageReferencedSourceIds)
   const removeMessageById = useChatStore((s) => s.removeMessageById)
   const setRagStatus = useChatStore((s) => s.setRagStatus)
   const setRagSources = useChatStore((s) => s.setRagSources)
@@ -132,15 +134,12 @@ export function useAiChat() {
   const activeRequestRef = useRef<{ id: string; assistantMessageId: string; cancelled: boolean } | null>(null)
 
   const ensureClient = useCallback(async (): Promise<boolean> => {
-    let currentAi = useSettingsStore.getState().ai
-    if (!currentAi.apiKey) {
-      try {
-        await hydrateSettingsSecrets()
-        currentAi = useSettingsStore.getState().ai
-      } catch (err) {
-        console.warn('[AI] Settings secret hydration retry failed:', err)
-      }
+    try {
+      await ensureSettingsSecretsHydrated()
+    } catch (err) {
+      console.warn('[AI] Settings secret hydration retry failed:', err)
     }
+    const currentAi = useSettingsStore.getState().ai
 
     // 初始化对话客户端（本地 API 无需 apiKey）
     const chatReady = (currentAi.apiKey || isLocalApi(currentAi.baseUrl)) && currentAi.baseUrl && currentAi.chatModel
@@ -352,6 +351,9 @@ export function useAiChat() {
         }
       }
 
+      const activeClient = getAiClient()
+      const modelHistory: ChatMessage[] = prepareChatHistoryForModel(messages)
+
       const executeAgentRequest = async () => {
         clearAgentSteps()
         initAgent()
@@ -450,28 +452,29 @@ export function useAiChat() {
           }
         }
 
-        const agentRequest = buildAgentRunRequest({
-          content,
-          messages,
-          contextTags,
-          tagContext,
-          memoryContext,
-          routingDecision,
-          hasRecentEditContext,
-          hasPrefetchedMemoryLookup: memoryLookupAttempted,
-          signal: requestController.signal,
-          temperature: SYSTEM_TEMPERATURE.agentPlanning,
-          onStep: handleAgentStep,
-          onStreamContent: (streamedContent) => {
-            if (!isCurrentRequest()) return
-            const visibleContent = hideLikelyToolJsonPrefix(streamedContent)
-            if (!visibleContent) return
-            hasVisibleStreamContent = true
-            updateRequestMessage(visibleContent)
-          },
-          customPreferencePrompt: ai.customPreferencePrompt,
-          streamEnabled: ai.streamEnabled,
-        })
+        const createAgentRequest = () => buildAgentRunRequest({
+            content,
+            messages,
+            modelHistory,
+            contextTags,
+            tagContext,
+            memoryContext,
+            routingDecision,
+            hasRecentEditContext,
+            hasPrefetchedMemoryLookup: memoryLookupAttempted,
+            signal: requestController.signal,
+            temperature: SYSTEM_TEMPERATURE.agentPlanning,
+            streamEnabled: ai.streamEnabled,
+            onStep: handleAgentStep,
+            onStreamContent: (streamedContent) => {
+              if (!isCurrentRequest()) return
+              const visibleContent = hideLikelyToolJsonPrefix(streamedContent)
+              if (!visibleContent) return
+              hasVisibleStreamContent = true
+              updateRequestMessage(visibleContent)
+            },
+          })
+        const agentRequest = createAgentRequest()
         const { editTargets, originalRequest: contextOriginalRequest } = agentRequest
 
         try {
@@ -502,6 +505,7 @@ export function useAiChat() {
             if (presentation.sources.length > 0) {
               updateMessageSources(assistantMessageId, presentation.sources)
             }
+            updateMessageReferencedSourceIds(assistantMessageId, presentation.referencedSourceIds)
           }
 
           if (result.finalMessages) {
@@ -527,6 +531,18 @@ export function useAiChat() {
               return
             }
             updateAgentSourceMetadata()
+            // 解析正文中的稳定引用，只更新已确认的来源展示；无引用时保留候选来源。
+            if (isCurrentRequest()) {
+              const agentMsg = useChatStore.getState().messages.find((m) => m.id === assistantMessageId)
+              if (agentMsg && result.sourceRegistry) {
+                const resolved = resolveAgentAnswerSources(
+                  agentMsg.content,
+                  result.sourceRegistry,
+                  presentation.sources,
+                )
+                updateMessageReferencedSourceIds(assistantMessageId, resolved.referencedIds)
+              }
+            }
           } else {
             updateRequestMessage(presentation.answer)
             updateAgentSourceMetadata()
@@ -577,8 +593,9 @@ export function useAiChat() {
       }
 
       setAgentTaskContext(null)
-      const client = getAiClient()
+      const client = activeClient
       let ragContext = ''
+      let directRagRegistry: SourceReferenceRegistry = { entries: [] }
 
       // --- 轻量 RAG：仅在规则放行时检索已添加的 ContextTag 文件 ---
       const shouldRag = shouldTriggerScopedRag(content.trim(), contextTags || [])
@@ -629,6 +646,7 @@ export function useAiChat() {
             addAgentStep({ type: 'observation', content: '当前上下文没有可检索的文件，跳过本地知识库检索', timestamp: Date.now() })
           } else if (scopedKnowledge.status === 'found') {
             ragContext = scopedKnowledge.context
+            directRagRegistry = scopedKnowledge.sourceRegistry
             setRagSources(scopedKnowledge.sources)
             setRagStatus('found')
             addTimelineItem({ type: 'local_search_found', label: '命中本地资料', detail: `${scopedKnowledge.sources.length} 个片段` })
@@ -654,14 +672,14 @@ export function useAiChat() {
         memoryContext,
       })
       const finalMessages = buildMessagesForModel({
-        history: prepareChatHistoryForModel(messages),
+        history: modelHistory,
         userMessage: userMsg,
         supplementalContext: injectedContext,
         customPreferencePrompt: ai.customPreferencePrompt,
         answerMode: resolveAiAnswerMode(selectionRequestKind, useAgentMode),
       })
 
-      const ragMessageSources = toLocalMessageSources(useChatStore.getState().ragSources)
+      const ragMessageSources = directRagRegistry.entries.map((entry) => entry.source)
       const tagMessageSources = routingDecision.readingScope === 'selection'
         ? toContextTagSources(contextTags || [])
         : []
@@ -699,7 +717,19 @@ export function useAiChat() {
           reasoningMode,
         })
         if (!isCurrentRequest()) return
-        if (isCurrentRequest()) addTimelineItem({ type: 'done', label: '生成回答完成' })
+        if (isCurrentRequest()) {
+          addTimelineItem({ type: 'done', label: '生成回答完成' })
+          // 解析正文中的稳定引用，只更新已确认的来源展示；未引用时保留候选来源。
+          const assistantMsg = useChatStore.getState().messages.find((m) => m.id === assistantMessageId)
+          if (assistantMsg && directRagRegistry.entries.length > 0) {
+            const resolved = resolveDirectRagSources(
+              assistantMsg.content,
+              directRagRegistry,
+              messageSources,
+            )
+            updateMessageReferencedSourceIds(assistantMessageId, resolved.referencedIds)
+          }
+        }
         // 异步提取候选记忆（不阻塞用户）
         if (isCurrentRequest()) {
           const allMsgs = useChatStore.getState().messages

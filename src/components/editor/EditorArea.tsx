@@ -5,7 +5,7 @@ import { useEditorStore } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { AiShortcutMenuItems } from './AiShortcutMenuItems'
 import { useFileOperations } from '@/hooks/useFileOperations'
-import { useActiveHeading } from '@/hooks/useActiveHeading'
+import { useActiveHeading, type ActiveHeadingGeometry } from '@/hooks/useActiveHeading'
 import { saveFile, saveFileAs } from '@/services/fileSystem'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { extractToc, type TocItem } from '@/services/markdownToc'
@@ -16,10 +16,13 @@ import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { openFileDialog } from '@/hooks/useTauri'
 import { addSelectionContextTag, setAiShortcutPrompt } from '@/services/aiContext'
 import { eventMarker } from '@/services/eventMarker'
-import { CodeMirrorEditor } from './CodeMirrorEditor'
+import { markStartupPoint } from '@/services/startupPerformance'
+import { hasBootSnapshotContent } from '@/services/bootSnapshot'
+import { OPEN_EDITOR_SEARCH_EVENT } from '@/services/editorEvents'
 import { EditorContextMenu } from './EditorContextMenu'
-import { MarkdownDiffView } from './MarkdownDiffView'
 import { MarkdownPreview, MarkdownToc, type MarkdownBlockCommitRequest, type MarkdownPreviewHandle } from './MarkdownPreview'
+import { CodeMirrorEditor } from './CodeMirrorEditor'
+import { MarkdownDiffView } from './MarkdownDiffView'
 import { SearchOverlay } from './SearchOverlay'
 import { TabBar } from './TabBar'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
@@ -38,8 +41,6 @@ import {
   type InstanceType,
 } from '@/services/editorSession'
 
-export const OPEN_EDITOR_SEARCH_EVENT = 'guanmo:open-editor-search'
-
 interface PreviewMenuState {
   x: number
   y: number
@@ -47,6 +48,9 @@ interface PreviewMenuState {
   startLine?: number
   endLine?: number
   pane: 'left' | 'right'
+  /** 统一 Range 快照的精确源码 offset（接管选区时存在） */
+  selectionFrom?: number
+  selectionTo?: number
 }
 
 interface PreviewSelectionSource {
@@ -66,6 +70,10 @@ const LARGE_PREVIEW_UPDATE_DELAY = 650
 const HUGE_PREVIEW_UPDATE_DELAY = 900
 const SCROLL_SYNC_TOP_OFFSET = 32
 const SCROLL_SYNC_INPUT_PAUSE_MS = 700
+/** 预览→编辑器反向滚动同步只接受“用户主动滚动预览”产生的 scroll 事件；
+ *  渲染补偿（内容更新锚点补偿、scrollTop 夹取、位置恢复、异步图片/KaTeX 高度变化）
+ *  产生的 scroll 事件一律不得反向移动编辑器。该窗口覆盖滚轮惯性滚动与平滑滚动时长。 */
+const PREVIEW_SYNC_GESTURE_WINDOW_MS = 800
 const PREVIEW_SWITCH_MARK_PREFIX = 'guanmo:preview-switch'
 
 interface ScheduledPreviewContent {
@@ -184,7 +192,6 @@ export function EditorArea() {
   const rightPreviewRef = useRef<HTMLDivElement>(null)
   const leftMarkdownPreviewRef = useRef<MarkdownPreviewHandle>(null)
   const rightMarkdownPreviewRef = useRef<MarkdownPreviewHandle>(null)
-  const previewAnchorCacheRef = useRef<WeakMap<HTMLElement, PreviewAnchorCache>>(new WeakMap())
   const isRestoringScrollRef = useRef(false)
   const restoreScrollFrameRef = useRef<number | null>(null)
   const editorRestoreFrameRef = useRef<number | null>(null)
@@ -195,6 +202,10 @@ export function EditorArea() {
   const editorTocFrameRef = useRef<number | null>(null)
   const previewScrollFrameRef = useRef<number | null>(null)
   const lastEditorInputAtRef = useRef(0)
+  /** 预览 pane 上最近一次用户滚动手势（wheel / pointerdown）时间戳 */
+  const previewGestureAtRef = useRef(0)
+  /** 指针当前是否按在预览 pane 上（覆盖滚动条拖拽、触控拖拽的长时滚动） */
+  const previewPointerDownRef = useRef(false)
   const [, setPreviewRestoreTick] = useState(0)
   const [searchOpen, setSearchOpen] = useState(false)
   const [rightPaneDragOver, setRightPaneDragOver] = useState(false)
@@ -553,9 +564,21 @@ export function EditorArea() {
   const editorBecameVisibleRef = useRef(false)
   const previewBecameVisibleRef = useRef(false)
   useEffect(() => {
-    if (editorVisible && editorMounted && !editorBecameVisibleRef.current && activeTab?.id) {
+    const contentReady = activeTab && (
+      !activeTab.filePath || activeTab.modified || activeTab.content.length > 0 || hasBootSnapshotContent(activeTab)
+    )
+    if (editorVisible && editorMounted && !editorBecameVisibleRef.current && activeTab?.id && contentReady) {
       editorBecameVisibleRef.current = true
       const raf = requestAnimationFrame(() => {
+        markStartupPoint('active-document-first-visible', {
+          surface: 'editor',
+          charCount: activeTab.content.length,
+        })
+        markStartupPoint('editor-first-visible', {
+          charCount: activeTab.content.length,
+          mode: viewMode,
+          policy: modePerformancePolicy,
+        })
         if (import.meta.env.DEV) {
           eventMarker.mark('editor-first-visible', {
             charCount: activeTab.content.length,
@@ -572,9 +595,21 @@ export function EditorArea() {
   }, [editorVisible, editorMounted, activeTab?.id, activeTab?.content.length, viewMode, modePerformancePolicy])
 
   useEffect(() => {
-    if (leftPreviewVisible && leftPreviewMounted && !previewBecameVisibleRef.current && activeTab?.id) {
+    const contentReady = activeTab && (
+      !activeTab.filePath || activeTab.modified || activeTab.content.length > 0 || hasBootSnapshotContent(activeTab)
+    )
+    if (leftPreviewVisible && leftPreviewMounted && !previewBecameVisibleRef.current && activeTab?.id && contentReady) {
       previewBecameVisibleRef.current = true
       const raf = requestAnimationFrame(() => {
+        markStartupPoint('active-document-first-visible', {
+          surface: 'preview',
+          charCount: activeTab.content.length,
+        })
+        markStartupPoint('preview-first-visible', {
+          charCount: activeTab.content.length,
+          mode: viewMode,
+          policy: modePerformancePolicy,
+        })
         if (import.meta.env.DEV) {
           eventMarker.mark('preview-first-visible', {
             charCount: activeTab.content.length,
@@ -640,7 +675,11 @@ export function EditorArea() {
     }
   }, [leftPreviewMounted, leftPreviewVisible])
 
-  const toc = useMemo(() => extractToc(activePreview.content), [activePreview.content])
+  // 编辑模式的 TOC 直接从编辑器内容提取：预览实例未挂载（预热失败或尚未预热）时
+  // activePreview.content 为空，若统一走预览管道会导致编辑模式目录永不出现。
+  const editorToc = useMemo(() => extractToc(activeTab?.content || ''), [activeTab?.content])
+  const previewToc = useMemo(() => extractToc(activePreview.content), [activePreview.content])
+  const toc = viewMode === 'edit' ? editorToc : previewToc
   const rightToc = useMemo(() => extractToc(rightPreview.content), [rightPreview.content])
   const modeDerivationsEnabled = viewMode !== 'edit'
   const activeContentSignature = useMemo(
@@ -695,17 +734,30 @@ export function EditorArea() {
     setActiveEditorHeading((current) => current === headingId ? current : headingId)
   }, [toc])
 
-  // 使用 IntersectionObserver 监听当前活跃的标题
-  // 传递 viewMode 作为 trigger，当模式切换时重新检查容器
+  // 目录当前项按"滚动位置之前最后一个标题"计算：由预览实例的全文行号映射
+  // （getLineForTop：模型 + 实测高度）驱动，不依赖标题 DOM 是否仍在虚拟窗口内，
+  // 长章节中标题块卸载后目录项不再变空；左右预览各自绑定自身的 handle 与 toc。
+  const resolveLeftActiveHeading = useCallback(({ scrollTop, viewportHeight }: ActiveHeadingGeometry): string | null => {
+    const handle = leftMarkdownPreviewRef.current
+    if (!handle) return null
+    return resolveActiveHeadingByScroll(handle, previewToc, scrollTop, viewportHeight)
+  }, [previewToc])
+
+  const resolveRightActiveHeading = useCallback(({ scrollTop, viewportHeight }: ActiveHeadingGeometry): string | null => {
+    const handle = rightMarkdownPreviewRef.current
+    if (!handle) return null
+    return resolveActiveHeadingByScroll(handle, rightToc, scrollTop, viewportHeight)
+  }, [rightToc])
+
   const activeHeading = useActiveHeading(
     leftPreviewRef,
-    '[data-heading-id]',
+    resolveLeftActiveHeading,
     `${viewMode}:${activeTab?.id ?? ''}:${activePreview.version}`,
     leftPreviewVisible
   )
   const activeRightHeading = useActiveHeading(
     rightPreviewRef,
-    '[data-heading-id]',
+    resolveRightActiveHeading,
     `${viewMode}:${rightTab?.id ?? ''}:${rightPreview.version}`,
     viewMode === 'dual-preview'
   )
@@ -886,7 +938,9 @@ export function EditorArea() {
 
   const getStoredPreviewTop = useCallback((tabId: string | null | undefined, pane: 'left' | 'right' = 'left') => {
     if (!tabId) return 0
-    const position = readingPositionsRef.current.getForPane(tabId, pane)
+    const position = useEditorStore.getState().viewMode === 'dual-preview'
+      ? readingPositionsRef.current.getForPane(tabId, pane)
+      : readingPositionsRef.current.get(tabId)
     return position?.previewScrollTop ?? 0
   }, [])
 
@@ -905,19 +959,6 @@ export function EditorArea() {
       )
     )
   )
-
-  // Invalidate preview anchor cache when preview transitions from hidden to
-  // visible. While hidden, getVisiblePreviewAnchors() returns [] (all elements
-  // filtered as visibility:hidden) and that empty array gets cached. When the
-  // preview is revealed, the cache key (version/clientWidth/scrollHeight) may
-  // not change, so the stale empty array is returned — breaking scroll sync.
-  const prevLeftMaskedRef = useRef(leftPreviewMasked)
-  useLayoutEffect(() => {
-    if (prevLeftMaskedRef.current && !leftPreviewMasked) {
-      previewAnchorCacheRef.current = new WeakMap()
-    }
-    prevLeftMaskedRef.current = leftPreviewMasked
-  }, [leftPreviewMasked])
 
   const rightPreviewMasked = Boolean(
     rightTab?.id
@@ -945,16 +986,20 @@ export function EditorArea() {
   const savePreviewReadingPosition = useCallback((
     tabId: string,
     container: HTMLElement | null,
-    previewVersion: number,
+    previewHandle: MarkdownPreviewHandle | null,
     pane: 'left' | 'right' = 'left'
   ) => {
     if (isRestoringScrollRef.current) return
     if (!container) return
-    // 保存到 tabId key，与编辑器共用同一个位置
-    readingPositionsRef.current.save(tabId, {
+    const position = {
       previewScrollTop: container.scrollTop,
-      topLine: getPreviewLineAtTop(container, previewVersion, previewAnchorCacheRef.current),
-    })
+      topLine: previewHandle?.getLineForTop(container.scrollTop + SCROLL_SYNC_TOP_OFFSET),
+    }
+    if (viewModeRef.current === 'dual-preview') {
+      readingPositionsRef.current.saveForPane(tabId, pane, position)
+    } else {
+      readingPositionsRef.current.save(tabId, position)
+    }
   }, [])
 
   const withRestoreLock = useCallback((restore: () => void) => {
@@ -1015,9 +1060,7 @@ export function EditorArea() {
         view.scrollDOM.scrollTop = position.editorScrollTop
       } else if (typeof position.topLine === 'number' && position.topLine <= view.state.doc.lines) {
         const pos = view.state.doc.line(position.topLine).from
-        view.dispatch({
-          effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: SCROLL_SYNC_TOP_OFFSET }),
-        })
+        view.scrollDOM.scrollTop = Math.max(0, view.lineBlockAt(pos).top - SCROLL_SYNC_TOP_OFFSET)
       }
     })
   }, [])
@@ -1027,8 +1070,9 @@ export function EditorArea() {
     container: HTMLElement | null,
     pane: 'left' | 'right'
   ) => {
-    // 从 tabId key 读取位置，与编辑器共用同一个位置
-    const position = readingPositionsRef.current.get(tabId)
+    const position = useEditorStore.getState().viewMode === 'dual-preview'
+      ? readingPositionsRef.current.getForPane(tabId, pane)
+      : readingPositionsRef.current.get(tabId)
     if (!container) return
     const previewHandle = pane === 'left' ? leftMarkdownPreviewRef.current : rightMarkdownPreviewRef.current
     const lineTop = position?.previewScrollTop == null && position?.topLine != null
@@ -1049,9 +1093,11 @@ export function EditorArea() {
     const handleScroll = () => {
       const currentMode = useEditorStore.getState().viewMode
       if (currentMode !== 'edit' && currentMode !== 'edit-preview') return
-      saveEditorPositionForTab(activeTab.id)
-      scheduleFlush()
-      setTocFocus('editor')
+      if (scrollSyncSessionRef.current.source !== 'preview') {
+        saveEditorPositionForTab(activeTab.id)
+        scheduleFlush()
+        setTocFocus('editor')
+      }
       if (editorTocFrameRef.current !== null || !view) return
       editorTocFrameRef.current = window.requestAnimationFrame(() => {
         editorTocFrameRef.current = null
@@ -1077,12 +1123,12 @@ export function EditorArea() {
     }
   }, [activeTab?.id, saveEditorPositionForTab, scheduleFlush, updateEditorHeading, viewMode])
 
+  // 预览内容更新（版本变化）只恢复预览自身位置，保证右侧渲染稳定；
+  // 绝不在内容更新时反向恢复编辑器位置——否则右侧渲染会把左侧视口拉走
+  // （编辑左侧时每次预览刷新都可能导致左侧跳动）。
   useLayoutEffect(() => {
     if (!activeTab?.id) return
     const restoreStartedAt = import.meta.env.DEV ? performance.now() : 0
-    if (viewMode === 'edit' || viewMode === 'edit-preview') {
-      restoreEditorReadingPosition(activeTab.id)
-    }
     if (viewMode === 'preview' || viewMode === 'edit-preview' || viewMode === 'dual-preview') {
       restorePreviewReadingPosition(activeTab.id, leftPreviewRef.current, 'left')
     }
@@ -1091,17 +1137,25 @@ export function EditorArea() {
     }
     if (leftPreviewVisible) {
       reportPreviewSwitchPerformance(activeTab.id, restoreStartedAt)
+      markStartupPoint('preview-render-complete', { mode: viewMode })
       eventMarker.mark('preview-render-complete', { mode: viewMode })
     }
   }, [
     activePreview.version,
     activeTab?.id,
-    restoreEditorReadingPosition,
     restorePreviewReadingPosition,
     rightPreview.version,
     rightTab?.id,
     viewMode,
   ])
+
+  // 编辑器阅读位置只在模式切换 / 标签页切换（进入编辑器或换文档）时恢复，
+  // 不随预览内容版本变化重放：编辑过程中右侧渲染不得影响左侧位置。
+  useLayoutEffect(() => {
+    if (!activeTab?.id) return
+    if (viewMode !== 'edit' && viewMode !== 'edit-preview') return
+    restoreEditorReadingPosition(activeTab.id)
+  }, [activeTab?.id, restoreEditorReadingPosition, viewMode])
 
   // 切换标签页时立即 flush 上一个标签页的位置
   useEffect(() => {
@@ -1265,6 +1319,10 @@ export function EditorArea() {
 
     const pos = view.state.doc.line(line).from
     setScrollSyncSource('preview')
+    // 长行、表格等内容尚未进入视口时，CodeMirror 的高度映射可能仍是估算值。
+    // 直接读取 lineBlockAt(pos).top 会把这个瞬时估算固化为 scrollTop，待布局测量
+    // 校正后编辑器仍停在错误文档块。交给 CodeMirror 的滚动 effect，使其在测量周期内
+    // 完成目标行定位与必要的二次校正。
     view.dispatch({
       effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: SCROLL_SYNC_TOP_OFFSET }),
     })
@@ -1290,24 +1348,54 @@ export function EditorArea() {
 
     const handlePreviewScroll = () => {
       if (isRestoringScrollRef.current) return
+      // 反向同步只接受用户主动滚动预览（滚轮 / 按住拖拽滚动条 / 触控）产生的
+      // scroll 事件；渲染补偿（内容更新锚点补偿、scrollTop 夹取、预览位置恢复、
+      // 异步图片/KaTeX 高度变化）产生的 scroll 事件一律不得反向移动编辑器。
+      if (!previewPointerDownRef.current
+        && Date.now() - previewGestureAtRef.current > PREVIEW_SYNC_GESTURE_WINDOW_MS) return
       if (scrollSyncSessionRef.current.source === 'editor') return
       if (Date.now() - lastEditorInputAtRef.current < SCROLL_SYNC_INPUT_PAUSE_MS) return
       if (previewScrollFrameRef.current !== null) return
       previewScrollFrameRef.current = window.requestAnimationFrame(() => {
         previewScrollFrameRef.current = null
-        const line = getPreviewLineAtTop(preview, activePreview.version, previewAnchorCacheRef.current)
+        const line = leftMarkdownPreviewRef.current?.getLineForTop(
+          preview.scrollTop + SCROLL_SYNC_TOP_OFFSET,
+        )
         if (typeof line === 'number') {
           syncEditorToPreviewLine(line)
         }
       })
     }
 
+    const handleEditorWheel = () => setScrollSyncSource('editor')
+    const handlePreviewWheel = () => {
+      previewGestureAtRef.current = Date.now()
+      setScrollSyncSource('preview')
+    }
+    const handlePreviewPointerDown = () => {
+      previewPointerDownRef.current = true
+      previewGestureAtRef.current = Date.now()
+    }
+    const handlePreviewPointerUp = () => {
+      previewPointerDownRef.current = false
+    }
+
     view.scrollDOM.addEventListener('scroll', handleEditorScroll, { passive: true })
     preview.addEventListener('scroll', handlePreviewScroll, { passive: true })
+    view.scrollDOM.addEventListener('wheel', handleEditorWheel, { passive: true })
+    preview.addEventListener('wheel', handlePreviewWheel, { passive: true })
+    preview.addEventListener('pointerdown', handlePreviewPointerDown, { passive: true })
+    window.addEventListener('pointerup', handlePreviewPointerUp, true)
+    window.addEventListener('pointercancel', handlePreviewPointerUp, true)
 
     return () => {
       view.scrollDOM.removeEventListener('scroll', handleEditorScroll)
       preview.removeEventListener('scroll', handlePreviewScroll)
+      view.scrollDOM.removeEventListener('wheel', handleEditorWheel)
+      preview.removeEventListener('wheel', handlePreviewWheel)
+      preview.removeEventListener('pointerdown', handlePreviewPointerDown)
+      window.removeEventListener('pointerup', handlePreviewPointerUp, true)
+      window.removeEventListener('pointercancel', handlePreviewPointerUp, true)
       if (editorScrollFrameRef.current !== null) {
         window.cancelAnimationFrame(editorScrollFrameRef.current)
         editorScrollFrameRef.current = null
@@ -1317,7 +1405,7 @@ export function EditorArea() {
         previewScrollFrameRef.current = null
       }
     }
-  }, [activeTab?.id, activePreview.version, syncEditorToPreviewLine, syncPreviewToEditorLine, syncScroll, viewMode])
+  }, [activeTab?.id, activePreview.version, setScrollSyncSource, syncEditorToPreviewLine, syncPreviewToEditorLine, syncScroll, viewMode])
 
   const handleSave = useCallback(async () => {
     const state = useEditorStore.getState()
@@ -1399,16 +1487,19 @@ export function EditorArea() {
 
   const handleLeftPreviewScroll = useCallback(() => {
     if (!activeTab?.id) return
+    if (viewModeRef.current === 'edit-preview' && scrollSyncSessionRef.current.source === 'editor') return
+    if (isRestoringScrollRef.current) return
     if (viewModeRef.current === 'edit-preview') setTocFocus('preview')
-    savePreviewReadingPosition(activeTab.id, leftPreviewRef.current, activePreview.version, 'left')
+    savePreviewReadingPosition(activeTab.id, leftPreviewRef.current, leftMarkdownPreviewRef.current, 'left')
     scheduleFlush()
-  }, [activePreview.version, activeTab?.id, savePreviewReadingPosition, scheduleFlush])
+  }, [activeTab?.id, savePreviewReadingPosition, scheduleFlush])
 
   const handleRightPreviewScroll = useCallback(() => {
     if (!rightTab?.id) return
-    savePreviewReadingPosition(rightTab.id, rightPreviewRef.current, rightPreview.version, 'right')
+    if (isRestoringScrollRef.current) return
+    savePreviewReadingPosition(rightTab.id, rightPreviewRef.current, rightMarkdownPreviewRef.current, 'right')
     scheduleFlush()
-  }, [rightPreview.version, rightTab?.id, savePreviewReadingPosition, scheduleFlush])
+  }, [rightTab?.id, savePreviewReadingPosition, scheduleFlush])
 
   const jumpToLine = useCallback((line: number) => {
     const view = editorViewRef.current
@@ -1525,6 +1616,9 @@ export function EditorArea() {
   }, [handleInsertImagePaths])
 
   const jumpToPreviewHeading = useCallback((item: TocItem) => {
+    // 目录跳转属于用户在预览侧的主动导航：标记手势，使预览平滑滚动期间的
+    // scroll 事件可继续反向同步编辑器（与用户滚轮滚动预览一致）。
+    previewGestureAtRef.current = Date.now()
     leftMarkdownPreviewRef.current?.scrollToLine(item.line)
   }, [])
 
@@ -1597,27 +1691,33 @@ export function EditorArea() {
     pane: 'left' | 'right'
   ) => {
     e.preventDefault()
-    const container = pane === 'left' ? leftPreviewRef.current : rightPreviewRef.current
-    const selection = window.getSelection()
-    const selectedText = container && selection && selection.rangeCount > 0
-      && container.contains(selection.anchorNode) && container.contains(selection.focusNode)
-      ? selection.toString()
-      : ''
+    // 优先读取统一 Range 选区快照（虚拟化下 DOM 卸载不丢失）
+    const previewHandle = pane === 'left' ? leftMarkdownPreviewRef.current : rightMarkdownPreviewRef.current
+    const snapshot = previewHandle?.getSelection() ?? null
+    let selectedText = snapshot?.text ?? ''
+    let startLine = snapshot?.startLine
+    let endLine = snapshot?.endLine
+    const selectionFrom = snapshot?.from
+    const selectionTo = snapshot?.to
 
-    // 获取行号范围
-    let startLine: number | undefined
-    let endLine: number | undefined
-    if (selectedText && selection && container) {
-      const lineRange = getPreviewSelectionLineRange(selection, container)
-      startLine = lineRange.startLine
-      endLine = lineRange.endLine
+    // 非接管区域（KaTeX / 代码高亮等）回退原生 DOM Selection
+    if (!selectedText) {
+      const container = pane === 'left' ? leftPreviewRef.current : rightPreviewRef.current
+      const selection = window.getSelection()
+      if (container && selection && selection.rangeCount > 0
+        && container.contains(selection.anchorNode) && container.contains(selection.focusNode)) {
+        selectedText = selection.toString()
+        const lineRange = getPreviewSelectionLineRange(selection, container)
+        startLine = lineRange.startLine
+        endLine = lineRange.endLine
+      }
+      clearPreviewContextHighlight()
+      if (selectedText && typeof CSS !== 'undefined' && CSS.highlights && selection && selection.rangeCount > 0) {
+        CSS.highlights.set(PREVIEW_CONTEXT_HIGHLIGHT, new Highlight(selection.getRangeAt(0).cloneRange()))
+      }
     }
 
-    clearPreviewContextHighlight()
-    if (selectedText && selection && typeof CSS !== 'undefined' && CSS.highlights) {
-      CSS.highlights.set(PREVIEW_CONTEXT_HIGHLIGHT, new Highlight(selection.getRangeAt(0).cloneRange()))
-    }
-    setPreviewMenu({ x: e.clientX, y: e.clientY, selectedText, startLine, endLine, pane })
+    setPreviewMenu({ x: e.clientX, y: e.clientY, selectedText, startLine, endLine, selectionFrom, selectionTo, pane })
   }, [clearPreviewContextHighlight, getPreviewSelectionLineRange])
 
   const handleCopyPreviewSelection = useCallback(() => {
@@ -1629,13 +1729,9 @@ export function EditorArea() {
   }, [clearPreviewContextHighlight, previewMenu])
 
   const handleSelectAllPreview = useCallback(() => {
-    const container = previewMenu?.pane === 'right' ? rightPreviewRef.current : leftPreviewRef.current
-    if (!container) return
-    const selection = window.getSelection()
-    const range = document.createRange()
-    range.selectNodeContents(container)
-    selection?.removeAllRanges()
-    selection?.addRange(range)
+    // 逻辑全文选择：selectionRange = 文档开始 → 文档结束，不依赖 DOM Selection
+    const previewHandle = previewMenu?.pane === 'right' ? rightMarkdownPreviewRef.current : leftMarkdownPreviewRef.current
+    previewHandle?.selectAll()
     clearPreviewContextHighlight()
     setPreviewMenu(null)
   }, [clearPreviewContextHighlight, previewMenu])
@@ -1650,6 +1746,24 @@ export function EditorArea() {
     if (!selectedText) return null
 
     const content = tab.content
+
+    // 统一 Range 快照：offset 即精确源码位置，无需文本回溯推测
+    if (
+      typeof previewMenu.selectionFrom === 'number'
+      && typeof previewMenu.selectionTo === 'number'
+      && previewMenu.selectionTo > previewMenu.selectionFrom
+      && previewMenu.selectionTo <= content.length
+    ) {
+      return {
+        title: tab.title,
+        filePath: tab.filePath,
+        text: content.slice(previewMenu.selectionFrom, previewMenu.selectionTo),
+        startLine: previewMenu.startLine,
+        endLine: previewMenu.endLine,
+        selectionFrom: previewMenu.selectionFrom,
+        selectionTo: previewMenu.selectionTo,
+      }
+    }
     const normalizedSelectedText = selectedText.replace(/\r\n/g, '\n')
     const lines = content.split('\n')
     const startLine = previewMenu.startLine
@@ -1872,7 +1986,7 @@ export function EditorArea() {
                 ref={leftPreviewRef}
                 data-product-tour="preview-area"
                 className={`${leftPreviewVisible ? 'min-w-0 flex-1' : 'hidden'} ${viewMode === 'dual-preview' ? 'border-r border-gm-border-subtle' : ''} ${viewMode === 'edit-preview' ? 'gm-preview-heading-clickable' : ''} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} ${isFullscreen && viewMode === 'edit-preview' ? 'gm-fullscreen-content-split-right' : isFullscreen && viewMode === 'dual-preview' ? 'gm-fullscreen-content-split-left' : ''} ${fullscreenTocExpanded && viewMode !== 'dual-preview' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-y-auto overflow-x-hidden select-text bg-gm-surface relative`}
-                style={leftPreviewMasked ? { visibility: 'hidden' } : undefined}
+                style={{ overflowAnchor: 'none', ...(leftPreviewMasked ? { visibility: 'hidden' } : {}) }}
                 aria-hidden={!leftPreviewVisible}
                 onScroll={handleLeftPreviewScroll}
                 onContextMenu={(e) => handlePreviewContextMenu(e, 'left')}
@@ -1903,7 +2017,7 @@ export function EditorArea() {
               key={`right-${rightTab?.id ?? 'none'}`}
               ref={rightPreviewRef}
               className={`${viewMode === 'dual-preview' ? 'min-w-0 flex-1' : 'hidden'} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} ${isFullscreen && viewMode === 'dual-preview' ? 'gm-fullscreen-content-split-right' : ''} ${fullscreenTocExpanded && viewMode === 'dual-preview' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-y-auto overflow-x-hidden select-text bg-gm-surface relative ${rightPaneDragOver ? 'ring-2 ring-inset ring-gm-primary/40' : ''}`}
-              style={rightPreviewMasked ? { visibility: 'hidden' } : undefined}
+              style={{ overflowAnchor: 'none', ...(rightPreviewMasked ? { visibility: 'hidden' } : {}) }}
               aria-hidden={viewMode !== 'dual-preview'}
               onScroll={handleRightPreviewScroll}
               onDragOver={handleRightPaneDragOver}
@@ -2017,69 +2131,28 @@ function getHeadingIdAtLine(toc: TocItem[], line: number): string | null {
   return activeId
 }
 
-interface PreviewLineAnchor {
-  line: number
-  endLine: number | undefined
-  top: number
-  height: number
-}
-
-interface PreviewAnchorCache {
-  version: number
-  clientWidth: number
-  scrollHeight: number
-  anchors: PreviewLineAnchor[]
-}
-
-function getVisiblePreviewAnchors(container: HTMLElement): PreviewLineAnchor[] {
-  const containerRect = container.getBoundingClientRect()
-  return Array.from(container.querySelectorAll<HTMLElement>('[data-md-line]'))
-    .map((element) => {
-      const line = Number(element.dataset.mdLine)
-      if (!Number.isFinite(line) || line < 1) return null
-      const endLine = Number(element.dataset.mdEndLine)
-      const rect = element.getBoundingClientRect()
-      const style = window.getComputedStyle(element)
-      if (
-        style.display === 'none'
-        || style.visibility === 'hidden'
-        || (rect.width === 0 && rect.height === 0)
-      ) {
-        return null
-      }
-      return {
-        line,
-        endLine: Number.isFinite(endLine) && endLine >= line ? endLine : undefined,
-        top: rect.top - containerRect.top + container.scrollTop,
-        height: rect.height,
-      }
-    })
-    .filter((item): item is PreviewLineAnchor => Boolean(item))
-    .sort((a, b) => a.top - b.top || a.line - b.line)
-}
-
-function getCachedPreviewAnchors(
-  container: HTMLElement,
-  version: number,
-  cache: WeakMap<HTMLElement, PreviewAnchorCache>
-): PreviewLineAnchor[] {
-  const cached = cache.get(container)
-  if (
-    cached?.version === version
-    && cached.clientWidth === container.clientWidth
-    && cached.scrollHeight === container.scrollHeight
-  ) {
-    return cached.anchors
+/**
+ * 滚动几何 → 活跃目录项：取"滚动位置之前最后一个标题"。
+ * 行号映射来自预览实例的全文模型 + 实测高度，与标题块是否挂载无关；
+ * 尚未越过任何标题时（文档顶部），回落到视口上半区可见的首个标题，
+ * 与原 IntersectionObserver（rootMargin -50%）的顶部行为保持一致。
+ */
+function resolveActiveHeadingByScroll(
+  handle: Pick<MarkdownPreviewHandle, 'getLineForTop'>,
+  toc: TocItem[],
+  scrollTop: number,
+  viewportHeight: number
+): string | null {
+  const topLine = handle.getLineForTop(scrollTop)
+  if (typeof topLine === 'number') {
+    const passed = getHeadingIdAtLine(toc, topLine)
+    if (passed) return passed
   }
-
-  const anchors = getVisiblePreviewAnchors(container)
-  cache.set(container, {
-    version,
-    clientWidth: container.clientWidth,
-    scrollHeight: container.scrollHeight,
-    anchors,
-  })
-  return anchors
+  const halfLine = handle.getLineForTop(scrollTop + viewportHeight / 2)
+  if (typeof halfLine === 'number') {
+    return toc.find((item) => item.line <= halfLine)?.id ?? null
+  }
+  return null
 }
 
 function getPreviewTopForLine(
@@ -2142,40 +2215,6 @@ function reportPreviewSwitchPerformance(tabId: string, restoreStartedAt: number)
     })
     performance.clearMarks(startMark)
   })
-}
-
-function getPreviewLineAtTop(
-  container: HTMLElement,
-  version: number,
-  cache: WeakMap<HTMLElement, PreviewAnchorCache>
-): number | undefined {
-  const anchors = getCachedPreviewAnchors(container, version, cache)
-  if (anchors.length === 0) return undefined
-
-  const targetTop = container.scrollTop + SCROLL_SYNC_TOP_OFFSET
-  let previous = anchors[0]
-  let next: PreviewLineAnchor | undefined
-  for (const anchor of anchors) {
-    if (anchor.top <= targetTop) {
-      previous = anchor
-      continue
-    }
-    next = anchor
-    break
-  }
-
-  if (previous.endLine && previous.endLine > previous.line && previous.height > 0) {
-    const progress = Math.max(0, Math.min(1, (targetTop - previous.top) / previous.height))
-    return Math.round(previous.line + (previous.endLine - previous.line) * progress)
-  }
-
-  if (next && next.line !== previous.line) {
-    const gap = Math.max(1, next.top - previous.top)
-    const progress = Math.max(0, Math.min(1, (targetTop - previous.top) / gap))
-    return Math.round(previous.line + (next.line - previous.line) * progress)
-  }
-
-  return previous.line
 }
 
 function getContentSignature(content: string) {

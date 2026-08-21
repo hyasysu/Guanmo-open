@@ -29,6 +29,7 @@ type OriginAuthorizationChoice = 'session' | 'permanent' | 'cancel'
 type OriginAuthorizationPrompt = (origin: string) => Promise<OriginAuthorizationChoice>
 
 interface NativeHttpRequest {
+  requestId: string
   url: string
   method: string
   headers: [string, string][]
@@ -36,11 +37,20 @@ interface NativeHttpRequest {
   timeoutMs?: number
 }
 
+let requestSequence = 0
+
+function createRequestId(): string {
+  requestSequence += 1
+  return `external-http-${Date.now().toString(36)}-${requestSequence.toString(36)}`
+}
+
 type NativeStreamEvent =
   | { event: 'start'; status: number; headers: [string, string][] }
   | { event: 'chunk'; data: number[] }
   | { event: 'end' }
   | { event: 'error'; error: { code: string; message: string; origin?: string } }
+
+const STREAM_ACK_WINDOW = 4
 
 let authorizationPrompt: OriginAuthorizationPrompt = showOriginAuthorizationDialog
 const pendingAuthorizations = new Map<string, Promise<OriginAuthorizationChoice>>()
@@ -177,6 +187,7 @@ async function createNativeRequest(input: string | URL | Request, init?: Request
   }
   const body = request.method === 'GET' ? undefined : Array.from(new Uint8Array(await request.arrayBuffer()))
   return {
+    requestId: createRequestId(),
     url: request.url,
     method: request.method,
     headers: Array.from(headers.entries()),
@@ -190,8 +201,33 @@ function invokeStream(request: NativeHttpRequest, signal?: AbortSignal): Promise
     const channel = new Channel<NativeStreamEvent>()
     let controller: ReadableStreamDefaultController<Uint8Array> | null = null
     let settled = false
+    let completed = false
+    const pendingChunks: Uint8Array[] = []
+    let streamEnded = false
+    let pullPending = false
+
+    const acknowledgeChunk = () => {
+      void invoke('acknowledge_external_http_stream', { requestId: request.requestId }).catch(() => undefined)
+    }
+
+    const drain = () => {
+      if (!controller || !pullPending || pendingChunks.length === 0) {
+        if (controller && streamEnded) controller.close()
+        return
+      }
+      pullPending = false
+      controller.enqueue(pendingChunks.shift()!)
+      acknowledgeChunk()
+      if (pendingChunks.length === 0 && streamEnded) controller.close()
+    }
+
+    const cancelNative = () => {
+      if (completed) return
+      void invoke('cancel_external_http_request', { requestId: request.requestId }).catch(() => undefined)
+    }
 
     const fail = (error: unknown) => {
+      completed = true
       const normalized = toExternalHttpError(error)
       if (!settled) {
         settled = true
@@ -202,6 +238,7 @@ function invokeStream(request: NativeHttpRequest, signal?: AbortSignal): Promise
     }
 
     const abort = () => {
+      cancelNative()
       const error = signal?.reason instanceof Error
         ? signal.reason
         : new DOMException('Request aborted', 'AbortError')
@@ -229,21 +266,38 @@ function invokeStream(request: NativeHttpRequest, signal?: AbortSignal): Promise
         const hasBody = ![204, 205, 304].includes(event.status)
         const stream = hasBody ? new ReadableStream<Uint8Array>({
           start(value) { controller = value },
-          cancel() { signal?.removeEventListener('abort', abort) },
-        }) : null
+          pull() {
+            pullPending = true
+            drain()
+          },
+          cancel() {
+            cancelNative()
+            signal?.removeEventListener('abort', abort)
+          },
+        }, { highWaterMark: 0 }) : null
         settled = true
         resolve(new Response(stream, { status: event.status, headers: event.headers }))
         return
       }
       if (event.event === 'chunk') {
-        controller?.enqueue(Uint8Array.from(event.data))
+        if (pendingChunks.length >= STREAM_ACK_WINDOW) {
+          cancelNative()
+          fail(new ExternalHttpError('STREAM_BACKPRESSURE_EXCEEDED', '流式响应超过慢消费者缓冲上限'))
+          return
+        }
+        pendingChunks.push(Uint8Array.from(event.data))
+        drain()
         return
       }
-      controller?.close()
+      completed = true
+      streamEnded = true
+      if (pendingChunks.length === 0) controller?.close()
       signal?.removeEventListener('abort', abort)
     }
 
-    invoke('external_http_stream', { request, onEvent: channel }).catch(fail)
+    invoke('external_http_stream', { request, onEvent: channel })
+      .then(() => { if (signal?.aborted) cancelNative() })
+      .catch(fail)
   })
 }
 

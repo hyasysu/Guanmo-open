@@ -11,6 +11,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager, State};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -52,6 +53,7 @@ struct IndexControl {
 pub struct RagIndexService {
     control: Mutex<IndexControl>,
     notify: tokio::sync::Notify,
+    initialization_cancellation: Mutex<Option<CancellationToken>>,
 }
 
 #[derive(Clone, Debug)]
@@ -140,6 +142,7 @@ pub struct RagSearchHit {
     retrieval_mode: &'static str,
     keyword_score: Option<f32>,
     vector_score: Option<f32>,
+    neighbor_chunks: Vec<RagSearchChunk>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -155,6 +158,8 @@ struct RagSearchChunk {
     title_path: Vec<String>,
     heading: Option<String>,
     source_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_role: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -439,6 +444,7 @@ async fn apply_pending_changes(
 async fn initialize_internal(
     app: &AppHandle,
     service: &RagIndexService,
+    cancellation: &CancellationToken,
 ) -> Result<RagIndexStateResponse, String> {
     loop {
         let should_initialize = {
@@ -465,12 +471,16 @@ async fn initialize_internal(
         }
 
         let result: Result<RagIndexStateResponse, String> = async {
+            if cancellation.is_cancelled() {
+                return Err("RAG index initialization cancelled".to_string());
+            }
             let pool = open_readonly_pool(database_path(app)?).await?;
             let (documents, chunks) = load_raw_index(&pool, true).await?;
-            let (index, skipped) =
-                tauri::async_runtime::spawn_blocking(move || build_index(documents, chunks))
-                    .await
-                    .map_err(|error| error.to_string())?;
+            let build = tauri::async_runtime::spawn_blocking(move || build_index(documents, chunks));
+            let (index, skipped) = tokio::select! {
+                _ = cancellation.cancelled() => return Err("RAG index initialization cancelled".to_string()),
+                result = build => result.map_err(|error| error.to_string())?,
+            };
             {
                 let mut control = service
                     .control
@@ -491,9 +501,13 @@ async fn initialize_internal(
 
         if let Err(error) = &result {
             if let Ok(mut control) = service.control.lock() {
-                control.status = IndexStatus::Failed;
+                control.status = if cancellation.is_cancelled() {
+                    IndexStatus::Idle
+                } else {
+                    IndexStatus::Failed
+                };
                 control.index = None;
-                control.error = Some(error.clone());
+                control.error = (!cancellation.is_cancelled()).then(|| error.clone());
             }
         }
         service.notify.notify_waiters();
@@ -517,7 +531,35 @@ pub async fn initialize_rag_index(
     app: AppHandle,
     state: State<'_, RagIndexService>,
 ) -> Result<RagIndexStateResponse, String> {
-    initialize_internal(&app, state.inner()).await
+    let cancellation = {
+        let mut active = state
+            .initialization_cancellation
+            .lock()
+            .map_err(|_| "RAG index initialization state poisoned".to_string())?;
+        active.get_or_insert_with(CancellationToken::new).clone()
+    };
+    let result = initialize_internal(&app, state.inner(), &cancellation).await;
+    if let Ok(mut active) = state.initialization_cancellation.lock() {
+        *active = None;
+    }
+    result
+}
+
+#[tauri::command]
+pub fn cancel_rag_index_initialization(state: State<'_, RagIndexService>) -> Result<bool, String> {
+    cancel_active_initialization(state.inner())
+}
+
+fn cancel_active_initialization(state: &RagIndexService) -> Result<bool, String> {
+    let active = state
+        .initialization_cancellation
+        .lock()
+        .map_err(|_| "RAG index initialization state poisoned".to_string())?;
+    let Some(cancellation) = active.as_ref() else {
+        return Ok(false);
+    };
+    cancellation.cancel();
+    Ok(true)
 }
 
 async fn refresh_ready_index(
@@ -859,17 +901,13 @@ fn search_index(index: &RagIndex, request: &RagSearchRequest) -> Vec<RagSearchHi
             }
             let score = keyword_score(&request.query_text, &terms, chunk, doc);
             if score > 0.0 {
-                keyword_hits.push(apply_boost(
-                    RankedHit {
-                        chunk_index,
-                        score,
-                        vector_score: None,
-                        keyword_score: Some(score),
-                        retrieval_mode: "keyword",
-                    },
-                    doc,
-                    request,
-                ));
+                keyword_hits.push(RankedHit {
+                    chunk_index,
+                    score,
+                    vector_score: None,
+                    keyword_score: Some(score),
+                    retrieval_mode: "keyword",
+                });
             }
         }
     }
@@ -877,7 +915,6 @@ fn search_index(index: &RagIndex, request: &RagSearchRequest) -> Vec<RagSearchHi
     let mut merged = HashMap::<String, RankedHit>::new();
     for hit in vector_hits.into_iter().chain(keyword_hits) {
         let chunk = &index.chunks[hit.chunk_index];
-        let doc = &index.documents[&chunk.document_id];
         if let Some(existing) = merged.get(&chunk.id).cloned() {
             let vector_score = existing
                 .vector_score
@@ -895,31 +932,58 @@ fn search_index(index: &RagIndex, request: &RagSearchRequest) -> Vec<RagSearchHi
             };
             merged.insert(
                 chunk.id.clone(),
-                apply_boost(
-                    RankedHit {
-                        chunk_index: existing.chunk_index,
-                        score,
-                        vector_score: Some(vector_score),
-                        keyword_score: Some(keyword_score),
-                        retrieval_mode: if both {
-                            "hybrid"
-                        } else {
-                            existing.retrieval_mode
-                        },
+                RankedHit {
+                    chunk_index: existing.chunk_index,
+                    score,
+                    vector_score: Some(vector_score),
+                    keyword_score: Some(keyword_score),
+                    retrieval_mode: if both {
+                        "hybrid"
+                    } else {
+                        existing.retrieval_mode
                     },
-                    doc,
-                    request,
-                ),
+                },
             );
         } else {
-            merged.insert(chunk.id.clone(), apply_boost(hit, doc, request));
+            merged.insert(chunk.id.clone(), hit);
         }
     }
-    sort_and_diversify(index, merged.into_values().collect(), request.top_k)
+    let boosted_hits = merged
+        .into_values()
+        .map(|hit| {
+            let chunk = &index.chunks[hit.chunk_index];
+            let doc = &index.documents[&chunk.document_id];
+            apply_boost(hit, doc, request)
+        })
+        .collect();
+    sort_and_diversify(index, boosted_hits, request.top_k)
         .into_iter()
         .map(|hit| {
             let chunk = &index.chunks[hit.chunk_index];
             let doc = &index.documents[&chunk.document_id];
+            let neighbor_chunks = index
+                .chunks
+                .iter()
+                .filter(|candidate| {
+                    candidate.document_id == chunk.document_id
+                        && candidate.title_path == chunk.title_path
+                        && candidate.id != chunk.id
+                        && (candidate.index - chunk.index).abs() == 1
+                })
+                .map(|candidate| RagSearchChunk {
+                    id: candidate.id.clone(),
+                    document_id: candidate.document_id.clone(),
+                    content: candidate.content.clone(),
+                    content_hash: candidate.content_hash.clone(),
+                    index: candidate.index,
+                    start_line: candidate.start_line,
+                    end_line: candidate.end_line,
+                    title_path: candidate.title_path.clone(),
+                    heading: candidate.heading.clone(),
+                    source_type: candidate.source_type.clone(),
+                    context_role: Some("neighbor-context"),
+                })
+                .collect();
             RagSearchHit {
                 chunk: RagSearchChunk {
                     id: chunk.id.clone(),
@@ -932,6 +996,7 @@ fn search_index(index: &RagIndex, request: &RagSearchRequest) -> Vec<RagSearchHi
                     title_path: chunk.title_path.clone(),
                     heading: chunk.heading.clone(),
                     source_type: chunk.source_type.clone(),
+                    context_role: None,
                 },
                 document: RagSearchDocument {
                     id: doc.id.clone(),
@@ -943,6 +1008,7 @@ fn search_index(index: &RagIndex, request: &RagSearchRequest) -> Vec<RagSearchHi
                 retrieval_mode: hit.retrieval_mode,
                 keyword_score: hit.keyword_score,
                 vector_score: hit.vector_score,
+                neighbor_chunks,
             }
         })
         .collect()
@@ -963,7 +1029,10 @@ pub async fn search_rag_index(
             .await
             .map_err(|error| error.to_string());
     }
-    if initialize_internal(&app, state.inner()).await.is_err() {
+    if initialize_internal(&app, state.inner(), &CancellationToken::new())
+        .await
+        .is_err()
+    {
         // Initialization failure must not block an answer. Retry a lightweight
         // keyword-only load; the failed state is retained so a later call can retry.
         let pool = open_readonly_pool(database_path(&app)?).await?;
@@ -996,6 +1065,17 @@ pub async fn search_rag_index(
 mod tests {
     use super::*;
     use std::time::Instant;
+
+    #[test]
+    fn active_initialization_can_be_cancelled_idempotently() {
+        let service = RagIndexService::default();
+        let token = CancellationToken::new();
+        *service.initialization_cancellation.lock().unwrap() = Some(token.clone());
+        assert!(cancel_active_initialization(&service).unwrap());
+        assert!(token.is_cancelled());
+        *service.initialization_cancellation.lock().unwrap() = None;
+        assert!(!cancel_active_initialization(&service).unwrap());
+    }
 
     #[test]
     fn invalid_and_mismatched_vectors_are_skipped() {
@@ -1046,6 +1126,97 @@ mod tests {
         assert!(terms.contains("索引初始化"));
         assert!(terms.contains("索引"));
         assert!(!terms.contains("rust索引初始化"));
+    }
+
+    fn assert_score(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 0.000_001,
+            "expected score {expected}, got {actual}"
+        );
+    }
+
+    fn boost_test_index() -> RagIndex {
+        let documents = vec![RawDocument {
+            id: "current".into(),
+            file_path: "C:\\current.md".into(),
+            title: "anonymous".into(),
+            last_modified: 0,
+        }];
+        let chunks = vec![RawChunk {
+            id: "current-1".into(),
+            document_id: "current".into(),
+            content: "rust".into(),
+            content_hash: Some("current-1".into()),
+            index: 0,
+            start_line: 1,
+            end_line: 1,
+            title_path: None,
+            heading: None,
+            source_type: "markdown".into(),
+            embedding: Some("[0.6,0.8]".into()),
+        }];
+        build_index(documents, chunks).0
+    }
+
+    fn boost_test_request() -> RagSearchRequest {
+        RagSearchRequest {
+            query_text: "rust missing".into(),
+            query_vector: None,
+            top_k: 1,
+            threshold: 0.0,
+            file_paths: vec![],
+            keyword_search_enabled: true,
+            current_file_path: Some("c:/current.md".into()),
+            prefer_current_file: true,
+            prefer_recent_documents: false,
+            keyword_only_fallback: false,
+        }
+    }
+
+    #[test]
+    fn search_applies_current_file_boost_once_per_retrieval_mode() {
+        let index = boost_test_index();
+
+        let keyword_hits = search_index(&index, &boost_test_request());
+        assert_eq!(keyword_hits[0].retrieval_mode, "keyword");
+        assert_score(keyword_hits[0].keyword_score.unwrap(), 0.5);
+        assert_score(keyword_hits[0].score, 0.58);
+
+        let vector_request = RagSearchRequest {
+            query_text: String::new(),
+            query_vector: Some(vec![1.0, 0.0]),
+            keyword_search_enabled: false,
+            ..boost_test_request()
+        };
+        let vector_hits = search_index(&index, &vector_request);
+        assert_eq!(vector_hits[0].retrieval_mode, "vector");
+        assert_score(vector_hits[0].vector_score.unwrap(), 0.6);
+        assert_score(vector_hits[0].score, 0.68);
+
+        let hybrid_request = RagSearchRequest {
+            query_vector: Some(vec![1.0, 0.0]),
+            ..boost_test_request()
+        };
+        let hybrid_hits = search_index(&index, &hybrid_request);
+        assert_eq!(hybrid_hits[0].retrieval_mode, "hybrid");
+        assert_score(hybrid_hits[0].vector_score.unwrap(), 0.6);
+        assert_score(hybrid_hits[0].keyword_score.unwrap(), 0.5);
+        assert_score(hybrid_hits[0].score, 0.692);
+        assert_eq!(
+            hybrid_hits
+                .iter()
+                .map(|hit| &hit.chunk.id)
+                .collect::<Vec<_>>(),
+            search_index(&index, &hybrid_request)
+                .iter()
+                .map(|hit| &hit.chunk.id)
+                .collect::<Vec<_>>()
+        );
+        assert!(keyword_hits
+            .iter()
+            .chain(vector_hits.iter())
+            .chain(hybrid_hits.iter())
+            .all(|hit| hit.score <= 1.0));
     }
 
     #[test]

@@ -1,10 +1,12 @@
-import type { AiProvider, ChatMessage } from '@/services/ai/types'
-import { buildContext, searchRelevant } from '@/services/rag/pipeline'
+import type { AiProvider, ChatMessage, ChatMessageSource } from '@/services/ai/types'
+import { buildContextResult, searchRelevant } from '@/services/rag/pipeline'
 import type { SearchResult } from '@/services/rag/types'
 import type { ContextTag } from '@/types/contextTag'
 import { resolveScopeFilePaths } from '@/services/aiScope'
 import { hideLikelyToolJsonPrefix } from '@/services/agent/toolCallParser'
 import type { RagSearchProgress } from '@/services/rag/nativeIndex'
+import { dropOldestCompleteTurns, isModelContextOverflowError } from '@/services/ai/contextBudget'
+import { createSourceReferenceRegistry, parseSourceReferences, type SourceReferenceRegistry } from '@/services/ai/sourceReferences'
 
 function createStreamContentFlusher(
   onUpdate: (content: string) => void,
@@ -54,12 +56,80 @@ export function toRagSources(results: SearchResult[]) {
   }))
 }
 
+function toLocalChatMessageSources(sources: ReturnType<typeof toRagSources>): ChatMessageSource[] {
+  return sources.map((source) => ({
+    kind: 'local',
+    filePath: source.filePath,
+    fileName: source.fileName,
+    titlePath: source.titlePath,
+    heading: source.heading,
+    startLine: source.startLine,
+    endLine: source.endLine,
+  }))
+}
+
+export function resolveDirectRagSources(
+  content: string,
+  registry: SourceReferenceRegistry,
+  fallbackSources: ChatMessageSource[],
+) {
+  const parsed = parseSourceReferences(content, registry)
+  return {
+    ...parsed,
+    sources: parsed.hasValidReferences ? parsed.referencedSources : fallbackSources,
+  }
+}
+
+/**
+ * 从模型回答末尾解析 [有效来源] 标记块。
+ * 返回有效来源序号数组（1-based）和去除标记后的内容。
+ * 解析失败时 indices 为 null，strippedContent 为原始内容。
+ */
+const EFFECTIVE_SOURCE_REGEX = /\[有效来源\]\s*\n\s*(\[[\d,\s]*\])\s*$/m
+
+export function parseEffectiveSourceIndices(content: string): { indices: number[] | null; strippedContent: string } {
+  const match = content.match(EFFECTIVE_SOURCE_REGEX)
+  if (!match?.[1]) return { indices: null, strippedContent: content }
+
+  try {
+    const parsed = JSON.parse(match[1])
+    if (!Array.isArray(parsed) || !parsed.every((n: unknown) => typeof n === 'number' && Number.isInteger(n) && n > 0)) {
+      return { indices: null, strippedContent: content }
+    }
+    const stripped = content.slice(0, match.index!).trimEnd()
+    return { indices: parsed, strippedContent: stripped }
+  } catch {
+    return { indices: null, strippedContent: content }
+  }
+}
+
+/**
+ * 按有效来源序号筛选 RagSource 数组，保持模型指定的顺序。
+ * @param sources 原始来源数组（1-based 索引对应数组位置）
+ * @param indices 有效来源序号（1-based）
+ */
+export function filterRagSourcesByIndices<T>(
+  sources: T[],
+  indices: number[],
+): T[] {
+  const result: T[] = []
+  const seen = new Set<number>()
+  for (const idx of indices) {
+    if (idx < 1 || idx > sources.length || seen.has(idx)) continue
+    seen.add(idx)
+    result.push(sources[idx - 1])
+  }
+  return result
+}
+
 export interface ScopedKnowledgeResult {
   status: 'found' | 'empty'
   context: string
   sources: ReturnType<typeof toRagSources>
+  sourceRegistry: SourceReferenceRegistry
   searchedFilePaths?: string[]
   emptyReason?: string
+  coverage: ReturnType<typeof buildContextResult>['coverage']
 }
 
 export async function searchScopedKnowledge(
@@ -67,6 +137,7 @@ export async function searchScopedKnowledge(
   contextTags: ContextTag[],
   signal?: AbortSignal,
   onProgress?: (progress: RagSearchProgress) => void,
+  maxContextBudget?: number | { maxChars?: number; maxTokens?: number },
 ): Promise<ScopedKnowledgeResult> {
   const scopeFilePaths = resolveScopeFilePaths(contextTags)
   if (scopeFilePaths.length === 0) {
@@ -74,8 +145,10 @@ export async function searchScopedKnowledge(
       status: 'empty',
       context: '',
       sources: [],
+      sourceRegistry: createSourceReferenceRegistry(),
       searchedFilePaths: [],
       emptyReason: 'ContextTag 没有引用可检索文件',
+      coverage: { requested: 0, included: 0, skipped: 0 },
     }
   }
 
@@ -93,15 +166,32 @@ export async function searchScopedKnowledge(
       status: 'empty',
       context: '',
       sources: [],
+      sourceRegistry: createSourceReferenceRegistry(),
       searchedFilePaths: scopeFilePaths,
+      coverage: { requested: 0, included: 0, skipped: 0 },
     }
   }
 
+  const requestedBudget = typeof maxContextBudget === 'number'
+    ? maxContextBudget
+    : maxContextBudget?.maxTokens ?? maxContextBudget?.maxChars
+  // buildContextResult 的旧接口仍使用 UTF-16 字符；一字符一 token 是中文场景的保守换算。
+  const contextResult = buildContextResult(
+    results,
+    requestedBudget && requestedBudget > 0 ? Math.floor(requestedBudget) : 6000,
+    { referenceIds: true },
+  )
+  const includedResults = contextResult.includedSources.map((source) => source.result)
+  const sources = toRagSources(includedResults)
+
   return {
-    status: 'found',
-    context: buildContext(results),
-    sources: toRagSources(results),
+    status: contextResult.text ? 'found' : 'empty',
+    context: contextResult.text,
+    sources,
+    sourceRegistry: createSourceReferenceRegistry(toLocalChatMessageSources(sources)),
     searchedFilePaths: scopeFilePaths,
+    emptyReason: contextResult.text ? undefined : '检索结果均超出上下文预算',
+    coverage: contextResult.coverage,
   }
 }
 
@@ -140,37 +230,48 @@ export async function streamFinalAnswer(options: {
 }): Promise<void> {
   const filter = options.filterToolJson ?? false
 
-  if (options.streamEnabled) {
-    const stream = options.client.streamChat({
-      messages: options.messages,
+  const sendOnce = async (messages: ChatMessage[]) => {
+    if (options.streamEnabled) {
+      const stream = options.client.streamChat({
+        messages,
+        signal: options.signal,
+        temperature: options.temperature,
+        reasoningMode: options.reasoningMode,
+      })
+      let accumulated = ''
+      const transform = (content: string) => filter ? hideLikelyToolJsonPrefix(content) : content
+      const flusher = createStreamContentFlusher(options.onUpdate, options.isCancelled, transform)
+      try {
+        for await (const chunk of stream) {
+          if (options.isCancelled()) break
+          accumulated += chunk.content
+          flusher.schedule(accumulated)
+          if (chunk.done) break
+        }
+      } finally {
+        flusher.flush()
+      }
+      return
+    }
+
+    const response = await options.client.chat({
+      messages,
       signal: options.signal,
       temperature: options.temperature,
       reasoningMode: options.reasoningMode,
     })
-    let accumulated = ''
-    const transform = (content: string) => filter ? hideLikelyToolJsonPrefix(content) : content
-    const flusher = createStreamContentFlusher(options.onUpdate, options.isCancelled, transform)
-
-    try {
-      for await (const chunk of stream) {
-        if (options.isCancelled()) break
-        accumulated += chunk.content
-        flusher.schedule(accumulated)
-        if (chunk.done) break
-      }
-    } finally {
-      flusher.flush()
+    if (!options.isCancelled()) {
+      options.onUpdate(filter ? hideLikelyToolJsonPrefix(response.content) : response.content)
     }
-    return
   }
 
-  const response = await options.client.chat({
-    messages: options.messages,
-    signal: options.signal,
-    temperature: options.temperature,
-    reasoningMode: options.reasoningMode,
-  })
-  if (!options.isCancelled()) {
-    options.onUpdate(filter ? hideLikelyToolJsonPrefix(response.content) : response.content)
+  try {
+    await sendOnce(options.messages)
+    return
+  } catch (error) {
+    if (!isModelContextOverflowError(error) || options.isCancelled()) throw error
+    console.warn('[AI context] provider reported context overflow; retrying after dropping oldest turn')
+    const reduced = dropOldestCompleteTurns(options.messages)
+    await sendOnce(reduced)
   }
 }

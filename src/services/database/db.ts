@@ -5,7 +5,16 @@
  */
 
 import { isTauri } from '@/hooks/useTauri'
-import { DB_SCHEMA, DB_MIGRATIONS, DB_NAME, DB_POST_MIGRATION_STATEMENTS } from './schema'
+import { markStartupPoint } from '@/services/startupPerformance'
+import {
+  CURRENT_DB_SCHEMA_VERSION,
+  DB_LEGACY_BACKFILL_STATEMENTS,
+  DB_MIGRATIONS,
+  DB_NAME,
+  DB_POST_MIGRATION_STATEMENTS,
+  DB_SCHEMA,
+  splitDatabaseSchemaStatements,
+} from './schema'
 
 // --- Database abstraction ---
 
@@ -15,56 +24,81 @@ interface DBAdapter {
   close(): Promise<void>
 }
 
+type SchemaDatabase = Pick<DBAdapter, 'execute' | 'select'>
+
+async function readSchemaVersion(database: SchemaDatabase): Promise<number> {
+  const rows = await database.select<{ user_version: number }>('PRAGMA user_version')
+  return Number(rows[0]?.user_version ?? 0)
+}
+
+async function hasApplicationSchema(database: SchemaDatabase): Promise<boolean> {
+  const rows = await database.select<{ name: string }>(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'documents' LIMIT 1",
+  )
+  return rows.length > 0
+}
+
+async function hasColumn(database: SchemaDatabase, table: string, column: string): Promise<boolean> {
+  const rows = await database.select<{ name: string }>(`PRAGMA table_info(${table})`)
+  return rows.some((row) => row.name === column)
+}
+
+async function executeLatestSchema(database: SchemaDatabase, indexesOnly = false): Promise<void> {
+  for (const statement of splitDatabaseSchemaStatements(DB_SCHEMA)) {
+    const isIndex = /^CREATE INDEX\b/i.test(statement)
+    if (isIndex !== indexesOnly) continue
+    await database.execute(statement)
+  }
+}
+
+/**
+ * Version 0 is either a new empty database or an older GuanMo database.
+ * New databases receive the latest schema directly. Older databases perform
+ * the compatibility probes and historical backfill once, then advance the
+ * durable SQLite user_version gate.
+ */
+export async function initializeDatabaseSchema(database: SchemaDatabase): Promise<void> {
+  const version = await readSchemaVersion(database)
+  if (version > CURRENT_DB_SCHEMA_VERSION) {
+    throw new Error(`数据库版本 ${version} 高于当前支持版本 ${CURRENT_DB_SCHEMA_VERSION}`)
+  }
+  if (version === CURRENT_DB_SCHEMA_VERSION) return
+
+  const existingSchema = await hasApplicationSchema(database)
+  await executeLatestSchema(database)
+
+  if (existingSchema) {
+    for (const migration of DB_MIGRATIONS) {
+      if (await hasColumn(database, migration.table, migration.column)) continue
+      await database.execute(migration.sql)
+    }
+    for (const statement of DB_LEGACY_BACKFILL_STATEMENTS) {
+      await database.execute(statement)
+    }
+  }
+
+  await executeLatestSchema(database, true)
+  for (const statement of DB_POST_MIGRATION_STATEMENTS) {
+    await database.execute(statement)
+  }
+
+  await database.execute(`PRAGMA user_version = ${CURRENT_DB_SCHEMA_VERSION}`)
+}
+
 // --- Tauri SQLite adapter ---
 
 class TauriSQLiteAdapter implements DBAdapter {
   private db: any = null
 
   async init(): Promise<void> {
+    markStartupPoint('database-init-start')
     const Database = (await import('@tauri-apps/plugin-sql')).default
+    markStartupPoint('database-plugin-loaded')
     this.db = await Database.load(`sqlite:${DB_NAME}`)
+    markStartupPoint('database-connection-opened')
     await this.db.execute('PRAGMA foreign_keys = ON')
-    // Run base schema first, then explicit column migrations.
-    const statements = DB_SCHEMA.split(';').filter((s) => s.trim())
-    for (const stmt of statements) {
-      await this.db.execute(stmt)
-    }
-    await this.runMigrations()
-    for (const statement of DB_POST_MIGRATION_STATEMENTS) {
-      await this.db.execute(statement)
-    }
-    await this.db.execute('CREATE INDEX IF NOT EXISTS idx_chat_messages_parent_id ON chat_messages(parent_id)')
-  }
-
-  private async hasColumn(table: string, column: string): Promise<boolean> {
-    const rows = await this.db.select(`PRAGMA table_info(${table})`) as Array<{ name: string }>
-    return rows.some((row) => row.name === column)
-  }
-
-  private async runMigrations(): Promise<void> {
-    for (const migration of DB_MIGRATIONS) {
-      if (await this.hasColumn(migration.table, migration.column)) continue
-      await this.db.execute(migration.sql)
-    }
-    await this.db.execute(`
-      WITH ordered_messages AS (
-        SELECT
-          id,
-          role,
-          LAG(id) OVER (PARTITION BY session_id ORDER BY created_at ASC, rowid ASC) AS previous_id,
-          LAG(role) OVER (PARTITION BY session_id ORDER BY created_at ASC, rowid ASC) AS previous_role
-        FROM chat_messages
-      )
-      UPDATE chat_messages
-      SET parent_id = (
-        SELECT previous_id FROM ordered_messages WHERE ordered_messages.id = chat_messages.id
-      )
-      WHERE role = 'assistant'
-        AND parent_id IS NULL
-        AND id IN (
-          SELECT id FROM ordered_messages WHERE role = 'assistant' AND previous_role = 'user'
-        )
-    `)
+    await initializeDatabaseSchema(this.db)
+    markStartupPoint('database-schema-gate-complete')
   }
 
   async execute(sql: string, params: unknown[] = []): Promise<{ rowsAffected: number }> {

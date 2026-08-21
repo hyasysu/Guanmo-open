@@ -6,7 +6,9 @@ import {
   buildEditTargets,
   buildRoutingAppContext,
 } from '@/services/agent/requestBuilder'
-import { buildAgentResultPresentation } from '@/services/agent/sourceMetadata'
+import { prepareAgentToolResultForModel } from '@/services/agent/executor'
+import { buildAgentResultPresentation, resolveAgentAnswerSources } from '@/services/agent/sourceMetadata'
+import { createSourceReferenceRegistry } from '@/services/ai/sourceReferences'
 import type { ContextTag } from '@/types/contextTag'
 
 const selectionTag: ContextTag = {
@@ -21,6 +23,71 @@ const selectionTag: ContextTag = {
 }
 
 describe('AI chat orchestration helpers', () => {
+  it('registers only model-visible Agent sources with stable IDs across tool calls', () => {
+    const first = prepareAgentToolResultForModel(
+      createSourceReferenceRegistry(),
+      'search_knowledge',
+      JSON.stringify({
+        results: [{
+          filePath: 'C:\\Temp\\anonymous.md',
+          title: '匿名文档',
+          startLine: 2,
+          endLine: 4,
+        }],
+      }),
+    )
+    const second = prepareAgentToolResultForModel(
+      first.registry,
+      'web_search',
+      JSON.stringify({
+        results: [{ title: '匿名网页', url: 'https://example.com/anonymous' }],
+      }),
+    )
+    const duplicate = prepareAgentToolResultForModel(
+      second.registry,
+      'search_knowledge',
+      JSON.stringify({
+        results: [{
+          filePath: 'c:/TEMP/ANONYMOUS.md',
+          title: '重复标题',
+          startLine: 2,
+          endLine: 4,
+        }],
+      }),
+    )
+    const selection = prepareAgentToolResultForModel(
+      duplicate.registry,
+      'read_selection_context',
+      JSON.stringify({
+        source: { filePath: 'C:\\Temp\\anonymous.md', fileName: 'anonymous.md' },
+        chunks: [{ headingPath: ['章节'], startLine: 8, endLine: 9, content: '选区上下文' }],
+      }),
+    )
+    const file = prepareAgentToolResultForModel(
+      selection.registry,
+      'read_context_file',
+      JSON.stringify({
+        source: { filePath: 'C:\\Temp\\anonymous.md', fileName: 'anonymous.md', startLine: 1, endLine: 20 },
+      }),
+    )
+
+    expect(first.result).toContain('"referenceId": "[S1]"')
+    expect(second.result).toContain('"referenceId": "[S2]"')
+    expect(duplicate.result).toContain('"referenceId": "[S1]"')
+    expect(selection.result).toContain('"referenceId": "[S3]"')
+    expect(file.result).toContain('"referenceId": "[S4]"')
+    expect(file.registry.entries.map((entry) => entry.id)).toEqual(['S1', 'S2', 'S3', 'S4'])
+
+    const fallbackSources = file.registry.entries.map((entry) => entry.source)
+    const resolved = resolveAgentAnswerSources(
+      '结论 [S2]，本地依据 [S1]，未知 [S9]。',
+      file.registry,
+      fallbackSources,
+    )
+    expect(resolved.referencedIds).toEqual(['S2', 'S1'])
+    expect(resolved.sources).toEqual([fallbackSources[1], fallbackSources[0]])
+  })
+
   it('builds routing context and stable edit targets from current tags', () => {
     expect(buildRoutingAppContext([selectionTag], true)).toEqual({
       hasRecentEdit: true,

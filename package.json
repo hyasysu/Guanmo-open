@@ -1,7 +1,7 @@
 {
     "name": "guanmo",
     "private": false,
-    "version": "1.5.0",
+    "version": "1.6.0",
     "description": "AI-powered Markdown knowledge management desktop application built with Tauri and React.",
     "license": "MIT",
     "repository": {
@@ -51,9 +51,12 @@
         "test:store-actions": "node scripts/run-store-actions-check.mjs",
         "test:rag-index": "node scripts/run-rag-index-check.mjs",
         "test:rag-query": "node scripts/run-rag-query-benchmark.mjs",
+        "test:rag-eval": "node scripts/run-rag-offline-evaluation.mjs",
+        "test:prompt-eval": "node scripts/run-prompt-offline-evaluation.mjs",
         "test:runtime-schemas": "node scripts/run-runtime-schemas-check.mjs",
         "test:file-access": "node scripts/run-file-access-check.mjs",
         "test:session-restore": "node scripts/run-session-restore-check.mjs",
+        "test:cold-start": "node scripts/measure-cold-start.mjs",
         "test:editor-input-performance": "node scripts/run-editor-input-performance-check.mjs",
         "test:editor-languages": "node scripts/run-editor-languages-check.mjs",
         "test:update-version": "node scripts/run-update-version-check.mjs",

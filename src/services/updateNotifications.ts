@@ -1,4 +1,5 @@
 import { toast } from '@/services/toast'
+import { showWindowsNotification } from '@/services/readingReminderNotifications'
 import {
   checkForUpdates,
   ignoreUpdateVersion,
@@ -43,6 +44,12 @@ export function showAvailableUpdate(update: AvailableUpdate): boolean {
         onClick: () => ignoreUpdateVersion(update.latestVersion),
       },
     ],
+  })
+  void showWindowsNotification({
+    title: '发现新版本',
+    body: `观墨 v${update.latestVersion} 已发布`,
+  }).catch(() => {
+    console.warn('[Update] Windows notification unavailable')
   })
   return true
 }

@@ -8,8 +8,7 @@ import { buildSemanticDocumentChunks } from './semanticChunker'
  */
 export function chunkMarkdown(
   content: string,
-  documentId: string,
-  _options: { chunkSize?: number; overlap?: number } = {}
+  documentId: string
 ): Chunk[] {
   const semanticChunks = buildSemanticDocumentChunks(content, true)
   const now = Date.now()

@@ -1,4 +1,5 @@
 import type { ChatMessage, ChatMessageSource, ReadingScope } from '@/services/ai/types'
+import type { SourceReferenceId, SourceReferenceRegistry } from '@/services/ai/sourceReferences'
 import type { Capability, SelectionRequestKind } from './intentDetector'
 import type { AgentToolName } from './toolSelector'
 
@@ -50,7 +51,7 @@ export interface AgentStep {
   progressStage?: AgentProgressStage
 }
 
-export type AgentResultReason = 'completed' | 'max_steps' | 'max_tool_calls' | 'error'
+export type AgentResultReason = 'completed' | 'max_steps' | 'max_tool_calls' | 'deadline' | 'error'
 
 export interface AgentResult {
   answer: string
@@ -59,6 +60,8 @@ export interface AgentResult {
   reason: AgentResultReason
   finalMessages?: ChatMessage[]
   sources?: ChatMessageSource[]
+  sourceRegistry?: SourceReferenceRegistry
+  referencedSourceIds?: SourceReferenceId[]
 }
 
 export interface AgentTaskContext {
@@ -75,6 +78,7 @@ export interface AgentConfig {
   maxSteps: number
   maxToolCalls: number
   stepTimeout: number
+  deadlineMs: number
   systemPrompt: string
 }
 

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { ActionProposal, ChatMessage, ChatMessageContextMeta, ChatMessageSource, EditConfirmation } from '@/services/ai/types'
+import { normalizeSafeWebSourceUrl, type SourceReferenceId } from '@/services/ai/sourceReferences'
 import type { AgentStep, AgentTaskContext } from '@/services/agent/types'
 import type { ContextTag } from '@/types/contextTag'
 import { MAX_CONTEXT_TAGS } from '@/types/contextTag'
@@ -75,6 +76,7 @@ interface ChatState {
   updateMessageContent: (id: string, content: string) => void
   updateMessageContextMeta: (id: string, contextMeta: ChatMessageContextMeta) => void
   updateMessageSources: (id: string, sources: ChatMessageSource[]) => void
+  updateMessageReferencedSourceIds: (id: string, referencedSourceIds: SourceReferenceId[]) => void
   removeLastMessage: () => void
   removeMessageById: (id: string) => void
   setStreaming: (v: boolean) => void
@@ -106,6 +108,19 @@ interface ChatState {
 
 function createSessionId(): string {
   return `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+}
+
+/** 将聊天消息的可选元数据编码为兼容旧行的 JSON。 */
+export function encodeChatMessageMetadata(msg: ChatMessage): string | undefined {
+  const metadata: Record<string, unknown> = {}
+  if (msg.tags?.length) metadata.tags = msg.tags
+  if (msg.displayContent) metadata.displayContent = msg.displayContent
+  if (msg.contextMeta) metadata.contextMeta = msg.contextMeta
+  if (msg.sources?.length) metadata.sources = msg.sources
+  if (msg.referencedSourceIds) metadata.referencedSourceIds = msg.referencedSourceIds
+  if (msg.editConfirmation) metadata.editConfirmation = msg.editConfirmation
+  if (msg.actionProposal) metadata.actionProposal = msg.actionProposal
+  return Object.keys(metadata).length > 0 ? JSON.stringify(metadata) : undefined
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -158,6 +173,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   updateMessageSources: (id, sources) => set((s) => ({
     messages: s.messages.map((msg) => (msg.id === id ? { ...msg, sources } : msg)),
+  })),
+
+  updateMessageReferencedSourceIds: (id, referencedSourceIds) => set((s) => ({
+    messages: s.messages.map((msg) => (msg.id === id ? { ...msg, referencedSourceIds } : msg)),
   })),
 
   removeLastMessage: () => set((s) => {
@@ -414,21 +433,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     await persistChatSession({ id: sessionId, title })
 
     for (const msg of normalizedVisibleMessages) {
-      const metadata: Record<string, unknown> = {}
-      if (msg.tags?.length) metadata.tags = msg.tags
-      if (msg.displayContent) metadata.displayContent = msg.displayContent
-      if (msg.contextMeta) metadata.contextMeta = msg.contextMeta
-      if (msg.sources?.length) metadata.sources = msg.sources
-      if (msg.editConfirmation) metadata.editConfirmation = msg.editConfirmation
-      if (msg.actionProposal) metadata.actionProposal = msg.actionProposal
-
       await persistChatMessage({
         id: msg.id!,
         sessionId,
         parentId: msg.parentId,
         role: msg.role,
         content: msg.content,
-        metadata: Object.keys(metadata).length > 0 ? JSON.stringify(metadata) : undefined,
+        metadata: encodeChatMessageMetadata(msg),
         createdAt: msg.timestamp,
       })
     }
@@ -478,6 +489,7 @@ function toChatMessage(
   let displayContent: string | undefined
   let contextMeta: ChatMessageContextMeta | undefined
   let sources: ChatMessageSource[] | undefined
+  let referencedSourceIds: SourceReferenceId[] | undefined
   let editConfirmation: EditConfirmation | undefined
   let actionProposal: ActionProposal | undefined
 
@@ -488,6 +500,7 @@ function toChatMessage(
       displayContent = typeof meta.displayContent === 'string' ? meta.displayContent : undefined
       contextMeta = sanitizeContextMeta(meta.contextMeta)
       sources = sanitizeMessageSources(meta.sources)
+      referencedSourceIds = sanitizeSourceReferenceIds(meta.referencedSourceIds)
       editConfirmation = decodeEditConfirmation(meta.editConfirmation)
       actionProposal = decodeActionProposal(meta.actionProposal)
     } catch {
@@ -507,6 +520,7 @@ function toChatMessage(
     displayContent,
     contextMeta,
     sources,
+    referencedSourceIds,
     editConfirmation,
     actionProposal,
     sessionId: row.session_id,
@@ -524,10 +538,12 @@ function sanitizeMessageSources(value: unknown): ChatMessageSource[] | undefined
     if (!isPlainObject(item)) return []
     if (item.kind === 'web') {
       if (typeof item.url !== 'string') return []
+      const url = normalizeSafeWebSourceUrl(item.url)
+      if (!url) return []
       return [{
         kind: 'web' as const,
-        title: typeof item.title === 'string' && item.title.trim() ? item.title : item.url,
-        url: item.url,
+        title: typeof item.title === 'string' && item.title.trim() ? item.title : url,
+        url,
         siteName: typeof item.siteName === 'string' ? item.siteName : undefined,
         publishedAt: typeof item.publishedAt === 'string' ? item.publishedAt : undefined,
         snippet: typeof item.snippet === 'string' ? item.snippet : undefined,
@@ -556,6 +572,20 @@ function sanitizeMessageSources(value: unknown): ChatMessageSource[] | undefined
   })
 
   return normalized.length > 0 ? normalized : undefined
+}
+
+export function sanitizeSourceReferenceIds(value: unknown): SourceReferenceId[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const ids: SourceReferenceId[] = []
+  const seen = new Set<SourceReferenceId>()
+  for (const item of value) {
+    if (typeof item !== 'string' || !/^S[1-9]\d*$/.test(item)) continue
+    const id = item as SourceReferenceId
+    if (seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
+  }
+  return ids
 }
 
 function sanitizeMessageTags(value: unknown): ChatMessage['tags'] {

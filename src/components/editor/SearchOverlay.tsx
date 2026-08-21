@@ -52,6 +52,25 @@ function findMatches(doc: string, query: string, caseSensitive: boolean): { from
   return matches
 }
 
+/**
+ * 在匹配列表中选取离锚点（当前光标/视口 offset）最近的匹配下标。
+ * - 无锚点或空列表 → 0（保持现状：跳文档首个匹配）。
+ * - 距离相等时取 `from >= anchor` 的后者（搜索方向优先）。
+ */
+export function findNearestMatchIndex(matches: { from: number; to: number }[], anchor: number | undefined): number {
+  if (matches.length === 0 || anchor === undefined) return 0
+  let best = 0
+  let bestDist = Number.POSITIVE_INFINITY
+  for (let i = 0; i < matches.length; i += 1) {
+    const dist = Math.abs(matches[i].from - anchor)
+    if (dist < bestDist || (dist === bestDist && matches[i].from >= anchor)) {
+      best = i
+      bestDist = dist
+    }
+  }
+  return best
+}
+
 // --- Component ---
 
 interface SearchOverlayProps {
@@ -60,7 +79,14 @@ interface SearchOverlayProps {
   previewSources?: Array<{
     content: string
     paneRef: React.RefObject<HTMLDivElement | null>
-    previewRef: React.RefObject<{ scrollToOffset: (offset: number) => void } | null>
+    previewRef: React.RefObject<{
+      scrollToOffset: (offset: number) => void
+      setSearchState?: (state: { query: string; activeOffset?: number } | null) => void
+      /** 可见文本投影搜索（与预览高亮同一语义）；未提供时回退原文扫描 */
+      searchVisible?: (query: string) => Array<{ from: number; to: number }>
+      /** 当前视口顶部对应的源码 offset；未提供时锚点兜底为文档首个匹配 */
+      getViewportOffset?: () => number | undefined
+    } | null>
   }>
 }
 
@@ -106,17 +132,19 @@ export function SearchOverlay({ onClose, editorViewRef, previewSources = [] }: S
 
   // Clear on unmount
   useEffect(() => {
+    const sources = previewSources
     return () => {
       const view = editorViewRef?.current
       if (view && view.state.field(searchField, false)) {
         view.dispatch({ effects: clearSearch.of(null) })
       }
-      if (typeof CSS !== 'undefined' && CSS.highlights) {
-        CSS.highlights.delete('search-highlight')
-        CSS.highlights.delete('search-highlight-active')
+      // 搜索关闭：清除各预览实例的模型驱动高亮（虚拟块卸载/挂载不再残留）
+      for (const source of sources) {
+        source.previewRef.current?.setSearchState?.(null)
       }
     }
-  }, [editorViewRef])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // --- Editor search ---
   const doEditorSearch = useCallback((searchQuery: string) => {
@@ -131,15 +159,17 @@ export function SearchOverlay({ onClose, editorViewRef, previewSources = [] }: S
     const doc = view.state.doc.toString()
     const matches = findMatches(doc, searchQuery, false)
     matchesRef.current = matches
-    currentMatchRef.current = 0
-    setCurrentMatch(0)
+    // 锚点取当前光标：优先跳离光标最近的匹配，而不是文档首个匹配
+    const nearest = findNearestMatchIndex(matches, view.state.selection.main.head)
+    currentMatchRef.current = nearest
+    setCurrentMatch(matches.length > 0 ? nearest : 0)
     setMatchCount(matches.length)
 
     if (matches.length > 0) {
-      // Move cursor to first match
+      // Move cursor to nearest match
       view.dispatch({
-        selection: { anchor: matches[0].from, head: matches[0].to },
-        effects: setSearchQuery.of({ query: searchQuery, caseSensitive: false, currentMatch: 0, matches }),
+        selection: { anchor: matches[nearest].from, head: matches[nearest].to },
+        effects: setSearchQuery.of({ query: searchQuery, caseSensitive: false, currentMatch: nearest, matches }),
         scrollIntoView: true,
       })
     } else {
@@ -177,62 +207,52 @@ export function SearchOverlay({ onClose, editorViewRef, previewSources = [] }: S
     })
   }, [editorViewRef, query])
 
-  // --- Preview search (CSS Highlight API) ---
-  const highlightMountedPreviewMatches = useCallback((searchQuery: string) => {
-    if (typeof CSS === 'undefined' || !CSS.highlights) return
-    CSS.highlights.delete('search-highlight')
-    CSS.highlights.delete('search-highlight-active')
-    if (!searchQuery) return
-
-    const allRanges: globalThis.Range[] = []
-    for (const { paneRef } of previewSources) {
-      const el = paneRef.current
-      if (!el) continue
-      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
-      let node: Text | null
-      while ((node = walker.nextNode() as Text)) {
-        const text = node.textContent || ''
-        const regex = new RegExp(escapeRegex(searchQuery), 'gi')
-        let match: RegExpExecArray | null
-        while ((match = regex.exec(text)) !== null) {
-          const range = document.createRange()
-          range.setStart(node, match.index)
-          range.setEnd(node, match.index + match[0].length)
-          allRanges.push(range)
-        }
-      }
-    }
-
-    if (allRanges.length > 0) {
-      CSS.highlights.set('search-highlight', new Highlight(...allRanges))
-      CSS.highlights.set('search-highlight-active', new Highlight(allRanges[0]))
-    }
+  // --- Preview search (model-driven highlights via setSearchState) ---
+  /** 同步搜索状态到各预览实例：active 匹配仅在目标 pane，其余 pane 仅保留普通高亮 */
+  const syncPreviewSearchState = useCallback((searchQuery: string, activeSourceIndex: number, activeOffset?: number) => {
+    previewSources.forEach((source, index) => {
+      const state = searchQuery
+        ? (index === activeSourceIndex && activeOffset !== undefined
+          ? { query: searchQuery, activeOffset }
+          : { query: searchQuery })
+        : null
+      source.previewRef.current?.setSearchState?.(state)
+    })
   }, [previewSources])
 
   const revealPreviewMatch = useCallback((match: PreviewMatch, searchQuery: string) => {
+    syncPreviewSearchState(searchQuery, match.sourceIndex, match.from)
     previewSources[match.sourceIndex]?.previewRef.current?.scrollToOffset(match.from)
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => highlightMountedPreviewMatches(searchQuery))
-    })
-  }, [highlightMountedPreviewMatches, previewSources])
+  }, [previewSources, syncPreviewSearchState])
 
   const searchPreview = useCallback((searchQuery: string) => {
-    const matches = previewSources.flatMap((source, sourceIndex) => (
-      findMatches(source.content, searchQuery, false).map((match) => ({ ...match, sourceIndex }))
-    ))
+    const matches = previewSources.flatMap((source, sourceIndex) => {
+      // 优先使用预览实例的可见文本投影搜索（与预览高亮、复制同一语义），
+      // 避免命中链接 URL / Markdown 标记等不可见源码；实例未提供时回退原文扫描。
+      const visible = source.previewRef.current?.searchVisible?.(searchQuery)
+      if (visible) return visible.map((match) => ({ ...match, sourceIndex }))
+      return findMatches(source.content, searchQuery, false).map((match) => ({ ...match, sourceIndex }))
+    })
     previewMatchesRef.current = matches
-    currentMatchRef.current = 0
-    setCurrentMatch(0)
+    // 锚点取活跃 pane 的视口顶部：优先 document.activeElement 所在 pane，否则第一个 source
+    let anchorSourceIndex = 0
+    const activeEl = document.activeElement
+    if (activeEl) {
+      const focusedIndex = previewSources.findIndex((source) => source.paneRef.current?.contains(activeEl))
+      if (focusedIndex >= 0) anchorSourceIndex = focusedIndex
+    }
+    const anchor = previewSources[anchorSourceIndex]?.previewRef.current?.getViewportOffset?.()
+    const nearest = findNearestMatchIndex(matches, anchor)
+    currentMatchRef.current = nearest
+    setCurrentMatch(matches.length > 0 ? nearest : 0)
     setMatchCount(matches.length)
     if (!searchQuery) {
-      if (typeof CSS !== 'undefined' && CSS.highlights) {
-        CSS.highlights.delete('search-highlight')
-        CSS.highlights.delete('search-highlight-active')
-      }
+      syncPreviewSearchState('', -1)
       return
     }
-    if (matches[0]) revealPreviewMatch(matches[0], searchQuery)
-  }, [previewSources, revealPreviewMatch])
+    if (matches[nearest]) revealPreviewMatch(matches[nearest], searchQuery)
+    else syncPreviewSearchState(searchQuery, -1)
+  }, [previewSources, revealPreviewMatch, syncPreviewSearchState])
 
   const navigatePreview = useCallback((direction: 1 | -1) => {
     if (!query) return

@@ -203,6 +203,40 @@ describe('MarkdownPreview 预览内源码编辑', () => {
     expect(previewRef.current?.getTopForLine(399)).toBeGreaterThan(0)
   })
 
+  it('视口基准点落在块间距时使用下一个已挂载块的真实行号', () => {
+    const previewRef = createRef<MarkdownPreviewHandle>()
+    const host = document.createElement('div')
+    Object.defineProperties(host, {
+      clientHeight: { configurable: true, value: 800 },
+      clientWidth: { configurable: true, value: 1000 },
+      scrollTop: { configurable: true, value: 1_000, writable: true },
+      getBoundingClientRect: {
+        configurable: true,
+        value: () => new DOMRect(0, 100, 1000, 800),
+      },
+    })
+
+    render(<MarkdownPreview ref={previewRef} content={'第一块\n\n第二块\n\n第三块'} />, { container: host })
+    const blocks = host.querySelectorAll<HTMLElement>('[data-md-block-index]')
+    expect(blocks).toHaveLength(3)
+    Object.defineProperty(blocks[0], 'getBoundingClientRect', {
+      configurable: true,
+      value: () => new DOMRect(0, -200, 1000, 100),
+    })
+    Object.defineProperty(blocks[1], 'getBoundingClientRect', {
+      configurable: true,
+      value: () => new DOMRect(0, 120, 1000, 100),
+    })
+    Object.defineProperty(blocks[2], 'getBoundingClientRect', {
+      configurable: true,
+      value: () => new DOMRect(0, 250, 1000, 100),
+    })
+
+    // 容器视口中的目标 y=110，位于第一块与第二块之间，应锚定第二块（源码第 3 行），
+    // 而不是回退到已经可能发生累计漂移的全文高度估算。
+    expect(previewRef.current?.getLineForTop(1_010)).toBe(3)
+  })
+
   it.each([
     ['图片', () => screen.getByRole('button', { name: /图片/ })],
     ['任务复选框', () => screen.getByRole('checkbox')],

@@ -29,7 +29,7 @@ async function indexedDocument(size = 100): Promise<Document> {
       embedding: [index, 1],
       embeddingModel: MODEL,
       embeddingPreprocessVersion: EMBEDDING_PREPROCESS_VERSION,
-      embeddingInputHash: await createEmbeddingInputHash(chunk),
+      embeddingInputHash: await createEmbeddingInputHash(chunk, 'test.md'),
     }
   }))
   const content = chunks.map((chunk) => chunk.content).join('\n')
@@ -55,6 +55,7 @@ assert.equal(canSkipDocumentIndex(existing, existing.contentHash!, 'embedding-mo
 const metadata = {
   id: existing.id,
   filePath: existing.filePath,
+  title: existing.title,
   contentHash: existing.contentHash,
   totalChunks: 100,
   embeddedChunks: 100,
@@ -75,7 +76,7 @@ assert.deepEqual(changedResult.stats, { total: 100, reused: 99, added: 1, delete
 assert.equal(changedResult.document.chunks[41].id, existing.chunks[41].id)
 
 const inserted = [parsedChunk('new introduction', 0), ...existing.chunks.map((chunk, index) => (
-  parsedChunk(chunk.content, index + 1, 1)
+  { ...parsedChunk(chunk.content, index + 1, 1), titlePath: chunk.titlePath }
 ))]
 const insertedResult = await reconcileDocumentChunks(existing, nextBase, inserted, MODEL)
 assert.deepEqual(insertedResult.stats, { total: 101, reused: 100, added: 1, deleted: 0, reembedded: 1 })
@@ -92,7 +93,7 @@ const metadataOnly = existing.chunks.map((chunk, index) => ({
   titlePath: ['moved', `section-${index}`],
 }))
 const metadataResult = await reconcileDocumentChunks(existing, nextBase, metadataOnly, MODEL)
-assert.deepEqual(metadataResult.stats, { total: 100, reused: 100, added: 0, deleted: 0, reembedded: 0 })
+assert.deepEqual(metadataResult.stats, { total: 100, reused: 0, added: 0, deleted: 0, reembedded: 100 })
 assert.equal(metadataResult.document.chunks[0].id, existing.chunks[0].id)
 assert.deepEqual(metadataResult.document.chunks[0].titlePath, ['moved', 'section-0'])
 
@@ -100,17 +101,18 @@ const modelResult = await reconcileDocumentChunks(existing, nextBase, metadataOn
 assert.deepEqual(modelResult.stats, { total: 100, reused: 0, added: 0, deleted: 0, reembedded: 100 })
 assert.equal(modelResult.document.chunks[0].id, existing.chunks[0].id)
 
-const duplicateChunk = parsedChunk('duplicate', 0)
-const duplicateHash = await createEmbeddingInputHash(duplicateChunk)
 const duplicates: Document = {
   ...existing,
-  chunks: [0, 1].map((index) => ({
-    ...parsedChunk('duplicate', index),
-    id: `duplicate-${index}`,
-    embedding: [index, 1],
-    embeddingModel: MODEL,
-    embeddingPreprocessVersion: EMBEDDING_PREPROCESS_VERSION,
-    embeddingInputHash: duplicateHash,
+  chunks: await Promise.all([0, 1].map(async (index) => {
+    const chunk = parsedChunk('duplicate', index)
+    return {
+      ...chunk,
+      id: `duplicate-${index}`,
+      embedding: [index, 1],
+      embeddingModel: MODEL,
+      embeddingPreprocessVersion: EMBEDDING_PREPROCESS_VERSION,
+      embeddingInputHash: await createEmbeddingInputHash(chunk, existing.title),
+    }
   })),
 }
 const duplicateResult = await reconcileDocumentChunks(
@@ -132,4 +134,4 @@ await Promise.all(Array.from({ length: 5 }, () => runSerializedDocumentOperation
 })))
 assert.equal(maxRunning, 1)
 
-console.log('RAG index checks passed: exact hash, 99/100 reuse, insertion, deletion, metadata, model invalidation, duplicates, serialization')
+console.log('RAG index checks passed: exact hash, 99/100 reuse, insertion, deletion, structured metadata invalidation, model invalidation, duplicates, serialization')

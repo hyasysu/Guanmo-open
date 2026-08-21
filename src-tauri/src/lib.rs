@@ -8,6 +8,7 @@ use std::{
     fs,
     path::{Component, Path, PathBuf},
     sync::Mutex,
+    time::Duration,
 };
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_fs::FsExt;
@@ -17,6 +18,7 @@ mod database_transactions;
 mod perf_monitor;
 mod rag_index;
 mod reading_reminder_notifications;
+mod startup_metrics;
 use api_http::ApiOriginState;
 
 const SECRET_FILE: &str = "secrets.json";
@@ -29,6 +31,20 @@ const ALLOWED_TEXT_FILE_EXTENSIONS: [&str; 11] = [
 const ALLOWED_IMAGE_FILE_EXTENSIONS: [&str; 7] =
     ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
 const OPEN_FILES_EVENT: &str = "guanmo:open-files";
+const MAIN_WINDOW_REVEAL_FALLBACK_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn reveal_main_window<R: tauri::Runtime>(window: &tauri::Window<R>) {
+    if let Err(err) = window.show() {
+        eprintln!("failed to show main window: {err}");
+        return;
+    }
+    if let Err(err) = window.unminimize() {
+        eprintln!("failed to unminimize main window: {err}");
+    }
+    if let Err(err) = window.set_focus() {
+        eprintln!("failed to focus main window: {err}");
+    }
+}
 
 #[derive(Default)]
 struct FsAccessState {
@@ -1305,16 +1321,29 @@ fn has_pending_open_files(state: State<'_, PendingOpenFiles>) -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Release 冷启动埋点（未启用 startup-metrics feature 时为空实现）：
+    // T0 进程启动时刻；T1 Tauri 初始化开始（Builder 构建前）。
+    startup_metrics::mark_process_start();
+    startup_metrics::mark("T1_TAURI_SETUP_START");
     let initial_cwd = std::env::current_dir().unwrap_or_default();
     let initial_paths = collect_open_file_paths(std::env::args_os().skip(1), &initial_cwd);
     let pending_open_files = PendingOpenFiles::default();
     enqueue_open_files(&pending_open_files, initial_paths);
+    // 前导（cwd/参数解析/待打开文件入队）完成；下一段为 tauri::Builder 构造链。
+    startup_metrics::mark("RUN_PROLOGUE_DONE");
 
-    let mut builder = tauri::Builder::default()
+    // 以下为纯语法拆分：manage/on_webview_event 的执行顺序与原链式写法完全一致，
+    // 保留分段标记（PerfMonitorState 构造现为轻量空状态，System 延迟到首次
+    // get_perf_snapshot 才初始化，此段不再有重操作）。
+    let mut builder = tauri::Builder::default();
+    startup_metrics::mark("BUILDER_DEFAULT_DONE");
+    builder = builder
         .manage(FsAccessState::default())
         .manage(ApiOriginState::default())
         .manage(rag_index::RagIndexService::default())
-        .manage(pending_open_files)
+        .manage(pending_open_files);
+    startup_metrics::mark("MANAGE_LIGHT_DONE");
+    builder = builder
         .manage(perf_monitor::PerfMonitorState::default())
         .on_webview_event(|webview, event| {
             if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
@@ -1325,6 +1354,16 @@ pub fn run() {
                 }
             }
         });
+
+    // Builder 链（manage/on_webview_event 注册）构建完成；.plugin() 注册本身仅是入队。
+    startup_metrics::mark("TAURI_BUILDER_CREATED");
+
+    // 以下标记插件仅在 startup-metrics feature 下交错插入真实插件之间，
+    // 不改变现有插件的相对顺序与行为；其 initialize 在 build() 内按注册顺序同步执行。
+    #[cfg(feature = "startup-metrics")]
+    {
+        builder = builder.plugin(startup_metrics::init_marker("PLUGIN_INIT_BEGIN"));
+    }
 
     #[cfg(desktop)]
     {
@@ -1338,29 +1377,91 @@ pub fn run() {
                 let _ = app.emit(OPEN_FILES_EVENT, ());
             }
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
+                if window.is_visible().unwrap_or(false) {
+                    reveal_main_window(&window.as_ref().window());
+                }
             }
         }));
     }
 
+    #[cfg(feature = "startup-metrics")]
+    {
+        builder = builder.plugin(startup_metrics::init_marker(
+            "PLUGIN_SINGLE_INSTANCE_INITIALIZED",
+        ));
+    }
+
+    builder = builder.plugin(tauri_plugin_sql::Builder::default().build());
+    #[cfg(feature = "startup-metrics")]
+    {
+        builder = builder.plugin(startup_metrics::init_marker("PLUGIN_SQL_INITIALIZED"));
+    }
+    builder = builder.plugin(tauri_plugin_fs::init());
+    #[cfg(feature = "startup-metrics")]
+    {
+        builder = builder.plugin(startup_metrics::init_marker("PLUGIN_FS_INITIALIZED"));
+    }
+    builder = builder.plugin(tauri_plugin_dialog::init());
+    #[cfg(feature = "startup-metrics")]
+    {
+        builder = builder.plugin(startup_metrics::init_marker("PLUGIN_DIALOG_INITIALIZED"));
+    }
+    builder = builder.plugin(tauri_plugin_shell::init());
+    #[cfg(feature = "startup-metrics")]
+    {
+        builder = builder.plugin(startup_metrics::init_marker("PLUGIN_SHELL_INITIALIZED"));
+    }
+    builder = builder.plugin(tauri_plugin_notification::init());
+    #[cfg(feature = "startup-metrics")]
+    {
+        builder = builder
+            .plugin(startup_metrics::init_marker(
+                "PLUGIN_NOTIFICATION_INITIALIZED",
+            ))
+            .plugin(startup_metrics::hook_observer())
+            .on_page_load(|_webview, payload| {
+                // 参考点位：事件分发时刻（事件循环内），非精确导航开始时刻。
+                if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                    startup_metrics::mark("WEBVIEW_PAGE_LOAD_STARTED");
+                }
+            });
+    }
+
     builder
-        .plugin(tauri_plugin_sql::Builder::default().build())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            // setup 回调开始 ≡ T2：Tauri 在事件循环 Ready 事件内先完成 config 窗口
+            // （OS 窗口 + WebView2 环境/控制器）创建，再执行本回调。
+            startup_metrics::mark("SETUP_CALLBACK_START");
+            startup_metrics::mark("T2_WINDOW_CREATED");
+            if let Err(err) =
+                reading_reminder_notifications::ensure_windows_notification_registration()
+            {
+                if err != "unsupported_platform" {
+                    eprintln!("failed to initialize Windows notifications: {err}");
+                }
+            }
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn_blocking(move || {
                 if let Err(err) = restore_persisted_file_access(&app_handle) {
                     eprintln!("failed to restore persisted file access: {err}");
                 }
             });
+
+            let fallback_app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(MAIN_WINDOW_REVEAL_FALLBACK_TIMEOUT);
+                if let Some(window) = fallback_app_handle.get_webview_window("main") {
+                    if !window.is_visible().unwrap_or(false) {
+                        eprintln!("main window page load timed out; revealing fallback window");
+                        reveal_main_window(&window.as_ref().window());
+                    }
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            reading_reminder_notifications::get_windows_notification_status,
+            reading_reminder_notifications::show_windows_notification,
             reading_reminder_notifications::schedule_reading_reminder_notification,
             reading_reminder_notifications::list_pending_reading_reminder_notification_ids,
             reading_reminder_notifications::cancel_reading_reminder_notification,
@@ -1389,16 +1490,20 @@ pub fn run() {
             api_http::revoke_api_origin,
             api_http::external_http_request,
             api_http::external_http_stream,
+            api_http::cancel_external_http_request,
+            api_http::acknowledge_external_http_stream,
             database_transactions::persist_document_transaction,
             database_transactions::confirm_memory_candidate_transaction,
             database_transactions::import_backup_transaction,
             database_transactions::remove_knowledge_document_by_path,
             rag_index::get_rag_index_state,
             rag_index::initialize_rag_index,
+            rag_index::cancel_rag_index_initialization,
             rag_index::search_rag_index,
             rag_index::refresh_rag_index_document,
             rag_index::remove_rag_index_document,
             perf_monitor::get_perf_snapshot,
+            startup_metrics::record_startup_metrics,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

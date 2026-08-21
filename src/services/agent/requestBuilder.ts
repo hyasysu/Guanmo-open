@@ -60,6 +60,7 @@ export function buildEditTargetsContext(editTargets: AgentEditTarget[]): string 
 export function buildAgentRunRequest(options: {
   content: string
   messages: ChatMessage[]
+  modelHistory?: ChatMessage[]
   contextTags?: ContextTag[]
   tagContext: string
   memoryContext: string
@@ -84,9 +85,8 @@ export function buildAgentRunRequest(options: {
     (tag) => tag.type === 'selection' || tag.type === 'file'
   ).length
   const editTargetsContext = buildEditTargetsContext(editTargets)
-  const untrustedContext = [options.tagContext, editTargetsContext, options.memoryContext]
-    .filter(Boolean)
-    .join('\n\n')
+  const untrustedContexts = [options.tagContext, editTargetsContext, options.memoryContext].filter(Boolean)
+  const untrustedContext = untrustedContexts.join('\n\n')
   const currentUserIntent = options.routingDecision.explicitMemoryWriteIntent
     ? `记住：${content}`
     : content
@@ -99,7 +99,7 @@ export function buildAgentRunRequest(options: {
     originalRequest,
     request: {
       query,
-      chatHistory: prepareChatHistoryForModel(options.messages),
+      chatHistory: options.modelHistory || prepareChatHistoryForModel(options.messages),
       rawQuery: normalizedUserIntent,
       hasRecentEditContext: options.hasRecentEditContext,
       hasCurrentEditTarget: currentEditTargetCount > 0,

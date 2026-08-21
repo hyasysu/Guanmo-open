@@ -1,4 +1,5 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/services/requestTimeout'
+import type { SourceReferenceId } from './sourceReferences'
 
 /** 对话协议类型 */
 export type ChatProtocol = 'openai-chat' | 'anthropic-messages' | 'openai-responses'
@@ -147,6 +148,8 @@ export interface ChatMessage {
   displayContent?: string
   contextMeta?: ChatMessageContextMeta
   sources?: ChatMessageSource[]
+  /** 本轮正文中实际确认引用的来源 ID；缺失时兼容旧消息并按未确认来源展示。 */
+  referencedSourceIds?: SourceReferenceId[]
   editConfirmation?: EditConfirmation
   actionProposal?: ActionProposal
   hidden?: boolean

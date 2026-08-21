@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { isTauri } from '@/hooks/useTauri'
 import { UnsupportedCapabilityError } from '@/services/externalHttp'
-import type { SearchResult } from './types'
+import type { Chunk, NeighborContextChunk, SearchResult } from './types'
 
 export type RagIndexStatus = 'idle' | 'initializing' | 'ready' | 'failed'
 export type RagSearchProgress = 'initializing' | 'ready' | 'searching' | 'fallback'
@@ -37,6 +37,26 @@ function finiteNumber(value: unknown, field: string): number {
   return value
 }
 
+function decodeRagChunk(value: unknown): Chunk
+function decodeRagChunk(value: unknown, neighbor: true): NeighborContextChunk
+function decodeRagChunk(value: unknown, neighbor = false): Chunk | NeighborContextChunk {
+  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.documentId !== 'string'
+    || typeof value.content !== 'string') throw new Error('RAG search chunk fields are invalid')
+  return {
+    id: value.id,
+    documentId: value.documentId,
+    content: value.content,
+    contentHash: typeof value.contentHash === 'string' ? value.contentHash : undefined,
+    index: finiteNumber(value.index, 'chunk.index'),
+    startLine: finiteNumber(value.startLine, 'chunk.startLine'),
+    endLine: finiteNumber(value.endLine, 'chunk.endLine'),
+    titlePath: Array.isArray(value.titlePath) && value.titlePath.every((item) => typeof item === 'string') ? value.titlePath : undefined,
+    heading: typeof value.heading === 'string' ? value.heading : undefined,
+    sourceType: value.sourceType === 'text' ? 'text' as const : 'markdown' as const,
+    ...(neighbor ? { contextRole: 'neighbor-context' as const } : {}),
+  }
+}
+
 export function decodeRagIndexState(value: unknown): RagIndexState {
   if (!isRecord(value) || !['idle', 'initializing', 'ready', 'failed'].includes(String(value.status))) {
     throw new Error('RAG index state response is invalid')
@@ -66,18 +86,7 @@ export function decodeRagSearchResults(value: unknown): SearchResult[] {
       throw new Error('RAG search retrieval mode is invalid')
     }
     return {
-      chunk: {
-        id: chunk.id,
-        documentId: chunk.documentId,
-        content: chunk.content,
-        contentHash: typeof chunk.contentHash === 'string' ? chunk.contentHash : undefined,
-        index: finiteNumber(chunk.index, 'chunk.index'),
-        startLine: finiteNumber(chunk.startLine, 'chunk.startLine'),
-        endLine: finiteNumber(chunk.endLine, 'chunk.endLine'),
-        titlePath: Array.isArray(chunk.titlePath) && chunk.titlePath.every((item) => typeof item === 'string') ? chunk.titlePath : undefined,
-        heading: typeof chunk.heading === 'string' ? chunk.heading : undefined,
-        sourceType: chunk.sourceType === 'text' ? 'text' as const : 'markdown' as const,
-      },
+      chunk: decodeRagChunk(chunk),
       document: {
         id: document.id,
         filePath: document.filePath,
@@ -90,6 +99,9 @@ export function decodeRagSearchResults(value: unknown): SearchResult[] {
       retrievalMode,
       keywordScore: typeof entry.keywordScore === 'number' ? entry.keywordScore : undefined,
       vectorScore: typeof entry.vectorScore === 'number' ? entry.vectorScore : undefined,
+      neighborChunks: Array.isArray(entry.neighborChunks)
+        ? entry.neighborChunks.map((neighbor) => decodeRagChunk(neighbor, true))
+        : undefined,
     }
   })
 }
@@ -115,7 +127,13 @@ export async function getNativeRagIndexState(): Promise<RagIndexState> {
 
 export async function initializeNativeRagIndex(signal?: AbortSignal): Promise<RagIndexState> {
   ensureDesktop()
-  return decodeRagIndexState(await awaitForRequest(invoke('initialize_rag_index'), signal))
+  const abort = () => { void invoke('cancel_rag_index_initialization').catch(() => undefined) }
+  signal?.addEventListener('abort', abort, { once: true })
+  try {
+    return decodeRagIndexState(await awaitForRequest(invoke('initialize_rag_index'), signal))
+  } finally {
+    signal?.removeEventListener('abort', abort)
+  }
 }
 
 export async function searchNativeRagIndex(
@@ -123,6 +141,7 @@ export async function searchNativeRagIndex(
   onProgress?: (progress: RagSearchProgress) => void,
   signal?: AbortSignal,
 ): Promise<SearchResult[]> {
+  try { localStorage.setItem('guanmo-rag-last-used-at', String(Date.now())) } catch { /* unavailable */ }
   onProgress?.('searching')
   return decodeRagSearchResults(await awaitForRequest(invoke('search_rag_index', { request }), signal))
 }

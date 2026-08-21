@@ -1,71 +1,53 @@
 import { useEffect, useRef, useState } from 'react'
 
+/** 滚动几何快照：resolver 基于它计算当前活跃标题 */
+export interface ActiveHeadingGeometry {
+  scrollTop: number
+  viewportHeight: number
+}
+
+export type ActiveHeadingResolver = (geometry: ActiveHeadingGeometry) => string | null
+
 /**
- * 使用 IntersectionObserver 监听标题元素可见性
- * 返回当前在视口中"活跃"的标题 ID
+ * 基于滚动几何计算当前"活跃"标题 ID。
+ *
+ * 目录当前项按"滚动位置之前最后一个标题"计算（由 resolver 基于全文模型/目录实现），
+ * 不依赖标题 DOM 是否仍在虚拟窗口内：长章节中标题块卸载后目录项不再变空。
+ * resolver 返回 null 表示当前无活跃标题。
  *
  * @param containerRef - 滚动容器的 ref
- * @param headingSelector - 标题元素的选择器
- * @param trigger - 额外的触发依赖，当容器可能变化时传入（如 viewMode）
+ * @param resolveActiveHeading - 滚动几何 → 活跃标题 ID 的模型驱动计算
+ * @param trigger - 额外的触发依赖，当容器/内容可能变化时传入（如 viewMode、文档版本）
+ * @param enabled - 容器不可见时禁用
  */
 export function useActiveHeading(
   containerRef: React.RefObject<HTMLElement | null>,
-  headingSelector: string = '[data-heading-id]',
+  resolveActiveHeading: ActiveHeadingResolver | null,
   trigger?: unknown,
   enabled: boolean = true
 ): string | null {
   const [activeId, setActiveId] = useState<string | null>(null)
-  const observerRef = useRef<IntersectionObserver | null>(null)
-  const headingPositionsRef = useRef<Map<string, number>>(new Map())
   const rafRef = useRef<number | null>(null)
 
   useEffect(() => {
-    // 清理旧的 observer
-    if (observerRef.current) {
-      observerRef.current.disconnect()
-      observerRef.current = null
-    }
     setActiveId(null)
+    if (!enabled || !resolveActiveHeading) return
 
-    const headingPositions = headingPositionsRef.current
-    headingPositions.clear()
+    let disposed = false
+    let removeListeners: (() => void) | null = null
 
-    if (!enabled) return
-
-    const updateActiveHeading = (clearWhenEmpty = false) => {
-      if (headingPositions.size === 0) {
-        if (clearWhenEmpty) setActiveId(null)
-        return
-      }
-
-      let closestId: string | null = null
-      let closestTop = -Infinity
-
-      headingPositions.forEach((top, id) => {
-        if (top >= 0 && (closestId === null || top < closestTop)) {
-          closestTop = top
-          closestId = id
-        }
+    const compute = () => {
+      if (disposed) return
+      const container = containerRef.current
+      if (!container) return
+      const next = resolveActiveHeading({
+        scrollTop: container.scrollTop,
+        viewportHeight: container.clientHeight,
       })
-
-      if (closestId === null) {
-        let minDistance = Infinity
-        headingPositions.forEach((top, id) => {
-          const distance = Math.abs(top)
-          if (distance < minDistance) {
-            minDistance = distance
-            closestId = id
-          }
-        })
-      }
-
-      setActiveId(closestId)
+      setActiveId((current) => (current === next ? current : next))
     }
 
     // 使用 rAF 循环检测容器是否已挂载
-    let disposed = false
-    let removeScrollListener: (() => void) | null = null
-
     const tryObserve = () => {
       if (disposed) return
 
@@ -79,69 +61,22 @@ export function useActiveHeading(
         return
       }
 
-      // 创建 IntersectionObserver
-      const observer = new IntersectionObserver(
-        (entries) => {
-          entries.forEach((entry) => {
-            if (!observedHeadings.has(entry.target)) return
-            const id = entry.target.getAttribute('data-heading-id')
-            if (!id) return
-
-            if (entry.isIntersecting) {
-              headingPositions.set(id, entry.boundingClientRect.top)
-            } else {
-              headingPositions.delete(id)
-            }
-          })
-
-          // 选择最靠近视口顶部的标题
-          updateActiveHeading()
-        },
-        {
-          root: container,
-          // 触发区域：顶部 0% 到底部 50%
-          rootMargin: '0px 0px -50% 0px',
-          threshold: 0,
-        }
-      )
-      observerRef.current = observer
-
-      const observedHeadings = new Set<Element>()
-      const syncObservedHeadings = () => {
-        if (disposed) return
-
-        const currentHeadings = new Set(container.querySelectorAll(headingSelector))
-        let removedHeading = false
-
-        observedHeadings.forEach((heading) => {
-          if (currentHeadings.has(heading)) return
-          observer.unobserve(heading)
-          observedHeadings.delete(heading)
-          const id = heading.getAttribute('data-heading-id')
-          if (id) headingPositions.delete(id)
-          removedHeading = true
-        })
-
-        currentHeadings.forEach((heading) => {
-          if (observedHeadings.has(heading)) return
-          observedHeadings.add(heading)
-          observer.observe(heading)
-        })
-
-        if (removedHeading) updateActiveHeading(true)
-      }
-
-      syncObservedHeadings()
-      const scheduleHeadingSync = () => {
+      const scheduleCompute = () => {
         if (rafRef.current !== null) return
         rafRef.current = requestAnimationFrame(() => {
           rafRef.current = null
-          syncObservedHeadings()
+          compute()
         })
       }
-      container.addEventListener('scroll', scheduleHeadingSync, { passive: true })
-      removeScrollListener = () => container.removeEventListener('scroll', scheduleHeadingSync)
-      scheduleHeadingSync()
+      container.addEventListener('scroll', scheduleCompute, { passive: true })
+      // 视口尺寸变化（如分栏拖动）时按新几何重算
+      const resizeObserver = new ResizeObserver(scheduleCompute)
+      resizeObserver.observe(container)
+      removeListeners = () => {
+        container.removeEventListener('scroll', scheduleCompute)
+        resizeObserver.disconnect()
+      }
+      compute()
     }
 
     tryObserve()
@@ -152,14 +87,9 @@ export function useActiveHeading(
         cancelAnimationFrame(rafRef.current)
         rafRef.current = null
       }
-      if (observerRef.current) {
-        observerRef.current.disconnect()
-        observerRef.current = null
-      }
-      removeScrollListener?.()
-      headingPositions.clear()
+      removeListeners?.()
     }
-  }, [containerRef, headingSelector, trigger, enabled])
+  }, [containerRef, resolveActiveHeading, trigger, enabled])
 
   return activeId
 }

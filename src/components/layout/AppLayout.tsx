@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useCallback, useRef, useEffect } from 'react'
+import { lazy, Suspense, useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboard'
@@ -8,7 +8,7 @@ import { exportMarkdownAsHtml } from '@/services/markdownExport'
 import { Sidebar } from './Sidebar'
 import { StatusBar } from './StatusBar'
 import { TitleBar } from './TitleBar'
-import { EditorArea, OPEN_EDITOR_SEARCH_EVENT } from '../editor/EditorArea'
+import { OPEN_EDITOR_SEARCH_EVENT } from '@/services/editorEvents'
 import { FullscreenControlBar } from '../editor/FullscreenControlBar'
 import { FullscreenFileDrawer } from './FullscreenFileDrawer'
 import { CommandPalette } from '../common/CommandPalette'
@@ -16,7 +16,6 @@ import { toast } from '@/services/toast'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useFullscreen } from '@/hooks/useFullscreen'
 import { OPEN_SETTINGS_SECTION_EVENT } from '@/services/settingsNavigation'
-import { FeatureIntroModal } from '@/features/featureIntro/FeatureIntroModal'
 import {
   OPEN_FEATURE_INTRO_EVENT,
   type FeatureIntroEventDetail,
@@ -25,7 +24,6 @@ import {
   OVERVIEW_FEATURES,
   getVersionFeatures,
 } from '@/features/featureIntro/featureIntroContent'
-import { ProductTourOverlay } from '@/features/productTour/ProductTourOverlay'
 import {
   OPEN_PRODUCT_TOUR_EVENT,
 } from '@/features/productTour/productTourEvents'
@@ -33,11 +31,50 @@ import {
   PRODUCT_TOUR_DEMO_CONTENT,
   PRODUCT_TOUR_DEMO_TAB_ID,
 } from '@/features/productTour/productTourContent'
+import { markStartupPoint } from '@/services/startupPerformance'
+import { hasBootSnapshotContent } from '@/services/bootSnapshot'
 
 const AiPanel = lazy(() => import('../ai/AiPanel').then((module) => ({ default: module.AiPanel })))
+const EditorArea = lazy(() => import('../editor/EditorArea').then((module) => ({ default: module.EditorArea })))
 const SettingsPage = lazy(() => import('@/features/settings/SettingsPage').then((module) => ({ default: module.SettingsPage })))
+const FeatureIntroModal = lazy(() => import('@/features/featureIntro/FeatureIntroModal').then((module) => ({ default: module.FeatureIntroModal })))
+const ProductTourOverlay = lazy(() => import('@/features/productTour/ProductTourOverlay').then((module) => ({ default: module.ProductTourOverlay })))
+
+function BootDocumentFallback() {
+  const activeTab = useEditorStore((state) => state.tabs.find((tab) => tab.id === state.activeTabId))
+  const snapshotContent = activeTab && hasBootSnapshotContent(activeTab) ? activeTab.content : null
+
+  useLayoutEffect(() => {
+    if (snapshotContent !== null) {
+      markStartupPoint('active-document-first-visible')
+    }
+  }, [snapshotContent])
+
+  if (snapshotContent === null) return null
+
+  return (
+    <div className="h-full w-full overflow-auto bg-gm-surface px-8 py-6 text-gm-text-primary" aria-label="启动文档快照">
+      <pre className="m-0 whitespace-pre-wrap break-words font-[inherit] text-body leading-relaxed">{snapshotContent}</pre>
+    </div>
+  )
+}
 
 export function AppLayout() {
+  const [editorSurfaceEnabled, setEditorSurfaceEnabled] = useState(false)
+
+  useLayoutEffect(() => {
+    markStartupPoint('app-shell-first-visible')
+    const frame = requestAnimationFrame(() => {
+      markStartupPoint('first-animation-frame')
+      setEditorSurfaceEnabled(true)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [])
+
+  useEffect(() => {
+    markStartupPoint('app-shell-interactive')
+  }, [])
+
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
   const aiPanelOpen = useAppStore((s) => s.aiPanelOpen)
   const sidebarWidth = useAppStore((s) => s.sidebarWidth)
@@ -424,7 +461,9 @@ export function AppLayout() {
 
         {/* Editor Area */}
         <div className="flex-1 flex overflow-hidden">
-          <EditorArea />
+          {editorSurfaceEnabled
+            ? <Suspense fallback={<BootDocumentFallback />}><EditorArea /></Suspense>
+            : <BootDocumentFallback />}
         </div>
 
         {/* AI Panel */}
@@ -511,7 +550,7 @@ export function AppLayout() {
       </Modal>
 
       {/* Feature Intro Modal */}
-      <FeatureIntroModal
+      {featureIntroOpen && <Suspense fallback={null}><FeatureIntroModal
         open={featureIntroOpen}
         features={
           featureIntroMode === 'overview'
@@ -521,14 +560,14 @@ export function AppLayout() {
               : []
         }
         onClose={() => setFeatureIntroOpen(false)}
-      />
+      /></Suspense>}
 
-      <ProductTourOverlay
+      {productTourOpen && <Suspense fallback={null}><ProductTourOverlay
         open={productTourOpen}
         stepIndex={productTourStep}
         onStepChange={setProductTourStep}
         onClose={finishProductTour}
-      />
+      /></Suspense>}
 
       {/* Search highlight styles (CSS Highlight API) */}
       <style>{`

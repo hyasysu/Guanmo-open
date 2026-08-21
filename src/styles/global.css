@@ -882,6 +882,21 @@ body {
   color: var(--gm-text);
 }
 
+/* === Preview unified Range highlights (CSS Highlight API) ===
+ * 虚拟化预览的选区与搜索高亮：DOM Range 注册在 Highlight Registry，
+ * 状态存活于文档模型，块卸载/重挂载时高亮自动恢复。 */
+::highlight(preview-selection) {
+  background: var(--gm-editor-selection);
+}
+
+::highlight(search-highlight) {
+  background: rgba(250, 204, 21, 0.4);
+}
+
+::highlight(search-highlight-active) {
+  background: rgba(249, 115, 22, 0.55);
+}
+
 /* === Focus Ring === */
 :focus-visible {
   outline: 2px solid var(--gm-border-focus);
@@ -1490,6 +1505,23 @@ body {
   font-size: 12px;
 }
 
+/* 隐藏独立脚注区中的引用收集段落（仅用于触发 remark 全量渲染） */
+.gm-footnote-section {
+  margin-top: 32px;
+  border-top: 1px solid var(--gm-border-subtle);
+  padding-top: 12px;
+}
+
+.gm-footnote-section section[data-footnotes] {
+  margin-top: 0;
+  border-top: none;
+  padding-top: 0;
+}
+
+.gm-footnote-section > p:first-of-type {
+  display: none;
+}
+
 .prose .data-footnote-backref {
   color: var(--gm-primary);
   text-decoration: none;
@@ -1522,10 +1554,16 @@ body {
   padding-right: var(--gm-fullscreen-content-padding, 88px);
 }
 
-/* 分屏模式：内侧边距固定 10px，外侧保持全量 */
+/* 分屏模式：内侧边距固定 15px，外侧保持全量 */
 .gm-fullscreen-content-split-left.gm-fullscreen-editor-content .cm-content,
 .gm-fullscreen-content-split-left.gm-fullscreen-preview-content {
   padding-right: 15px;
+}
+
+/* 分屏左栏为编辑器时，行号槽在布局流中占据宽度（由 CodeMirrorEditor 实测为 --gm-cm-gutter-width），
+   外侧留白需扣除行号槽宽度，使编辑栏文本起点与预览栏文本终点到屏幕边缘的距离一致、两栏文本列等宽 */
+.gm-fullscreen-content-split-left.gm-fullscreen-editor-content .cm-content {
+  padding-left: max(15px, calc(var(--gm-fullscreen-content-padding, 88px) - var(--gm-cm-gutter-width, 0px)));
 }
 
 .gm-fullscreen-content-split-right.gm-fullscreen-editor-content .cm-content,
@@ -1627,7 +1665,25 @@ body {
 
 .gm-markdown-preview p {
   color: var(--gm-text);
-  white-space: pre-wrap;
+  white-space: normal;
+}
+
+.gm-markdown-preview li > p {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.gm-markdown-preview li > p + p,
+.gm-markdown-preview li > blockquote {
+  margin-top: 0.75rem;
+}
+
+.gm-markdown-preview li > blockquote {
+  margin-bottom: 0;
+}
+
+.gm-markdown-preview li > blockquote > p {
+  margin: 0;
 }
 
 .gm-markdown-preview li {
@@ -1667,17 +1723,24 @@ body {
   font-size: 0.85em;
 }
 
-.gm-markdown-preview [align='center'] > .gm-markdown-image {
-  width: fit-content;
-  margin-right: auto;
-  margin-left: auto;
+.gm-markdown-preview .gm-markdown-paragraph--align-center {
+  text-align: center;
+}
+
+.gm-markdown-preview .gm-markdown-paragraph--align-center > .gm-markdown-image {
+  display: inline-flex !important;
+  margin: 0 0.125rem;
+  line-height: 0;
+  vertical-align: middle;
 }
 
 .gm-markdown-block {
   min-width: 0;
 }
 
-.gm-markdown-block[data-md-editing] > * {
+/* data-md-editing 由 MarkdownPreview 在进入块编辑时写入块容器（整篇渲染的 .gm-markdown-block
+   与虚拟化块的外层 div 均覆盖），隐藏原预览正文，避免与编辑浮层形成双层内容 */
+[data-md-editing] > * {
   visibility: hidden;
   pointer-events: none;
 }

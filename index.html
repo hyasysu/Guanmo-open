@@ -1,12 +1,72 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" data-theme="light" data-theme-id="warm">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>观墨 - AI Markdown 知识管理</title>
+    <script id="guanmo-startup-theme">
+      performance.mark('guanmo:startup:html-start');performance.mark('guanmo:startup:frontend-bootstrap');
+      (() => {
+        const themeIds = ['warm', 'light', 'dark', 'paper', 'github-light']
+        let themeId = 'warm'
+        let hasPersistedTheme = false
+        try {
+          const persisted = JSON.parse(localStorage.getItem('guanmo-settings') || 'null')
+          const appearance = persisted && persisted.state && persisted.state.appearance
+          if (appearance && themeIds.includes(appearance.themeId)) {
+            themeId = appearance.themeId
+            hasPersistedTheme = true
+          } else if (appearance && appearance.theme === 'dark') {
+            themeId = 'dark'
+            hasPersistedTheme = true
+          } else if (appearance && appearance.theme === 'light') {
+            themeId = appearance.lightPalette === 'plain' ? 'light' : 'warm'
+            hasPersistedTheme = true
+          }
+        } catch (_) {
+          // 损坏的旧设置由 Zustand 既有兼容逻辑处理；启动壳使用安全默认值。
+        }
+        if (!hasPersistedTheme) {
+          try {
+            const webTheme = localStorage.getItem('guanmo-web-theme')
+            if (webTheme === 'dark' || webTheme === 'light') themeId = webTheme
+          } catch (_) {
+            // localStorage 不可用时保留默认暖色主题。
+          }
+        }
+        const root = document.documentElement
+        root.dataset.themeId = themeId
+        root.dataset.theme = themeId === 'dark' ? 'dark' : 'light'
+        root.style.colorScheme = themeId === 'dark' ? 'dark' : 'light'
+      })()
+    </script>
+    <!-- Startup Shell 样式不能内联：Tauri 会给内联 <style> 注入 CSP nonce，
+         nonce 会使 'unsafe-inline' 失效，拦截 CodeMirror 等运行时动态样式。
+         样式改由 main.tsx import（打进入口 CSS，<link> 加载，'self' 放行）；
+         body 回退色与原生窗口 backgroundColor 一同兜底首屏底色。 -->
   </head>
-  <body style="margin:0;background:#f8f4e8;color:#3d3428;">
+  <body style="margin:0;background:var(--gmss-canvas, #f8f4e8);color:var(--gmss-text, #794f27);">
     <div id="root"></div>
+    <div id="guanmo-startup-shell" aria-hidden="true">
+      <div class="gmss-title"><span class="gmss-brand">观墨</span></div>
+      <div class="gmss-body">
+        <div class="gmss-rail">
+          <div class="gmss-tool"></div>
+          <div class="gmss-tool"></div>
+          <div class="gmss-tool"></div>
+          <div class="gmss-tool"></div>
+        </div>
+        <div class="gmss-main">
+          <div class="gmss-line gmss-line-heading"></div>
+          <div class="gmss-line gmss-line-1"></div>
+          <div class="gmss-line gmss-line-2"></div>
+          <div class="gmss-line gmss-line-3"></div>
+        </div>
+      </div>
+    </div>
+    <script>performance.mark('guanmo:startup:startup-shell-dom-ready')</script>
+    <script>performance.mark('guanmo:startup:main-module-requested')</script>
     <script type="module" src="/src/main.tsx"></script>
+    <script>performance.mark('guanmo:startup:html-parsed')</script>
   </body>
 </html>

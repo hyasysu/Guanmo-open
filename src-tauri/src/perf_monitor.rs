@@ -61,7 +61,12 @@ pub struct PerfMonitorState {
 impl Default for PerfMonitorState {
     fn default() -> Self {
         Self {
-            system: Mutex::new(System::new_all()),
+            // 启动期零成本：System::new() 不做任何采集（new_all 会同步扫描全系统
+            // 进程/CPU/磁盘/网络，平均阻塞主线程约 368ms，且 Release 中无消费者）。
+            // 真正的初始化延迟到首次 get_perf_snapshot：collect_snapshot 每次调用
+            // 都先 refresh_processes()/refresh_cpu() 全量刷新，启动期数据本来就会被
+            // 立即覆盖，因此空 System 在首次调用时自然完成填充，无需额外标记。
+            system: Mutex::new(System::new()),
             process_cache: Mutex::new(HashMap::new()),
         }
     }

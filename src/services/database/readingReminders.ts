@@ -156,6 +156,11 @@ export async function loadReadingReminderById(id: string): Promise<ReadingRemind
   return rows[0] ? decodeReadingReminder(rows[0]) : undefined
 }
 
+export async function deleteReadingReminderRow(id: string): Promise<void> {
+  if (!isDatabaseReady()) return
+  await getDatabase().execute('DELETE FROM reading_reminders WHERE id = $1', [id])
+}
+
 export async function updateReadingReminderState(
   id: string,
   status: ReadingReminderStatus,

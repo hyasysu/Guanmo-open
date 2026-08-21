@@ -37,17 +37,6 @@ export default defineConfig(({ mode }) => ({
         manualChunks: mode === 'web'
           ? undefined
           : {
-              'codemirror-core': [
-                '@codemirror/view',
-                '@codemirror/state',
-                '@codemirror/commands',
-                '@codemirror/search',
-                '@codemirror/autocomplete',
-              ],
-              'codemirror-lang': [
-                '@codemirror/lang-markdown',
-                path.resolve(__dirname, './src/services/editorCodeLanguages.ts'),
-              ],
               'react-core': [
                 'react',
                 'react-dom',

@@ -708,7 +708,6 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
       <SettingField label="对话模型" description="用于日常对话和 Agent 执行的模型">
         <Input value={ai.chatModel} onChange={(e) => updateAiConfig({ chatModel: e.target.value })} placeholder="gpt-4o-mini" />
       </SettingField>
-
       {/* 测试连接 */}
       <div className="py-1 flex items-center gap-2">
         <Button
@@ -1479,8 +1478,8 @@ function GeneralSettings() {
   return (
     <div className="w-full pb-6">
       <SectionTitle>关于</SectionTitle>
-      <div className="flex flex-wrap items-center gap-3 py-2">
-        <div className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center">
+      <div className="flex flex-wrap items-start gap-3 py-2">
+        <div className="w-14 h-14 overflow-hidden flex items-center justify-center shrink-0">
           <img src={appIcon} alt="观墨" className="w-full h-full object-cover" />
         </div>
         <div className="min-w-0 flex-1">

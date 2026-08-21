@@ -17,5 +17,7 @@ export default defineConfig({
     include: ['tests/**/*.test.{ts,tsx}'],
     restoreMocks: true,
     clearMocks: true,
+    // 多个设置/预览测试依赖共享的 jsdom 与模块重置；并发 worker 会造成间歇性超时。
+    maxWorkers: 1,
   },
 })

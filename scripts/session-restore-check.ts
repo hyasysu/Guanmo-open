@@ -49,6 +49,37 @@ async function run() {
   assert.equal(restoredDraft.savedContent, 'saved on disk')
   assert.equal(restoredDraft.modified, true)
 
+  const changedIssues: string[] = []
+  const [changedSnapshot] = await restorePersistedTabs([tab('snapshot', 'cached')], {
+    detectExternalChanges: true,
+    readFile: async () => 'changed on disk',
+    onTabRestoreIssue: (issue) => changedIssues.push(issue.kind),
+  })
+  assert.equal(changedSnapshot.content, 'changed on disk', '外部修改后仍应刷新为磁盘内容')
+  assert.deepEqual(changedIssues, ['external-change'], '活动快照过期时必须返回明确状态')
+
+  const compactedIssues: string[] = []
+  await restorePersistedTabs([tab('compacted')], {
+    readFile: async () => 'disk content',
+    onTabRestoreIssue: (issue) => compactedIssues.push(issue.kind),
+  })
+  assert.deepEqual(compactedIssues, [], '无可靠基线的后台标签不得误报外部修改')
+
+  const draftIssues: string[] = []
+  await restorePersistedTabs([draft], {
+    readFile: async () => 'changed again on disk',
+    onTabRestoreIssue: (issue) => draftIssues.push(issue.kind),
+  })
+  assert.deepEqual(draftIssues, ['external-change'], '磁盘基线变化时必须提示并保留草稿')
+
+  const unavailableIssues: string[] = []
+  const [unavailable] = await restorePersistedTabs([tab('missing', 'cached')], {
+    readFile: async () => { throw new Error('not found') },
+    onTabRestoreIssue: (issue) => unavailableIssues.push(issue.kind),
+  })
+  assert.equal(unavailable.content, 'cached', '文件不可读时必须保留当前内容')
+  assert.deepEqual(unavailableIssues, ['unavailable'], '文件不可读时必须返回明确状态')
+
   const legacy = { ...tab('legacy'), originalContent: undefined } as unknown as Tab
   const [restoredLegacy] = await restorePersistedTabs([legacy], {
     readFile: async () => 'legacy disk',

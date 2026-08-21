@@ -78,6 +78,18 @@ const EMPTY: PerfData = {
   panelRenderDurationMs: 0,
 }
 const EVENT_LABELS: Record<PerfEvent['type'], string> = {
+  'frontend-bootstrap': '前端启动',
+  'first-react-render': 'React 首次渲染',
+  'app-shell-first-visible': '应用外壳首次可见',
+  'app-shell-interactive': '应用外壳可交互',
+  'secrets-hydrated': '密钥水合完成',
+  'database-init-start': 'SQLite 初始化开始',
+  'database-plugin-loaded': 'SQLite 插件加载完成',
+  'database-connection-opened': 'SQLite 连接打开',
+  'database-schema-gate-complete': 'SQLite Schema Gate 完成',
+  'database-ready': '数据库就绪',
+  'active-tab-disk-read-complete': '活动标签读盘完成',
+  'active-document-first-visible': '活动文档首次可见',
   'app-start': '应用启动',
   'app-ready': '应用就绪',
   'open-file-start': '开始打开文件',

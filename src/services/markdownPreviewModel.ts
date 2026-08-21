@@ -31,6 +31,24 @@ export type PreviewBlockType =
   | 'footnoteDefinition'
   | 'unknown'
 
+/**
+ * 块内"渲染可见文本 ↔ 源码 offset"的最小映射单元。
+ * from/to 为全文源码 offset；text 为该 text 节点渲染后的可见文本
+ * （不含 Markdown 标记，如 `**bold**` 的 segment text 为 `bold`，
+ * 但 from/to 精确指向源码中 bold 的位置）。
+ * inlineCode / code 的 value 不含定界符；segment 会收窄到源码中的实际
+ * value 区间，多行 code 按源码行拆分，避免把围栏或缩进算入字符映射。
+ * math / inlineMath 以去除定界符后的 LaTeX 源码作为确定回退文本，
+ * from/to 精确指向 value 源码位置（与源码逐字符对齐）。
+ * html 节点按标签切分文本 run：run 与源码逐字符对齐；script / style /
+ * foreignObject（rehype-sanitize strip 列表）内部文本不产生 segment。
+ */
+export interface PreviewTextSegment {
+  from: number
+  to: number
+  text: string
+}
+
 export interface PreviewBlock {
   /** 稳定、不可变的块 ID，基于块在全文的索引 + 类型签名；可用于 React key 与缓存键 */
   blockId: string
@@ -45,6 +63,12 @@ export interface PreviewBlock {
   normalizedEndOffset: number
   /** 原始 Markdown 切片；用于预览内编辑与冲突检测 */
   rawSource: string
+  /**
+   * 块内节点的源码 offset ↔ 渲染可见文本映射，按文档顺序排列。
+   * 供统一 DocumentRange 的 getText 与 DOM span 标注共用同一数据源。
+   * math / html 使用确定回退文本（见 PreviewTextSegment 契约注释）。
+   */
+  textSegments: PreviewTextSegment[]
   /**
    * 当块为 heading 时填充，用于目录跳转与 heading ID 去重；
    * 其他块保持 undefined，避免额外开销。
@@ -73,6 +97,7 @@ export interface ReferenceDefinition {
   label?: string
   url: string
   title?: string
+  rawSource: string
 }
 
 export interface FootnoteDefinition {
@@ -82,6 +107,7 @@ export interface FootnoteDefinition {
   endLine: number
   startOffset: number
   endOffset: number
+  rawSource: string
 }
 
 export interface MarkdownPreviewModel {
@@ -141,6 +167,7 @@ export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewM
       normalizedStartOffset: 0,
       normalizedEndOffset: frontmatter.endOffset,
       rawSource: rawContent.slice(0, frontmatter.endOffset),
+      textSegments: [],
     })
   }
 
@@ -167,6 +194,7 @@ export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewM
           label: node.label,
           url: node.url,
           title: node.title,
+          rawSource: rawContent.slice(startOffset, endOffset),
         })
       }
       continue
@@ -180,6 +208,7 @@ export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewM
           endLine,
           startOffset,
           endOffset,
+          rawSource: rawContent.slice(startOffset, endOffset),
         })
       }
       // footnote definition 仍然作为可见块保留，但放入 definitions 表中供引用解析
@@ -199,6 +228,7 @@ export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewM
       normalizedStartOffset: startOffset,
       normalizedEndOffset: endOffset,
       rawSource,
+      textSegments: collectTextSegments(node, normalizedContent),
     }
 
     if (type === 'heading') {
@@ -307,6 +337,91 @@ export function findBlockIndexByLine(model: MarkdownPreviewModel, line: number):
   return -1
 }
 
+/**
+ * 根据源码行号（1-based）反推该行首字符的源码 offset；未命中返回 undefined。
+ * 与 getEstimatedPreviewLineForTop 互逆，供搜索锚点把“视口顶部行”映射回源码 offset。
+ * 行号落在块间空行时无法定位，返回 undefined（调用方按现状兜底）。
+ */
+export function getSourceOffsetForLine(model: MarkdownPreviewModel, line: number): number | undefined {
+  const blockIndex = findBlockIndexByLine(model, line)
+  if (blockIndex < 0) return undefined
+  const block = model.blocks[blockIndex]
+  if (line <= block.startLine) return block.startOffset
+  const linesToSkip = line - block.startLine
+  let cursor = 0
+  let skipped = 0
+  const src = block.rawSource
+  while (skipped < linesToSkip && cursor < src.length) {
+    const ch = src.charCodeAt(cursor)
+    if (ch === 10) {
+      skipped += 1
+      cursor += 1
+    } else if (ch === 13) {
+      skipped += 1
+      cursor += 1
+      if (src.charCodeAt(cursor) === 10) cursor += 1
+    } else {
+      cursor += 1
+    }
+  }
+  if (skipped < linesToSkip) return undefined
+  return block.startOffset + cursor
+}
+
+/* ------------------------- 页内锚点模型定位 ------------------------- */
+
+/** 页内锚点（hash 去掉 # 后的 id）在全文模型中的定位结果 */
+export interface PreviewAnchorTarget {
+  /** 目标所在源码行（1-based），供预览滚动定位 */
+  line: number
+  /** 命中方式：内部 heading-{line} 标识 / GitHub 风格标题 slug / HTML id 属性 */
+  kind: 'heading-line' | 'heading-slug' | 'html-id'
+}
+
+const HTML_ID_ATTRIBUTE_PATTERN = /(?<=^|\s)id\s*=\s*(?:"([^"]*)"|'([^']*)')/gi
+
+function countLineBreaks(value: string): number {
+  return (value.match(/\r\n|\r|\n/g) ?? []).length
+}
+
+/**
+ * 在全文模型中解析页内锚点目标，与目标 DOM 是否挂载无关。
+ * 优先级：
+ * 1. `heading-{line}`（extractToc / data-heading-id 同源的内部标识，需校验该行确为标题块起始行）；
+ * 2. 按文档顺序扫描渲染块：标题块先比对 model.toc 的 slug id（createHeadingId 去重语义），
+ *    再扫描块源码中的 HTML id 属性；code / mermaid / frontmatter 块不渲染 id，跳过。
+ * 未命中返回 null，调用方保持安全 no-op。
+ * 边界：纯文本书写的 `id="..."`（如讲解 HTML 的文档）可能被识别为锚点目标；
+ * 与阶段 1 的确定回退语义一致——只保证确定、可解释，不做 DOM 级精确判定。
+ */
+export function findAnchorTarget(model: MarkdownPreviewModel, id: string): PreviewAnchorTarget | null {
+  if (!id) return null
+
+  const internalLine = /^heading-(\d+)$/.exec(id)
+  if (internalLine) {
+    const line = Number(internalLine[1])
+    if (line >= 1 && model.blocks.some((block) => block.type === 'heading' && block.startLine === line)) {
+      return { line, kind: 'heading-line' }
+    }
+  }
+
+  const headingSlugByLine = new Map(model.toc.map((item) => [item.line, item.id]))
+  for (const block of model.blocks) {
+    if (block.type === 'code' || block.type === 'mermaid' || block.type === 'frontmatter') continue
+    if (block.type === 'heading' && headingSlugByLine.get(block.startLine) === id) {
+      return { line: block.startLine, kind: 'heading-slug' }
+    }
+    HTML_ID_ATTRIBUTE_PATTERN.lastIndex = 0
+    let match: RegExpExecArray | null
+    while ((match = HTML_ID_ATTRIBUTE_PATTERN.exec(block.rawSource)) !== null) {
+      if ((match[1] ?? match[2]) === id) {
+        return { line: block.startLine + countLineBreaks(block.rawSource.slice(0, match.index)), kind: 'html-id' }
+      }
+    }
+  }
+  return null
+}
+
 /** 基于全文文本搜索，返回命中列表（即使对应块尚未挂载也能定位） */
 export interface SearchHit {
   blockIndex: number
@@ -341,6 +456,109 @@ export function searchContent(model: MarkdownPreviewModel, query: string, limit 
   return hits
 }
 
+/* ------------------------- 可见文本投影与搜索 ------------------------- */
+
+/** 可见文本投影的分段：段内投影字符与源码 srcFrom 起点逐字符对齐（from-based 语义） */
+interface VisibleTextPart {
+  /** 该段在投影字符串中的起始位置 */
+  projFrom: number
+  text: string
+  /** 该段首字符对应的源码 offset */
+  srcFrom: number
+  /** 该段归属的块索引（块间分隔符归属前一块） */
+  blockIndex: number
+}
+
+export interface VisibleTextProjection {
+  /** 全文渲染可见文本；块间以 \n\n 分隔（与 getTextForSourceRange 一致） */
+  text: string
+  /** 按投影位置升序的分段映射索引 */
+  parts: VisibleTextPart[]
+}
+
+const visibleProjectionCache = new WeakMap<MarkdownPreviewModel, VisibleTextProjection>()
+
+/**
+ * 全文"渲染可见文本"投影：所有块 textSegments 顺序拼接，块间以 \n\n 分隔。
+ * 与 getTextForSourceRange 的提取语义一致（搜索域 = 复制域）：
+ * 数学以去定界符 LaTeX、安全 HTML 以源码对齐文本 run 作为确定回退文本；
+ * Markdown 标记、链接 URL、HTML 标签本身不在投影中。
+ * 投影随模型实例缓存（WeakMap）；内容变化 → 新模型实例 → 缓存自动失效。
+ */
+export function getVisibleTextProjection(model: MarkdownPreviewModel): VisibleTextProjection {
+  const cached = visibleProjectionCache.get(model)
+  if (cached) return cached
+  const parts: VisibleTextPart[] = []
+  let text = ''
+  model.blocks.forEach((block, blockIndex) => {
+    if (blockIndex > 0) {
+      const prev = model.blocks[blockIndex - 1]
+      parts.push({ projFrom: text.length, text: '\n\n', srcFrom: prev.endOffset, blockIndex: blockIndex - 1 })
+      text += '\n\n'
+    }
+    for (const segment of block.textSegments) {
+      if (!segment.text) continue
+      parts.push({ projFrom: text.length, text: segment.text, srcFrom: segment.from, blockIndex })
+      text += segment.text
+    }
+  })
+  const projection: VisibleTextProjection = { text, parts }
+  visibleProjectionCache.set(model, projection)
+  return projection
+}
+
+/** 投影位置 → 源码 offset + 块索引；parts 覆盖整个投影区间，二分查找包含该位置的段 */
+function projectionIndexToSource(projection: VisibleTextProjection, index: number): { srcOffset: number; blockIndex: number } | null {
+  const { parts } = projection
+  if (index < 0 || index >= projection.text.length || parts.length === 0) return null
+  let lo = 0
+  let hi = parts.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (parts[mid].projFrom <= index) lo = mid
+    else hi = mid - 1
+  }
+  const part = parts[lo]
+  if (!part || index >= part.projFrom + part.text.length) return null
+  return { srcOffset: part.srcFrom + (index - part.projFrom), blockIndex: part.blockIndex }
+}
+
+export interface VisibleTextSearchHit {
+  /** 匹配起点源码 offset（from-based 映射，与 getTextForSourceRange 语义一致） */
+  from: number
+  /** 匹配终点源码 offset */
+  to: number
+  /** 起点归属块索引 */
+  blockIndex: number
+}
+
+/**
+ * 基于可见文本投影的全文搜索：结果只覆盖渲染可见文本
+ * （普通文本 / 代码 / 数学回退文本 / 安全 HTML 文本 run），
+ * 不会命中只存在于 Markdown 标记、链接 URL 或 HTML 标签中的源码。
+ * 匹配计算一次全文投影扫描（投影随模型缓存），与块是否挂载无关。
+ */
+export function searchVisibleText(model: MarkdownPreviewModel, query: string): VisibleTextSearchHit[] {
+  if (!query) return []
+  const projection = getVisibleTextProjection(model)
+  if (!projection.text) return []
+  const lowerText = projection.text.toLowerCase()
+  const lowerQuery = query.toLowerCase()
+  const hits: VisibleTextSearchHit[] = []
+  let cursor = 0
+  for (;;) {
+    const idx = lowerText.indexOf(lowerQuery, cursor)
+    if (idx < 0) break
+    const start = projectionIndexToSource(projection, idx)
+    const last = projectionIndexToSource(projection, idx + query.length - 1)
+    if (start && last) {
+      hits.push({ from: start.srcOffset, to: last.srcOffset + 1, blockIndex: start.blockIndex })
+    }
+    cursor = idx + Math.max(1, query.length)
+  }
+  return hits
+}
+
 /**
  * 根据源码行号估算预览容器中的滚动位置（像素），即使目标块尚未挂载也能返回合理估计。
  * measureHeights 为可选的真实测量高度映射，用于已挂载块的精确校正。
@@ -356,6 +574,7 @@ export function getEstimatedPreviewTopForLine(
   for (let i = 0; i < blocks.length; i += 1) {
     const blk = blocks[i]
     const h = measuredHeights?.get(blk.blockId) ?? estimateBlockHeight(blk, i)
+    if (line < blk.startLine) return cursor
     if (line >= blk.startLine && line <= blk.endLine) {
       const progress = blk.endLine > blk.startLine
         ? (line - blk.startLine) / (blk.endLine - blk.startLine)
@@ -367,7 +586,296 @@ export function getEstimatedPreviewTopForLine(
   return cursor > 0 ? cursor : undefined
 }
 
+/**
+ * 根据预览容器内的像素位置反推源码行号。与 getEstimatedPreviewTopForLine
+ * 共用全文块模型和高度数据，避免依赖当前虚拟化窗口中挂载的 DOM。
+ */
+export function getEstimatedPreviewLineForTop(
+  model: MarkdownPreviewModel,
+  top: number,
+  estimateBlockHeight: (block: PreviewBlock, index: number) => number,
+  measuredHeights?: Map<string, number>,
+): number | undefined {
+  const { blocks } = model
+  if (blocks.length === 0) return undefined
+
+  const targetTop = Math.max(0, top)
+  let cursor = 0
+  for (let i = 0; i < blocks.length; i += 1) {
+    const block = blocks[i]
+    const height = measuredHeights?.get(block.blockId) ?? estimateBlockHeight(block, i)
+    const blockHeight = Math.max(1, height)
+    const blockBottom = cursor + blockHeight
+    if (targetTop < blockBottom || i === blocks.length - 1) {
+      if (block.endLine <= block.startLine) return block.startLine
+      const progress = Math.max(0, Math.min(1, (targetTop - cursor) / blockHeight))
+      return Math.round(block.startLine + (block.endLine - block.startLine) * progress)
+    }
+    cursor = blockBottom
+  }
+
+  return blocks[blocks.length - 1].endLine
+}
+
 /* ----------------------------- 内部辅助 ----------------------------- */
+
+/**
+ * 收集块内 mdast 节点的 {源码 offset, 渲染可见文本} 序列。
+ * - text：渲染后保留纯文本（既有语义不变）；
+ * - inlineCode / code：去除定界符与缩进后，映射到源码中的实际 value；
+ * - hard break 记为单个换行；
+ * - math / inlineMath：以去定界符后的 LaTeX 源码作为确定回退文本，
+ *   from/to 精确指向 value 的源码区间（逐字符对齐）；
+ * - html：按标签切分文本 run，run 与源码逐字符对齐（不解码实体）；
+ *   script / style / foreignObject（sanitize strip 列表）内部文本不产生 segment，
+ *   包括跨 mdast 节点的未闭合不可见元素（内联 html 场景）。
+ * source 为与节点 position 同坐标系的全文（normalizedContent；LaTeX 规范化为等长替换）。
+ */
+function collectTextSegments(node: MdastPositioned, source: string): PreviewTextSegment[] {
+  const out: PreviewTextSegment[] = []
+  /** 处于不可见元素内部时记录其标签名，等待闭合标签后恢复提取 */
+  let pendingInvisibleClose: string | null = null
+  const walk = (current: MdastPositioned) => {
+    if (current.type === 'break') {
+      const from = current.position?.start?.offset
+      const to = current.position?.end?.offset
+      if (!pendingInvisibleClose && typeof from === 'number' && typeof to === 'number') {
+        out.push({ from, to, text: '\n' })
+      }
+      return
+    }
+    if (current.type === 'text') {
+      const from = current.position?.start?.offset
+      const to = current.position?.end?.offset
+      if (!pendingInvisibleClose && typeof from === 'number' && typeof to === 'number' && typeof current.value === 'string' && current.value) {
+        out.push({ from, to, text: current.value })
+      }
+      return
+    }
+    if (current.type === 'inlineCode' || current.type === 'code') {
+      const from = current.position?.start?.offset
+      const to = current.position?.end?.offset
+      if (!pendingInvisibleClose && typeof from === 'number' && typeof to === 'number' && typeof current.value === 'string' && current.value) {
+        out.push(...collectLiteralValueSegments(source, from, to, current.value, current.type))
+      }
+      return
+    }
+    if (current.type === 'math' || current.type === 'inlineMath') {
+      const from = current.position?.start?.offset
+      const to = current.position?.end?.offset
+      if (!pendingInvisibleClose && typeof from === 'number' && typeof to === 'number' && typeof current.value === 'string' && current.value) {
+        const valueRange = computeMathValueRange(source, from, to, current.value)
+        out.push({ from: valueRange.from, to: valueRange.to, text: current.value })
+      }
+      return
+    }
+    if (current.type === 'html') {
+      const from = current.position?.start?.offset
+      const to = current.position?.end?.offset
+      if (typeof from === 'number' && typeof to === 'number' && to > from) {
+        const value = source.slice(from, to)
+        if (pendingInvisibleClose) {
+          // 不可见元素内部：等待闭合标签，闭合后的剩余片段继续切分
+          const resume = findHtmlClosingTagEnd(value, pendingInvisibleClose)
+          if (resume < 0) return
+          pendingInvisibleClose = null
+          appendHtmlRuns(out, value.slice(resume), from + resume, (tag) => { pendingInvisibleClose = tag })
+          return
+        }
+        appendHtmlRuns(out, value, from, (tag) => { pendingInvisibleClose = tag })
+      }
+      return
+    }
+    for (const child of current.children ?? []) walk(child)
+  }
+  walk(node)
+  return out
+}
+
+/**
+ * 把 inlineCode / code 的去定界符 value 映射回真实源码区间。
+ * 单行内容优先使用精确连续切片；多行 code 在解析器规范化换行时按行拆分，
+ * 使投影内每个代码字符仍指向对应的原始源码位置。
+ */
+function collectLiteralValueSegments(
+  source: string,
+  from: number,
+  to: number,
+  value: string,
+  type: 'inlineCode' | 'code',
+): PreviewTextSegment[] {
+  const raw = source.slice(from, to)
+  const inlineFence = type === 'inlineCode' ? /^`+/.exec(raw)?.[0] : undefined
+  const openingFence = type === 'code'
+    ? /^(?: {0,3})(?:`{3,}|~{3,})[^\r\n]*(?:\r\n|\r|\n)/.exec(raw)
+    : null
+  const contentStart = inlineFence?.length ?? openingFence?.[0].length ?? 0
+  const contentEnd = inlineFence && raw.endsWith(inlineFence)
+    ? raw.length - inlineFence.length
+    : raw.length
+  const exact = raw.slice(contentStart, contentEnd).indexOf(value)
+  if (exact >= 0) {
+    const valueStart = contentStart + exact
+    return [{ from: from + valueStart, to: from + valueStart + value.length, text: value }]
+  }
+  if (type === 'inlineCode') {
+    // 极端空白规范化场景保持既有确定性回退；普通 inlineCode 均走精确分支。
+    return [{ from, to, text: value }]
+  }
+
+  let cursor = openingFence?.[0].length ?? 0
+  const segments: PreviewTextSegment[] = []
+  const lines = value.split('\n')
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]
+    if (line) {
+      const lineStart = raw.indexOf(line, cursor)
+      if (lineStart < 0) return [{ from, to, text: value }]
+      segments.push({ from: from + lineStart, to: from + lineStart + line.length, text: line })
+      cursor = lineStart + line.length
+    }
+    if (index >= lines.length - 1) continue
+    const newline = /\r\n|\r|\n/.exec(raw.slice(cursor))
+    if (!newline || newline.index === undefined) return [{ from, to, text: value }]
+    const newlineStart = cursor + newline.index
+    if (newline[0] === '\r\n') {
+      segments.push({ from: from + newlineStart + 1, to: from + newlineStart + 2, text: '\n' })
+    } else {
+      segments.push({ from: from + newlineStart, to: from + newlineStart + 1, text: newline[0] })
+    }
+    cursor = newlineStart + newline[0].length
+  }
+  return segments
+}
+
+/** 计算 math / inlineMath 的 value（去定界符 LaTeX）在源码中的精确区间。
+ * 定界符为 $ / $$（LaTeX 规范化已把块级 \[ \] 等长替换为 $$）；
+ * 无法精确对齐时回退到整个节点区间（确定性回退，不产生错位映射）。 */
+function computeMathValueRange(source: string, from: number, to: number, value: string): { from: number; to: number } {
+  const raw = source.slice(from, to)
+  let start = 0
+  let end = raw.length
+  while (start < end && raw.charCodeAt(start) === 36 /* $ */) start += 1
+  while (end > start && raw.charCodeAt(end - 1) === 36 /* $ */) end -= 1
+  while (start < end && isHtmlWhitespace(raw.charCodeAt(start))) start += 1
+  while (end > start && isHtmlWhitespace(raw.charCodeAt(end - 1))) end -= 1
+  if (start < end && raw.slice(start, end) === value) return { from: from + start, to: from + end }
+  return { from, to }
+}
+
+/** rehype-sanitize strip 列表中内容整体不可见的标签（小写） */
+const HTML_INVISIBLE_TAG_NAMES = new Set(['script', 'style', 'foreignobject'])
+
+function isHtmlWhitespace(code: number): boolean {
+  return code === 32 || code === 9 || code === 10 || code === 13 || code === 12
+}
+
+/** 读取 raw[i] 起始的标签名（小写）；非标签语法返回 null */
+function readHtmlTagName(raw: string, i: number): string | null {
+  let j = i + 1
+  if (j < raw.length && raw[j] === '/') j += 1
+  const nameStart = j
+  while (j < raw.length) {
+    const c = raw[j]
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c === '-' || c === ':' || c === '_' || c === '.') {
+      j += 1
+    } else {
+      break
+    }
+  }
+  if (j === nameStart) return null
+  return raw.slice(nameStart, j).toLowerCase()
+}
+
+/** 从 raw[i]（指向 '<'）查找标签结束 '>' 的下一位置；未闭合返回 -1（引号内 '>' 不算结束） */
+function findHtmlTagEnd(raw: string, i: number): number {
+  let j = i + 1
+  let quote = ''
+  while (j < raw.length) {
+    const c = raw[j]
+    if (quote) {
+      if (c === quote) quote = ''
+    } else if (c === '"' || c === "'") {
+      quote = c
+    } else if (c === '>') {
+      return j + 1
+    }
+    j += 1
+  }
+  return -1
+}
+
+/** 从 raw 开头查找 tagName 闭合标签（</tagName...>）结束后的下一位置；未找到返回 -1 */
+function findHtmlClosingTagEnd(raw: string, tagName: string): number {
+  const closeRe = new RegExp(`</${tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s]*>`, 'i')
+  const m = closeRe.exec(raw)
+  return m ? m.index + m[0].length : -1
+}
+
+/**
+ * 把 html 节点 value（原始 HTML 源码）切分为与源码逐字符对齐的文本 run 并追加到 out。
+ * - 标签、注释、doctype/处理指令不产生文本；
+ * - script / style / foreignObject 内部文本不产生 run（渲染后被 sanitize 移除）；
+ * - 文本 run 保持源码原文（不解码实体），保证 offset 逐字符对齐；
+ * - 未闭合标签等无法识别的 '<' 按普通文本字符处理（确定性回退）；
+ * - 不可见元素的闭合标签不在本片段内时，通过 onInvisibleOpen 把标签名
+ *   交回调用方继续等待（跨 mdast html 节点的内联场景）。
+ */
+function appendHtmlRuns(
+  out: PreviewTextSegment[],
+  raw: string,
+  baseOffset: number,
+  onInvisibleOpen: (tagName: string) => void,
+): void {
+  const len = raw.length
+  let i = 0
+  let runStart = -1
+  const flushRun = (runEnd: number) => {
+    if (runStart >= 0 && runEnd > runStart) {
+      out.push({ from: baseOffset + runStart, to: baseOffset + runEnd, text: raw.slice(runStart, runEnd) })
+    }
+    runStart = -1
+  }
+  while (i < len) {
+    if (raw.charCodeAt(i) === 60 /* < */) {
+      if (raw.startsWith('<!--', i)) {
+        const close = raw.indexOf('-->', i + 4)
+        const next = close < 0 ? len : close + 3
+        flushRun(i)
+        i = next
+        continue
+      }
+      // doctype / CDATA / 处理指令：跳到 '>'
+      if (i + 1 < len && (raw[i + 1] === '!' || raw[i + 1] === '?')) {
+        const close = raw.indexOf('>', i + 2)
+        const next = close < 0 ? len : close + 1
+        flushRun(i)
+        i = next
+        continue
+      }
+      const tagName = readHtmlTagName(raw, i)
+      const tagEnd = tagName ? findHtmlTagEnd(raw, i) : -1
+      if (tagName && tagEnd > 0) {
+        flushRun(i)
+        const isClosing = raw[i + 1] === '/'
+        if (!isClosing && HTML_INVISIBLE_TAG_NAMES.has(tagName)) {
+          const close = findHtmlClosingTagEnd(raw.slice(tagEnd), tagName)
+          if (close < 0) {
+            onInvisibleOpen(tagName)
+            return
+          }
+          i = tagEnd + close
+        } else {
+          i = tagEnd
+        }
+        continue
+      }
+    }
+    if (runStart < 0) runStart = i
+    i += 1
+  }
+  flushRun(len)
+}
 
 function makeBlockId(type: string, index: number, seed: string): string {
   let hash = 2166136261

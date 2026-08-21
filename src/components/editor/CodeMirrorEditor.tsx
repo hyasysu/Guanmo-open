@@ -160,6 +160,11 @@ export function buildMarkdownEditorTheme(fontSize: number, lineHeight: number, f
       color: 'var(--gm-text-tertiary)',
       border: 'none',
       borderRight: '1px solid var(--gm-border)',
+      // Limit gutter width to avoid excessive padding when line numbers or fold gutters grow.
+      // CodeMirror measures the actual gutter width and we expose it as --gm-cm-gutter-width;
+      // this CSS ensures the visual gutter cannot become unusually wide.
+      minWidth: '44px',
+      maxWidth: '88px',
     },
     '.cm-activeLineGutter': {
       backgroundColor: 'transparent',
@@ -444,7 +449,27 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
     setCanUndo(false)
     setCanRedo(false)
 
+    // 行号槽在 .cm-scroller 布局流中占据宽度，会把正文推向右侧；将其宽度暴露为 CSS 变量，
+    // 供全屏分屏布局在外侧留白中扣除，保证编辑栏与预览栏文本列等宽（见 global.css 分屏补偿规则）
+    const guttersEl = view.dom.querySelector<HTMLElement>('.cm-gutters')
+    const container = containerRef.current
+    const syncGutterWidth = () => {
+      if (!container) return
+      if (guttersEl) {
+        container.style.setProperty('--gm-cm-gutter-width', `${guttersEl.getBoundingClientRect().width}px`)
+      } else {
+        container.style.removeProperty('--gm-cm-gutter-width')
+      }
+    }
+    syncGutterWidth()
+    let gutterObserver: ResizeObserver | null = null
+    if (guttersEl) {
+      gutterObserver = new ResizeObserver(syncGutterWidth)
+      gutterObserver.observe(guttersEl)
+    }
+
     return () => {
+      gutterObserver?.disconnect()
       inputBuffer.flush()
       inputBuffer.dispose()
       if (inputBufferRef.current === inputBuffer) inputBufferRef.current = null

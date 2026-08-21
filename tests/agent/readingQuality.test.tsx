@@ -170,13 +170,44 @@ describe('阅读来源展示', () => {
       onOpenSource={onOpenSource}
     />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sources 1' }))
+    fireEvent.click(screen.getByRole('button', { name: '检索来源/未确认引用 1' }))
     fireEvent.click(screen.getByRole('button', { name: /anonymous\.md/ }))
     expect(onOpenSource).toHaveBeenCalledWith(expect.objectContaining({
       filePath: 'C:\\Temp\\anonymous.md',
       startLine: 2,
       endLine: 4,
     }))
+  })
+
+  it('合法引用只展示实际使用来源，并保留完整候选来源用于保存', () => {
+    render(<ChatBubble
+      role="assistant"
+      content="匿名回答 [S2]"
+      isLast={false}
+      streaming={false}
+      sources={[
+        {
+          kind: 'local',
+          filePath: 'C:\\Temp\\unused.md',
+          fileName: 'unused.md',
+          startLine: 1,
+          endLine: 2,
+        },
+        {
+          kind: 'local',
+          filePath: 'C:\\Temp\\used.md',
+          fileName: 'used.md',
+          startLine: 3,
+          endLine: 4,
+        },
+      ]}
+      referencedSourceIds={['S2']}
+      onOpenSource={vi.fn()}
+    />)
+
+    fireEvent.click(screen.getByRole('button', { name: '引用来源 1' }))
+    expect(screen.getByRole('button', { name: /used\.md/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /unused\.md/ })).not.toBeInTheDocument()
   })
 })
 

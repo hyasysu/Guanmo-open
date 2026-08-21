@@ -19,6 +19,10 @@ export interface Chunk {
   embedding?: number[]
 }
 
+export interface NeighborContextChunk extends Chunk {
+  contextRole: 'neighbor-context'
+}
+
 export interface Document {
   id: string
   filePath: string
@@ -36,6 +40,34 @@ export interface SearchResult {
   retrievalMode: RetrievalMode
   keywordScore?: number
   vectorScore?: number
+  neighborChunks?: NeighborContextChunk[]
+}
+
+export interface RAGContextSource {
+  result: SearchResult
+  sourceNumber: number
+  referenceId?: string
+}
+
+export interface SkippedRAGContextSource extends RAGContextSource {
+  reason: 'budget_exceeded'
+}
+
+export interface RAGContextCoverage {
+  requested: number
+  included: number
+  skipped: number
+}
+
+export interface RAGContextBuildResult {
+  text: string
+  includedSources: RAGContextSource[]
+  skippedSources: SkippedRAGContextSource[]
+  coverage: RAGContextCoverage
+}
+
+export interface RAGContextBuildOptions {
+  referenceIds?: boolean
 }
 
 export interface Memory {
@@ -48,8 +80,6 @@ export interface Memory {
 }
 
 export interface RAGConfig {
-  chunkSize: number
-  chunkOverlap: number
   topK: number
   similarityThreshold: number
   keywordSearchEnabled: boolean

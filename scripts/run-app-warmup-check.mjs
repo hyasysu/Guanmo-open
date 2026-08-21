@@ -16,5 +16,6 @@ assert.match(aiPanel, /const handleLoadHistory[\s\S]*await loadMoreHistory\(\)/,
 assert.match(aiChat, /singletonManager\.init\(SINGLETON_IDS\.CHAT_AI/, '聊天客户端预热结果必须由真实消费者复用')
 assert.match(persistence, /export async function loadRecentChatTurns[\s\S]*const db = getDatabase\(\)/, '重连后的历史查询必须动态获取当前数据库 adapter')
 assert.doesNotMatch(app, /subscribeDatabaseRuntimeState/, '数据库 ready 事件不得触发丢弃结果的查询')
+assert.match(app, /warmNativeRagIndexWhileIdle/, 'RAG 预热必须通过可取消的性能档位调度器')
 
 console.log('app warmup checks passed')

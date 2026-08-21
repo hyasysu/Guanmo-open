@@ -1,0 +1,404 @@
+{
+  "version": 1,
+  "config": {
+    "model": "offline-deterministic-baseline",
+    "temperature": 0,
+    "topP": 1,
+    "maxContextLength": 0,
+    "streaming": false
+  },
+  "routingProbes": [
+    { "query": "你好，今天过得怎么样？", "appContext": {} },
+    { "query": "什么是闭包？", "appContext": {} },
+    { "query": "知识库", "appContext": {} },
+    { "query": "联网搜索", "appContext": {} },
+    { "query": "文档", "appContext": {} },
+    { "query": "分析", "appContext": {} },
+    { "query": "总结这段内容", "appContext": { "hasSelection": true, "hasContextTags": true } },
+    { "query": "整理这段文字的格式", "appContext": { "hasSelection": true, "hasContextTags": true } },
+    { "query": "为什么这里要这样写？", "appContext": { "hasSelection": true, "hasContextTags": true } },
+    { "query": "总结一下这个文件", "appContext": { "hasOpenFile": true, "hasContextTags": true } },
+    { "query": "现在几点了？", "appContext": {} },
+    { "query": "润色这段文字", "appContext": { "hasSelection": true, "hasRecentEdit": true, "hasContextTags": true } }
+  ],
+  "cases": [
+    {
+      "id": "qa-greeting",
+      "category": "普通问答",
+      "query": "你好，今天过得怎么样？",
+      "appContext": {},
+      "expectedMode": "direct",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["knowledge", "web", "memory", "file_write", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "qa-concept",
+      "category": "普通问答",
+      "query": "什么是闭包？",
+      "appContext": {},
+      "expectedMode": "direct",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["knowledge", "web", "memory", "file_write", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "qa-math",
+      "category": "普通问答",
+      "query": "1+1等于几？",
+      "appContext": {},
+      "expectedMode": "direct",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["knowledge", "web", "memory", "file_write", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "qa-weak-analysis",
+      "category": "普通问答",
+      "query": "分析一下这个问题",
+      "appContext": {},
+      "expectedMode": "direct",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["knowledge", "web", "file_write", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "selection-summary",
+      "category": "Selection",
+      "query": "总结这段内容",
+      "appContext": { "hasSelection": true, "hasContextTags": true },
+      "expectedMode": "direct",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "web", "memory", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "selection-format",
+      "category": "Selection",
+      "query": "整理这段文字的格式",
+      "appContext": { "hasSelection": true, "hasContextTags": true },
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["web", "memory", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "selection-context-why",
+      "category": "Selection 上下文",
+      "query": "为什么这里要这样写？",
+      "appContext": { "hasSelection": true, "hasContextTags": true },
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "web", "memory", "time"],
+      "toolCallSample": {
+        "responseText": "先读取选区上下文：{\"tool\":\"read_selection_context\",\"args\":{\"targetId\":\"probe-target-1\",\"direction\":\"auto\",\"level\":1}} 然后回答",
+        "expectedToolName": "read_selection_context",
+        "expectedArgs": { "targetId": "probe-target-1", "direction": "auto", "level": 1 }
+      }
+    },
+    {
+      "id": "selection-context-compare",
+      "category": "Selection 上下文",
+      "query": "对比一下前后文",
+      "appContext": { "hasSelection": true, "hasContextTags": true },
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "web", "memory", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "file-summary",
+      "category": "文件总结",
+      "query": "总结一下这个文件",
+      "appContext": { "hasOpenFile": true, "hasContextTags": true },
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "web", "memory", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "file-summary-overview",
+      "category": "文件总结",
+      "query": "概述这个文档的内容",
+      "appContext": { "hasOpenFile": true, "hasContextTags": true },
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "web", "memory", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "knowledge-research",
+      "category": "本地知识库",
+      "query": "研究一下知识库里的技术方案",
+      "appContext": {},
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "memory", "time"],
+      "toolCallSample": {
+        "responseText": "{\"tool\":\"search_knowledge\",\"args\":{\"query\":\"技术方案\"}}",
+        "expectedToolName": "search_knowledge",
+        "expectedArgs": { "query": "技术方案" }
+      }
+    },
+    {
+      "id": "knowledge-find",
+      "category": "本地知识库",
+      "query": "知识库里有没有关于部署的文档？",
+      "appContext": {},
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "memory", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "web-search",
+      "category": "Web 搜索",
+      "query": "搜索 React 19 最新特性",
+      "appContext": {},
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "memory", "time"],
+      "toolCallSample": {
+        "responseText": "```json\n{\"tool\":\"web_search\",\"args\":{\"query\":\"React 19 最新特性\"}}\n```",
+        "expectedToolName": "web_search",
+        "expectedArgs": { "query": "React 19 最新特性" }
+      }
+    },
+    {
+      "id": "web-search-news",
+      "category": "Web 搜索",
+      "query": "帮我网上搜一下最新的 AI 新闻",
+      "appContext": {},
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "memory", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "web-compare",
+      "category": "Web 对照",
+      "query": "联网验证一下知识库里的信息是否过时",
+      "appContext": {},
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "memory", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "file-edit-polish",
+      "category": "文件修改",
+      "query": "润色这段文字",
+      "appContext": { "hasSelection": true, "hasRecentEdit": true, "hasContextTags": true },
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["web", "memory", "time"],
+      "toolCallSample": {
+        "responseText": "{\"needsEditConfirmation\":true,\"targetId\":\"probe-target-1\",\"newText\":\"润色后的文本\",\"changeSummary\":\"润色表达、保留原意\"}",
+        "expectedToolName": "replace_current_tab_text",
+        "expectedArgs": { "targetId": "probe-target-1", "newText": "润色后的文本", "changeSummary": "润色表达、保留原意" }
+      }
+    },
+    {
+      "id": "file-edit-path",
+      "category": "文件修改",
+      "query": "替换文件中的旧内容",
+      "appContext": { "hasOpenFile": true, "hasContextTags": true },
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["web", "memory", "time"],
+      "toolCallSample": {
+        "responseText": "{\"needsEditConfirmation\":true,\"path\":\"anonymous/notes/sample.md\",\"oldText\":\"旧内容\",\"newText\":\"新内容\"}",
+        "expectedToolName": "replace_current_tab_text",
+        "expectedArgs": { "oldText": "旧内容", "newText": "新内容", "path": "anonymous/notes/sample.md" }
+      }
+    },
+    {
+      "id": "file-edit-whole-doc",
+      "category": "文件修改",
+      "query": "覆写整个文件为新的版本",
+      "appContext": { "hasOpenFile": true, "hasContextTags": true },
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["web", "memory", "time"],
+      "toolCallSample": {
+        "responseText": "{\"needsEditConfirmation\":true,\"path\":\"anonymous/notes/sample.md\",\"replaceWholeDocument\":true,\"newText\":\"整篇新稿\"}",
+        "expectedToolName": "replace_current_tab_text",
+        "expectedArgs": { "newText": "整篇新稿", "path": "anonymous/notes/sample.md", "replaceWholeDocument": true }
+      }
+    },
+    {
+      "id": "memory-query",
+      "category": "长期记忆",
+      "query": "查询我的记忆",
+      "appContext": {},
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "web", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "memory-save",
+      "category": "长期记忆",
+      "query": "记住我喜欢用 TypeScript",
+      "appContext": {},
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "web", "time"],
+      "toolCallSample": {
+        "responseText": "{\"tool\":\"save_memory\",\"args\":{\"content\":\"偏好 TypeScript\"}}",
+        "expectedToolName": "save_memory",
+        "expectedArgs": { "content": "偏好 TypeScript" }
+      }
+    },
+    {
+      "id": "personalized-rewrite",
+      "category": "个性化改写",
+      "query": "按照我的风格改写这段文字",
+      "appContext": { "hasSelection": true, "hasContextTags": true },
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["web", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "time-now",
+      "category": "当前时间",
+      "query": "现在几点了？",
+      "appContext": {},
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "web", "memory"],
+      "toolCallSample": {
+        "responseText": "{\"tool\":\"get_current_time\",\"args\":{}}",
+        "expectedToolName": "get_current_time",
+        "expectedArgs": {}
+      }
+    },
+    {
+      "id": "action-artifact",
+      "category": "行动提案",
+      "query": "把这份回答保存为阅读成果",
+      "appContext": { "hasContextTags": true },
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["web", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "action-reminder",
+      "category": "行动提案",
+      "query": "创建阅读提醒，明天下午三点提醒我复习",
+      "appContext": {},
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["web"],
+      "toolCallSample": null
+    },
+    {
+      "id": "continuation-continue",
+      "category": "续接",
+      "query": "继续",
+      "appContext": {},
+      "expectedMode": "direct",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "web", "memory", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "boundary-doc",
+      "category": "边界",
+      "query": "文档",
+      "appContext": {},
+      "expectedMode": "direct",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["knowledge", "web", "file_write", "memory", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "boundary-analysis",
+      "category": "边界",
+      "query": "分析",
+      "appContext": {},
+      "expectedMode": "direct",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["knowledge", "web", "file_write", "memory", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "boundary-knowledge-strong",
+      "category": "边界",
+      "query": "知识库",
+      "appContext": {},
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "web", "memory", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "boundary-web-strong",
+      "category": "边界",
+      "query": "联网搜索",
+      "appContext": {},
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "memory", "time"],
+      "toolCallSample": null
+    },
+    {
+      "id": "parser-plain-text-no-tool",
+      "category": "工具解析",
+      "query": "解释这段代码的含义",
+      "appContext": { "hasSelection": true, "hasContextTags": true },
+      "expectedMode": "direct",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "web", "memory", "time"],
+      "toolCallSample": {
+        "responseText": "这段代码定义了一个加法函数，返回两数之和。",
+        "expectedToolName": null,
+        "expectedArgs": null
+      }
+    },
+    {
+      "id": "parser-truncated-json",
+      "category": "工具解析",
+      "query": "搜索本地文档里的配置说明",
+      "appContext": {},
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "memory", "time"],
+      "toolCallSample": {
+        "responseText": "{\"tool\":",
+        "expectedToolName": null,
+        "expectedArgs": null
+      }
+    },
+    {
+      "id": "parser-embedded-json",
+      "category": "工具解析",
+      "query": "查找本地资料里关于部署流程的说明",
+      "appContext": {},
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "memory", "time"],
+      "toolCallSample": {
+        "responseText": "先检索本地资料：{\"tool\":\"search_knowledge\",\"args\":{\"query\":\"部署流程\"}} 然后归纳答案",
+        "expectedToolName": "search_knowledge",
+        "expectedArgs": { "query": "部署流程" }
+      }
+    },
+    {
+      "id": "parser-fenced-memory",
+      "category": "工具解析",
+      "query": "我的偏好是什么？",
+      "appContext": {},
+      "expectedMode": "agent",
+      "requiredCapabilities": [],
+      "forbiddenCapabilities": ["file_write", "web", "time"],
+      "toolCallSample": {
+        "responseText": "```json\n{\"tool\":\"search_memory\",\"args\":{\"query\":\"用户偏好\"}}\n```",
+        "expectedToolName": "search_memory",
+        "expectedArgs": { "query": "用户偏好" }
+      }
+    }
+  ]
+}
