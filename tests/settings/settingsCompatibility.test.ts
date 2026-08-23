@@ -49,7 +49,7 @@ describe('设置兼容', () => {
     const state = store.getState()
 
     expect(state.editor).toMatchObject({ fontSize: 18, lineHeight: 1.65, fullscreenContentPadding: 88, inlinePreviewEdit: true })
-    expect(state.appearance).toMatchObject({ themeId: 'dark', lastLightThemeId: 'warm', aiMascotAvatarEnabled: false })
+    expect(state.appearance).toMatchObject({ themeId: 'dark', lastLightThemeId: 'warm', aiAvatarStyle: 'icon' })
   })
 
   it('将旧主题组合迁移为统一主题 ID', async () => {
@@ -275,6 +275,47 @@ describe('旧字段迁移', () => {
       editor: { modePrewarm: 'bad', modeResourcePolicy: 'bad' },
     } as unknown as Record<string, unknown>)
     expect(store.getState().editor.modePerformancePolicy).toBe('balanced')
+  })
+
+  it('新 aiAvatarStyle 合法时以新字段为准', async () => {
+    const store = await loadSettingsStore({
+      appearance: { aiAvatarStyle: 'sprite', aiMascotAvatarEnabled: true },
+    } as unknown as Record<string, unknown>)
+    expect(store.getState().appearance.aiAvatarStyle).toBe('sprite')
+  })
+
+  it('只有旧 aiMascotAvatarEnabled=true 时迁移为 mascot', async () => {
+    const store = await loadSettingsStore({
+      appearance: { aiMascotAvatarEnabled: true },
+    } as unknown as Record<string, unknown>)
+    expect(store.getState().appearance.aiAvatarStyle).toBe('mascot')
+  })
+
+  it('只有旧 aiMascotAvatarEnabled=false 时迁移为 icon', async () => {
+    const store = await loadSettingsStore({
+      appearance: { aiMascotAvatarEnabled: false },
+    } as unknown as Record<string, unknown>)
+    expect(store.getState().appearance.aiAvatarStyle).toBe('icon')
+  })
+
+  it('aiAvatarStyle 非法时回退旧布尔迁移，两者皆缺省为 icon', async () => {
+    const invalidStyleStore = await loadSettingsStore({
+      appearance: { aiAvatarStyle: 'bogus', aiMascotAvatarEnabled: true },
+    } as unknown as Record<string, unknown>)
+    expect(invalidStyleStore.getState().appearance.aiAvatarStyle).toBe('mascot')
+
+    const missingStore = await loadSettingsStore({
+      appearance: {},
+    })
+    expect(missingStore.getState().appearance.aiAvatarStyle).toBe('icon')
+  })
+
+  it('迁移后运行时对象不含旧 aiMascotAvatarEnabled 字段', async () => {
+    const store = await loadSettingsStore({
+      appearance: { aiMascotAvatarEnabled: true },
+    } as unknown as Record<string, unknown>)
+    expect(store.getState().appearance).toHaveProperty('aiAvatarStyle')
+    expect(store.getState().appearance as unknown as Record<string, unknown>).not.toHaveProperty('aiMascotAvatarEnabled')
   })
 
   it('两个旧字段都缺失时使用 balanced', async () => {

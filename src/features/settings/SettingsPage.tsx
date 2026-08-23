@@ -1335,7 +1335,7 @@ function GeneralSettings() {
       modePerformancePolicy: 'balanced',
       defaultOpenMode: 'preview',
     })
-    updateAppearanceSettings({ customCursorEnabled: true, aiMascotAvatarEnabled: false, themeId: 'warm' })
+    updateAppearanceSettings({ customCursorEnabled: true, aiAvatarStyle: 'icon', themeId: 'warm' })
     updateWebSearchConfig({ provider: 'duckduckgo', apiKey: '', maxResults: 5, customUrl: '', timeout: DEFAULT_REQUEST_TIMEOUT_MS })
     updateUsageTrackingSettings({ enabled: true })
     resetAiShortcutActions()
@@ -1488,8 +1488,26 @@ function GeneralSettings() {
       <SettingField label="定制光标" description="使用 animal-island-ui 的手作风光标">
         <Switch checked={appearance.customCursorEnabled} onChange={(v) => updateAppearanceSettings({ customCursorEnabled: v })} />
       </SettingField>
-      <SettingField label="AI 吉祥物头像" description="使用吉祥物作为 AI 助手图标和消息头像">
-        <Switch checked={appearance.aiMascotAvatarEnabled} onChange={(v) => updateAppearanceSettings({ aiMascotAvatarEnabled: v })} />
+      <SettingField label="AI 头像风格" description="AI 助手图标和消息头像的展示风格；「小球」会随 AI 工作状态变化">
+        <div className="gm-default-mode-segmented" role="radiogroup" aria-label="AI 头像风格">
+          {([
+            { key: 'icon', label: '图标' },
+            { key: 'mascot', label: '吉祥物' },
+            { key: 'sprite', label: '小球' },
+          ] as const).map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              className="gm-default-mode-segmented__item"
+              data-active={appearance.aiAvatarStyle === option.key}
+              role="radio"
+              aria-checked={appearance.aiAvatarStyle === option.key}
+              onClick={() => updateAppearanceSettings({ aiAvatarStyle: option.key })}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
       </SettingField>
       <Sep />
       <Button type="default" block onClick={handleRestoreDefaults}>恢复默认设置</Button>

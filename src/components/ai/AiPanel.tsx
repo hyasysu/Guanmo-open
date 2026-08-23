@@ -9,6 +9,7 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import mascotIdle from '@/assets/ai-mascot/mascot-idle.png'
 import mascotStreaming from '@/assets/ai-mascot/mascot-streaming.gif'
+import { AiSprite } from '@/components/ai/AiSprite'
 import { PromptComposer } from '@/components/ai/PromptComposer'
 import { readRememberedFile } from '@/services/persistedFileAccess'
 import { useEditorStore } from '@/stores/editorStore'
@@ -1652,12 +1653,22 @@ function AiAvatar({
   streaming?: boolean
   bounce?: boolean
 }) {
-  const mascotEnabled = useSettingsStore((s) => s.appearance.aiMascotAvatarEnabled)
+  const avatarStyle = useSettingsStore((s) => s.appearance.aiAvatarStyle)
   const className = size === 'empty'
     ? 'gm-ai-empty-icon-shell w-16 h-16 rounded-2xl flex items-center justify-center mb-4'
     : 'gm-ai-avatar w-9 h-9 rounded-xl flex items-center justify-center mr-2 flex-shrink-0 mt-1'
 
-  if (!mascotEnabled) {
+  if (avatarStyle === 'sprite') {
+    // 历史消息头像固定 idle 静态展示，仅空态图标与当前流式消息跟随实时状态
+    const forceIdle = size === 'message' && !streaming
+    return (
+      <div className={className}>
+        <AiSprite size={size === 'empty' ? 56 : 30} state={forceIdle ? 'idle' : undefined} />
+      </div>
+    )
+  }
+
+  if (avatarStyle !== 'mascot') {
     return (
       <div className={className}>
         <Icon name="icon-chat" size={size === 'empty' ? 38 : 20} bounce={bounce} className="gm-ai-chat-icon" />

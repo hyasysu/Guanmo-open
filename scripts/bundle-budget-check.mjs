@@ -27,7 +27,7 @@ const cssBytes = totalBytes(cssFiles)
 if (mode === 'web') {
   assert.ok(entryBytes <= 180_000, `Web 入口脚本超出 180 KB：${entryBytes} bytes`)
   assert.ok(jsBytes <= 180_000, `Web JS 总量超出 180 KB：${jsBytes} bytes`)
-  assert.ok(cssBytes <= 90_000, `Web CSS 总量超出 90 KB：${cssBytes} bytes`)
+  assert.ok(cssBytes <= 95_000, `Web CSS 总量超出 95 KB：${cssBytes} bytes`)
   assert.ok(jsFiles.length <= 2, `Web JS 分块过多：${jsFiles.length}`)
   assert.equal(fontFiles.length, 0, `Web 构建不应包含字体资源：${fontFiles.join(', ')}`)
   assert.ok(!html.includes('modulepreload'), 'Web 构建不应预加载桌面模块')

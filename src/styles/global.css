@@ -204,6 +204,281 @@ body {
   transform: scale(1.03);
 }
 
+/* ---- AI 状态小球（AiSprite）---- */
+
+.gm-ai-sprite {
+  --gm-sprite-body: #dcebe8;
+  --gm-sprite-body-deep: #bfdad5;
+  --gm-sprite-stroke: rgba(111, 145, 140, 0.55);
+  --gm-sprite-face: #4e6e69;
+  --gm-sprite-accent: #58b8ae;
+  --gm-sprite-success: #57a886;
+  --gm-sprite-danger: #c96a5f;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.gm-ai-sprite svg {
+  display: block;
+  overflow: visible;
+}
+
+/* 默认隐藏的部件，由 data-state 点亮 */
+.gm-ai-sprite__orbit,
+.gm-ai-sprite__pulse,
+.gm-ai-sprite__dot,
+.gm-ai-sprite__mouth-o,
+.gm-ai-sprite__eyes-happy,
+.gm-ai-sprite__eyes-flat,
+.gm-ai-sprite__spark {
+  opacity: 0;
+}
+
+.gm-ai-sprite__body,
+.gm-ai-sprite__core,
+.gm-ai-sprite__eye,
+.gm-ai-sprite__pulse,
+.gm-ai-sprite__orbit {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+[data-state='error'] .gm-ai-sprite__body {
+  stroke: var(--gm-sprite-danger);
+}
+
+[data-state='success'] .gm-ai-sprite__body {
+  stroke: var(--gm-sprite-success);
+}
+
+/* idle：低频呼吸 + 偶发眨眼 */
+[data-state='idle'] .gm-ai-sprite__core,
+[data-state='searching'] .gm-ai-sprite__core,
+[data-state='thinking'] .gm-ai-sprite__core,
+[data-state='retrieving'] .gm-ai-sprite__core {
+  animation: gmSpriteBreathe 3.2s ease-in-out infinite;
+}
+
+[data-state='idle'] .gm-ai-sprite__eye,
+[data-state='reading'] .gm-ai-sprite__eye,
+[data-state='searching'] .gm-ai-sprite__eye,
+[data-state='retrieving'] .gm-ai-sprite__eye {
+  animation: gmSpriteBlink 4.4s linear infinite;
+}
+
+/* reading：轻微倾头浏览 */
+[data-state='reading'] .gm-ai-sprite__core {
+  animation: gmSpriteNudge 1.8s ease-in-out infinite;
+}
+
+/* retrieving：雷达弧扩散 */
+[data-state='retrieving'] .gm-ai-sprite__pulse {
+  opacity: 1;
+  animation: gmSpritePulseRing 1.6s ease-out infinite;
+}
+
+[data-state='retrieving'] .gm-ai-sprite__pulse--b {
+  animation-delay: 0.55s;
+}
+
+/* searching：虚线轨道环绕 */
+[data-state='searching'] .gm-ai-sprite__orbit {
+  opacity: 1;
+  animation: gmSpriteSpin 1.6s linear infinite;
+}
+
+/* thinking：眼睛上飘 + 头顶三点渐显 */
+[data-state='thinking'] .gm-ai-sprite__face {
+  transform: translateY(-1.6px);
+}
+
+[data-state='thinking'] .gm-ai-sprite__dot {
+  animation: gmSpriteDotFade 1.35s ease-in-out infinite;
+}
+
+[data-state='thinking'] .gm-ai-sprite__dot--2 {
+  animation-delay: 0.18s;
+}
+
+[data-state='thinking'] .gm-ai-sprite__dot--3 {
+  animation-delay: 0.36s;
+}
+
+/* generating：轻快弹跳 + o 形嘴 */
+[data-state='generating'] .gm-ai-sprite__core {
+  animation: gmSpriteHop 0.9s ease-in-out infinite;
+}
+
+[data-state='generating'] .gm-ai-sprite__mouth-o {
+  opacity: 1;
+}
+
+[data-state='generating'] .gm-ai-sprite__mouth {
+  opacity: 0;
+}
+
+/* success：单次 pop + 笑眼 + 微光闪现 */
+[data-state='success'] .gm-ai-sprite__core {
+  animation: gmSpritePopOnce 0.42s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+[data-state='success'] .gm-ai-sprite__eyes-happy {
+  opacity: 1;
+}
+
+[data-state='success'] .gm-ai-sprite__eyes,
+[data-state='success'] .gm-ai-sprite__mouth {
+  opacity: 0;
+}
+
+[data-state='success'] .gm-ai-sprite__spark {
+  opacity: 1;
+  transition: opacity 0.24s ease 0.18s;
+}
+
+/* error：单次抖动 + 平线眼 + 绯红描边 */
+[data-state='error'] .gm-ai-sprite__core {
+  animation: gmSpriteShakeOnce 0.34s ease-in-out both;
+}
+
+[data-state='error'] .gm-ai-sprite__eyes-flat {
+  opacity: 1;
+}
+
+[data-state='error'] .gm-ai-sprite__eyes,
+[data-state='error'] .gm-ai-sprite__mouth {
+  opacity: 0;
+}
+
+[data-paused='true'] .gm-ai-sprite,
+[data-paused='true'] .gm-ai-sprite * {
+  animation-play-state: paused !important;
+}
+
+@keyframes gmSpriteBreathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.045);
+  }
+}
+
+@keyframes gmSpriteBlink {
+  0%,
+  91%,
+  100% {
+    transform: scaleY(1);
+  }
+
+  94% {
+    transform: scaleY(0.12);
+  }
+}
+
+@keyframes gmSpriteNudge {
+  0%,
+  100% {
+    transform: rotate(0deg) translateY(0);
+  }
+
+  30% {
+    transform: rotate(-2.2deg) translateY(-0.8px);
+  }
+
+  70% {
+    transform: rotate(2.2deg) translateY(-0.8px);
+  }
+}
+
+@keyframes gmSpritePulseRing {
+  0% {
+    transform: scale(0.55);
+    opacity: 0.75;
+  }
+
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+@keyframes gmSpriteSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes gmSpriteHop {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+
+  40% {
+    transform: translateY(-3px) scale(1.02);
+  }
+
+  70% {
+    transform: translateY(0) scale(0.985, 0.97);
+  }
+}
+
+@keyframes gmSpritePopOnce {
+  0% {
+    transform: scale(0.72);
+  }
+
+  62% {
+    transform: scale(1.14);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes gmSpriteShakeOnce {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+
+  25% {
+    transform: translateX(-2.6px);
+  }
+
+  50% {
+    transform: translateX(2.6px);
+  }
+
+  75% {
+    transform: translateX(-1.6px);
+  }
+}
+
+@keyframes gmSpriteDotFade {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+
+  45% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gm-ai-sprite,
+  .gm-ai-sprite * {
+    animation: none !important;
+  }
+}
+
 .gm-fullscreen-file-drawer [data-file-tree-node='true'] {
   min-height: 28px;
   border-radius: 12px !important;
@@ -731,6 +1006,16 @@ body {
 
 [data-theme='dark'] .gm-ai-chat-icon svg circle {
   fill: #1B3B37;
+}
+
+[data-theme='dark'] .gm-ai-sprite {
+  --gm-sprite-body: rgba(95, 159, 152, 0.22);
+  --gm-sprite-body-deep: rgba(95, 159, 152, 0.34);
+  --gm-sprite-stroke: rgba(141, 186, 180, 0.5);
+  --gm-sprite-face: #a6c9c4;
+  --gm-sprite-accent: #58b8ae;
+  --gm-sprite-success: #6fbf98;
+  --gm-sprite-danger: #d98376;
 }
 
 [data-theme='dark'] .gm-manual-tool-toggle {
