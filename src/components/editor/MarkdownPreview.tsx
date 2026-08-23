@@ -322,8 +322,6 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   // Virtual scrolling state
   const scrollContainerRef = useRef<HTMLElement | null>(null)
   const measuredHeightsRef = useRef<Map<string, number>>(new Map())
-  /** 未挂载目标的行定位校正任务：目标块挂载测量后执行一次即清空（幂等，无反馈循环） */
-  const pendingLineCorrectionRef = useRef<{ line: number } | null>(null)
   /** 未挂载搜索目标的精确定位校正任务：目标 Range 挂载后执行一次即清空 */
   const pendingSearchCorrectionRef = useRef<{ from: number; to: number; blockId: string; appliedTop?: number } | null>(null)
   const blockRefs = useRef<Map<number, HTMLDivElement | null>>(new Map())
@@ -516,7 +514,6 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
 
   // 文档内容变化：旧 offset 全部失效，清除搜索索引与选区状态
   useEffect(() => {
-    pendingLineCorrectionRef.current = null
     pendingSearchCorrectionRef.current = null
     searchMatchesByBlockRef.current = null
     const hadSearch = searchStateRef.current !== null
@@ -707,23 +704,17 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     [fontSize, lineHeight],
   )
 
-  // 模型驱动行定位：目标已挂载按实测位置平滑滚动；目标未挂载（虚拟窗口外）先按
-  // 全文模型估算即时定位，目标进入虚拟窗口并完成测量后由下方 layout effect 执行
-  // 最多一次幂等校正。目录点击与页内锚点共享该路径，不建立第二套滚动状态。
+  // 沿用 1.5.0 的单次滚动语义：已挂载目标使用实测位置，未挂载目标使用全文模型估算位置。
+  // 两者都只发起一次平滑滚动；挂载后高度变化由虚拟列表的顶部锚点补偿处理，不在动画中途重定向目标。
   const scrollToLineInternal = useCallback((line: number): boolean => {
     const container = scrollContainerRef.current
     if (!container) return false
     const target = rootRef.current?.querySelector<HTMLElement>(`[data-md-line="${line}"]`)
-    if (target) {
-      const top = target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
-      pendingLineCorrectionRef.current = null
-      container.scrollTo({ top: Math.max(0, top - 24), behavior: 'smooth' })
-      return true
-    }
-    const top = getEstimatedPreviewTopForLine(model, line, estimateBlockHeight, measuredHeightsRef.current)
+    const top = target
+      ? target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+      : getEstimatedPreviewTopForLine(model, line, estimateBlockHeight, measuredHeightsRef.current)
     if (typeof top !== 'number') return false
-    pendingLineCorrectionRef.current = { line }
-    container.scrollTo({ top: Math.max(0, top - 24) })
+    container.scrollTo({ top: Math.max(0, top - 24), behavior: 'smooth' })
     return true
   }, [model, estimateBlockHeight])
 
@@ -839,17 +830,6 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
 
   // Measure real heights of mounted blocks
   useLayoutEffect(() => {
-    const container = scrollContainerRef.current
-    const fallback = scrollStateRef.current
-    const scrollTop = container ? container.scrollTop : fallback.scrollTop
-    const viewportHeight = container ? container.clientHeight : fallback.viewportHeight
-    // 锚点：视口顶部首个可见块（overscan 0），与块 ResizeObserver 补偿路径语义一致
-    const anchorBefore = computeVisibleRange(
-      model, scrollTop, scrollTop + viewportHeight,
-      measuredHeightsRef.current, estimateBlockHeight, 0,
-    )
-    const anchorIndex = anchorBefore.startIndex
-    const anchorTopBefore = anchorBefore.blockTops[anchorIndex] ?? 0
     let changed = false
     for (let i = visible.startIndex; i < visible.endIndex; i += 1) {
       const el = blockRefs.current.get(i)
@@ -861,42 +841,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
         changed = true
       }
     }
-    if (!changed) return
-    if (!container) {
-      setScrollState((s) => ({ ...s }))
-      return
-    }
-    // 向上滚动时，视口上方新挂载块"估计→实测"的高度修正会整体平移视口内容；
-    // 以锚点块 top 位移补偿 scrollTop，消除视觉跳动（与块 ResizeObserver 补偿路径一致）
-    const anchorAfter = computeVisibleRange(
-      model, scrollTop, scrollTop + viewportHeight,
-      measuredHeightsRef.current, estimateBlockHeight, 0,
-    )
-    const anchorDelta = (anchorAfter.blockTops[anchorIndex] ?? anchorTopBefore) - anchorTopBefore
-    if (anchorDelta !== 0) container.scrollTop += anchorDelta
-    setScrollState({
-      scrollTop: container.scrollTop,
-      viewportHeight: container.clientHeight,
-      viewportWidth: container.clientWidth,
-    })
-  }, [visible.startIndex, visible.endIndex, model, estimateBlockHeight])
-
-  // 未挂载目标的单次幂等校正：目标块挂载并完成测量（上方 measure effect 已执行）后，
-  // 按实测位置精确对齐一次；pending 读取即清空，后续渲染直接返回，不形成滚动反馈循环。
-  useLayoutEffect(() => {
-    const pending = pendingLineCorrectionRef.current
-    if (!pending) return
-    const container = scrollContainerRef.current
-    if (!container) return
-    const target = rootRef.current?.querySelector<HTMLElement>(`[data-md-line="${pending.line}"]`)
-    if (!target) return
-    pendingLineCorrectionRef.current = null
-    const top = target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
-    const desired = Math.max(0, top - 24)
-    if (Math.abs(container.scrollTop - desired) >= 1) {
-      container.scrollTop = desired
-    }
-  })
+    if (changed) setScrollState((state) => ({ ...state }))
+  }, [visible.startIndex, visible.endIndex, model.blocks, scrollState.viewportWidth])
 
   // 未挂载搜索目标的单次幂等校正：目标块进入虚拟窗口后，优先按真实 DOM Range
   // 对齐关键词；无精确标注时退回块顶部，不重新计算全文估算位置。

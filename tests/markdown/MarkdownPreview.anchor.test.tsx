@@ -6,8 +6,8 @@ import { MarkdownPreview } from '@/components/editor/MarkdownPreview'
  * 页内锚点跳转（阶段 2：模型驱动锚点定位）
  *
  * 覆盖：
- * - 目标位于虚拟窗口外（下方远端）：先按全文模型估算定位，目标挂载测量后
- *   由 pending 校正 effect 完成一次幂等精对齐，且不形成滚动反馈循环；
+ * - 目标位于虚拟窗口外（下方远端）：按全文模型估算位置只发起一次平滑滚动，
+ *   目标挂载后不在动画中途重定向；
  * - 锚点不存在：安全 no-op（不改滚动、不改 URL hash）；
  * - 目标已挂载：标题 slug 走平滑滚动；heading-{line} 内部 id 走 scrollIntoView。
  */
@@ -100,7 +100,7 @@ afterEach(() => {
 })
 
 describe('MarkdownPreview 页内锚点（模型驱动定位）', () => {
-  it('目标位于虚拟窗口外时按模型估算跳转，挂载测量后完成一次校正并稳定', async () => {
+  it('目标位于虚拟窗口外时只按模型估算位置发起一次平滑滚动', async () => {
     const { host, scrollToCalls, scrollTopWrites } = createScrollHost()
     installRectMock(host)
     installScrollIntoViewStub()
@@ -120,10 +120,10 @@ describe('MarkdownPreview 页内锚点（模型驱动定位）', () => {
       fireEvent.click(view.getByRole('link', { name: '跳转远端' }))
     })
 
-    // 模型估算定位：一次即时 scrollTo（不带 smooth），目标位置在文档远端
+    // 恢复 1.5.0 语义：估算目标只启动一次平滑滚动，挂载后不二次校准打断动画
     expect(scrollToCalls).toHaveLength(1)
     expect(scrollToCalls[0]?.top).toBeGreaterThan(2000)
-    expect(scrollToCalls[0]?.behavior).toBeUndefined()
+    expect(scrollToCalls[0]?.behavior).toBe('smooth')
 
     // 目标块已挂载
     const heading = host.querySelector<HTMLElement>('[data-md-block-type="heading"]')
@@ -133,14 +133,15 @@ describe('MarkdownPreview 页内锚点（模型驱动定位）', () => {
     // URL hash 已同步
     expect(window.location.hash).toBe('#far-target-section')
 
-    // 估算与实测不一致触发了锚点补偿/单次校正的 scrollTop 写入
-    expect(scrollTopWrites.length).toBeGreaterThan(1)
+    // 虚拟块挂载测量只回填高度模型，不直接写 scrollTop 打断原生动画
+    expect(scrollTopWrites).toHaveLength(1)
 
     // 稳定后不再产生滚动写入：无滚动反馈循环
     const writesAfterStabilization = scrollTopWrites.length
     await flushFrame()
     await flushFrame()
     expect(scrollTopWrites.length).toBe(writesAfterStabilization)
+    expect(scrollToCalls).toHaveLength(1)
   })
 
   it('锚点不存在时保持安全 no-op：不滚动、不更新 hash', async () => {
