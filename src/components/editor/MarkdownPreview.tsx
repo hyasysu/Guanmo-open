@@ -27,8 +27,6 @@ import { InlineMarkdownBlockEditor } from './InlineMarkdownBlockEditor'
 
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath, remarkStandaloneDisplayMath]
 const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex, rehypeHighlight]
-const EMBEDDED_HTML_PATTERN = /<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?\s*\/?>/
-const HTML_VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'])
 type RehypePlugins = NonNullable<Options['rehypePlugins']>
 let markdownHtmlPluginsPromise: Promise<RehypePlugins> | null = null
 
@@ -43,23 +41,6 @@ function loadMarkdownHtmlPlugins(): Promise<RehypePlugins> {
   markdownHtmlPluginsPromise ??= import('@/services/markdownHtml')
     .then(({ MARKDOWN_HTML_REHYPE_PLUGINS }) => MARKDOWN_HTML_REHYPE_PLUGINS)
   return markdownHtmlPluginsPromise
-}
-
-function hasCrossBlockHtml(content: string): boolean {
-  return content.split(/\r?\n\s*\r?\n/).some((source) => {
-    const tokens = (source.match(/<[^>]+>/g) ?? []).filter((token) =>
-      /^<\/?[A-Za-z][A-Za-z0-9-]*(?:\s|\/?>)/.test(token)
-    )
-    const opening = tokens
-      .filter((token) => token[1] !== '/' && !/\/\s*>$/.test(token))
-      .filter((token) => {
-        const tag = token.replace(/^<\/?/, '').split(/[\s/>]/, 1)[0].toLowerCase()
-        return tag && !HTML_VOID_TAGS.has(tag)
-      })
-      .length
-    const closing = tokens.filter((token) => token[1] === '/').length
-    return opening !== closing
-  })
 }
 
 export interface MarkdownBlockCommitRequest {
@@ -314,8 +295,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     if (!footnoteDefinitionSource || footnoteReferences.length === 0) return ''
     return `${footnoteReferences.map((reference) => reference.source).join(' ')}\n\n${footnoteDefinitionSource}`
   }, [footnoteDefinitionSource, footnoteReferences])
-  const hasEmbeddedHtml = useMemo(() => EMBEDDED_HTML_PATTERN.test(normalizedContent), [normalizedContent])
-  const requiresWholeDocumentRender = hasCrossBlockHtml(normalizedContent)
+  const { hasEmbeddedHtml, requiresWholeDocumentRender } = model
   const [htmlRehypePlugins, setHtmlRehypePlugins] = useState<RehypePlugins | null>(null)
   const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
   const themeId = useSettingsStore((state) => state.appearance.themeId)

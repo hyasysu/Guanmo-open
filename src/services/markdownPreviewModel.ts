@@ -120,6 +120,10 @@ export interface MarkdownPreviewModel {
   definitions: ReferenceDefinition[]
   /** 全文 footnote definitions */
   footnoteDefinitions: FootnoteDefinition[]
+  /** AST 中是否存在可渲染的原始 HTML 节点 */
+  hasEmbeddedHtml: boolean
+  /** 是否有 HTML 标签跨越顶层 Markdown 块，必须保留整篇渲染语义 */
+  requiresWholeDocumentRender: boolean
   /** 目录，按出现顺序，ID 已去重 */
   toc: TocItem[]
   /** 用于按 startOffset 二分查找块的辅助数组；不作为对外 API */
@@ -143,6 +147,118 @@ interface MdastPositioned {
 
 const remarkParser = remark().use(remarkGfm).use(remarkMath)
 
+const HTML_VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'])
+
+interface HtmlTagToken {
+  name: string
+  closing: boolean
+  selfClosing: boolean
+}
+
+interface HtmlCompatibility {
+  hasEmbeddedHtml: boolean
+  requiresWholeDocumentRender: boolean
+}
+
+/**
+ * 只从 remark 已识别的 html 节点读取标签，避免把 code/inlineCode/普通文本中的
+ * 泛型、比较表达式或示例字符串误当成 HTML。标签扫描只负责判断跨块边界，
+ * 不承担 HTML 解析或安全过滤职责。
+ */
+function analyzeHtmlCompatibility(children: MdastPositioned[]): HtmlCompatibility {
+  const openTags: string[] = []
+  let hasEmbeddedHtml = false
+  let requiresWholeDocumentRender = false
+
+  for (let childIndex = 0; childIndex < children.length; childIndex += 1) {
+    const tags = collectHtmlTags(children[childIndex])
+    if (tags.length > 0) hasEmbeddedHtml = true
+
+    for (const tag of tags) {
+      if (tag.closing) {
+        const matchingIndex = openTags.lastIndexOf(tag.name)
+        if (matchingIndex < 0) {
+          // 保持原有保守兼容策略：无法证明 HTML 语义自洽时不切块。
+          requiresWholeDocumentRender = true
+          continue
+        }
+        if (matchingIndex !== openTags.length - 1) {
+          requiresWholeDocumentRender = true
+        }
+        openTags.splice(matchingIndex, 1)
+        continue
+      }
+      if (!tag.selfClosing && !HTML_VOID_TAGS.has(tag.name)) {
+        openTags.push(tag.name)
+      }
+    }
+
+    // 标签栈在顶层块边界仍非空，说明下一个块依赖前一个块的 HTML 上下文。
+    if (openTags.length > 0 && childIndex < children.length - 1) {
+      requiresWholeDocumentRender = true
+    }
+  }
+
+  // 未闭合 HTML 仍沿用整篇同步兼容路径，避免静默改变浏览器容错语义。
+  if (openTags.length > 0) requiresWholeDocumentRender = true
+
+  return { hasEmbeddedHtml, requiresWholeDocumentRender }
+}
+
+function collectHtmlTags(node: MdastPositioned): HtmlTagToken[] {
+  const tags: HtmlTagToken[] = []
+  if (node.type === 'html' && node.value) {
+    tags.push(...tokenizeHtmlTags(node.value))
+  }
+  for (const child of node.children ?? []) {
+    tags.push(...collectHtmlTags(child))
+  }
+  return tags
+}
+
+function tokenizeHtmlTags(value: string): HtmlTagToken[] {
+  const tags: HtmlTagToken[] = []
+  let cursor = 0
+  while (cursor < value.length) {
+    const start = value.indexOf('<', cursor)
+    if (start < 0) break
+    if (value.startsWith('<!--', start)) {
+      const commentEnd = value.indexOf('-->', start + 4)
+      cursor = commentEnd >= 0 ? commentEnd + 3 : value.length
+      continue
+    }
+
+    const match = /^<\s*(\/?)\s*([A-Za-z][A-Za-z0-9-]*)/.exec(value.slice(start))
+    if (!match) {
+      cursor = start + 1
+      continue
+    }
+    const closing = match[1] === '/'
+    const name = match[2].toLowerCase()
+    let end = start + match[0].length
+    let quote: string | null = null
+    while (end < value.length) {
+      const character = value[end]
+      if (quote) {
+        if (character === quote) quote = null
+      } else if (character === '"' || character === "'") {
+        quote = character
+      } else if (character === '>') {
+        break
+      }
+      end += 1
+    }
+    if (end >= value.length) {
+      cursor = value.length
+      continue
+    }
+    const body = value.slice(start, end + 1)
+    tags.push({ name, closing, selfClosing: /\/\s*>$/.test(body) })
+    cursor = end + 1
+  }
+  return tags
+}
+
 export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewModel {
   const normalizedContent = normalizeLatexForModel(rawContent)
   const root = remarkParser.parse(normalizedContent) as unknown as {
@@ -155,6 +271,7 @@ export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewM
   const footnoteDefinitions: FootnoteDefinition[] = []
   const toc: TocItem[] = []
   const headingIds = new Map<string, number>()
+  const htmlCompatibility = analyzeHtmlCompatibility(root.children ?? [])
 
   if (frontmatter) {
     blocks.push({
@@ -261,6 +378,7 @@ export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewM
     blocks,
     definitions,
     footnoteDefinitions,
+    ...htmlCompatibility,
     toc,
     _blockStartOffsets,
   }
