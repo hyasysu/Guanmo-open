@@ -63,6 +63,36 @@ interface PreviewSelectionSource {
   selectionTo?: number
 }
 
+/** 编辑器被动平滑跟随状态（预览滚动驱动编辑器）。独立于源端 scroll 事件节流 ref。 */
+interface EditorScrollFollowerState {
+  frameId: number | null
+  active: boolean
+  /** 同步 effect 生命周期代数：effect 重挂载 / cleanup 后旧帧在下一帧自杀 */
+  generation: number
+  view: EditorView | null
+  /** 目标行起始 offset：每帧动态读取 lineBlockAt(pos).top，避免固化估算高度 */
+  pos: number | null
+  /** 上一次实际写入后读回的 scrollTop（兼容浏览器夹取与像素舍入） */
+  lastWrite: number | null
+  lastTime: number | null
+  lastTarget: number | null
+  stableFrames: number
+}
+
+/** 预览被动平滑跟随状态（编辑器滚动驱动预览）。 */
+interface PreviewScrollFollowerState {
+  frameId: number | null
+  active: boolean
+  generation: number
+  container: HTMLElement | null
+  /** 静态目标：每次同步事件只更新目标，不重启动画 */
+  target: number | null
+  lastWrite: number | null
+  lastTime: number | null
+  lastTarget: number | null
+  stableFrames: number
+}
+
 const PREVIEW_CONTEXT_HIGHLIGHT = 'preview-context-selection'
 const DROP_IMAGES_EVENT = 'guanmo:drop-image-paths'
 const PREVIEW_UPDATE_DELAY = 300
@@ -74,6 +104,16 @@ const SCROLL_SYNC_INPUT_PAUSE_MS = 700
  *  渲染补偿（内容更新锚点补偿、scrollTop 夹取、位置恢复、异步图片/KaTeX 高度变化）
  *  产生的 scroll 事件一律不得反向移动编辑器。该窗口覆盖滚轮惯性滚动与平滑滚动时长。 */
 const PREVIEW_SYNC_GESTURE_WINDOW_MS = 800
+/** 同步滚动平滑跟随时间常数：每帧按 1 - exp(-dt / τ) 向目标插值 */
+const SCROLL_SYNC_FOLLOW_TAU_MS = 80
+/** 单帧 dt 上限：窗口后台恢复后避免单帧跨越 */
+const SCROLL_SYNC_FOLLOW_MAX_DT_MS = 40
+/** 收敛阈值：实际 scrollTop 与目标误差小于该值视为已收敛 */
+const SCROLL_SYNC_FOLLOW_EPSILON_PX = 0.5
+/** 目标连续稳定帧数要求：动态测量刚变化时不提前退出 */
+const SCROLL_SYNC_FOLLOW_STABLE_FRAMES = 2
+/** 实际 scrollTop 与上一次写入值偏差超过该值视为外部修改（渲染补偿 / CodeMirror 测量校正） */
+const SCROLL_SYNC_EXTERNAL_DRIFT_PX = 1
 const PREVIEW_SWITCH_MARK_PREFIX = 'guanmo:preview-switch'
 
 interface ScheduledPreviewContent {
@@ -205,6 +245,30 @@ export function EditorArea() {
   const previewGestureAtRef = useRef(0)
   /** 指针当前是否按在预览 pane 上（覆盖滚动条拖拽、触控拖拽的长时滚动） */
   const previewPointerDownRef = useRef(false)
+  /** 同步滚动 follower 生命周期代数（独立于源端 scroll 节流的 editorScrollFrameRef / previewScrollFrameRef） */
+  const scrollFollowerGenerationRef = useRef(0)
+  const editorFollowerRef = useRef<EditorScrollFollowerState>({
+    frameId: null,
+    active: false,
+    generation: 0,
+    view: null,
+    pos: null,
+    lastWrite: null,
+    lastTime: null,
+    lastTarget: null,
+    stableFrames: 0,
+  })
+  const previewFollowerRef = useRef<PreviewScrollFollowerState>({
+    frameId: null,
+    active: false,
+    generation: 0,
+    container: null,
+    target: null,
+    lastWrite: null,
+    lastTime: null,
+    lastTarget: null,
+    stableFrames: 0,
+  })
   const [, setPreviewRestoreTick] = useState(0)
   const [searchOpen, setSearchOpen] = useState(false)
   const [rightPaneDragOver, setRightPaneDragOver] = useState(false)
@@ -1251,9 +1315,38 @@ export function EditorArea() {
 
   useEffect(() => clearPreviewContextHighlight, [clearPreviewContextHighlight])
 
+  /** 取消正在写编辑器 scrollTop 的 follower（预览滚动驱动方向） */
+  const cancelEditorFollower = useCallback(() => {
+    const f = editorFollowerRef.current
+    if (f.frameId !== null) {
+      window.cancelAnimationFrame(f.frameId)
+      f.frameId = null
+    }
+    f.active = false
+    f.pos = null
+    f.lastTarget = null
+    f.stableFrames = 0
+  }, [])
+
+  /** 取消正在写预览 scrollTop 的 follower（编辑器滚动驱动方向） */
+  const cancelPreviewFollower = useCallback(() => {
+    const f = previewFollowerRef.current
+    if (f.frameId !== null) {
+      window.cancelAnimationFrame(f.frameId)
+      f.frameId = null
+    }
+    f.active = false
+    f.target = null
+    f.lastTarget = null
+    f.stableFrames = 0
+  }, [])
+
   useEffect(() => () => {
     scrollSyncSessionRef.current.dispose()
     clearAllTtls()
+    cancelEditorFollower()
+    cancelPreviewFollower()
+    scrollFollowerGenerationRef.current += 1
     if (idlePrewarmCancelRef.current) {
       idlePrewarmCancelRef.current()
       idlePrewarmCancelRef.current = null
@@ -1301,6 +1394,158 @@ export function EditorArea() {
     scrollSyncSessionRef.current.lock(source)
   }, [])
 
+  // ---- 同步滚动平滑跟随（rAF lerp follower）----
+  // 只把被动方从瞬时跳转改为平滑跟随；映射计算、方向判断、手势守卫、
+  // 输入暂停、restore 隔离与阅读位置逻辑全部保持原语义。
+  // 不使用 scrollTo({ behavior: 'smooth' })：同步目标约 60Hz 更新，
+  // 浏览器 smooth 每次都会重新启动并互相打断。
+
+  /** 编辑器被动动画帧：预览滚动驱动编辑器平滑逼近目标行 */
+  const stepEditorFollower = useCallback((now: number) => {
+    const f = editorFollowerRef.current
+    f.frameId = null
+    if (!f.active || f.pos === null) return
+    const view = f.view
+    const pos = f.pos
+    if (!view || editorViewRef.current !== view
+      || f.generation !== scrollFollowerGenerationRef.current
+      || pos > view.state.doc.length) {
+      cancelEditorFollower()
+      return
+    }
+
+    // 每帧续锁原始 source：动画写编辑器产生的 scroll 事件不得反向同步预览
+    setScrollSyncSource('preview')
+
+    // 动态目标：长行、表格未进入视口时 lineBlockAt 可能是估算值，逐帧重读。
+    // 写入前把目标限制在合法滚动范围（0 ... scrollHeight - clientHeight），
+    // 与原生 scrollTo 的夹取行为等价，保证文档底部/顶部也能收敛。
+    const scrollDOM = view.scrollDOM
+    const editorMaxTop = Math.max(0, scrollDOM.scrollHeight - scrollDOM.clientHeight)
+    const target = Math.min(
+      Math.max(0, view.lineBlockAt(pos).top - SCROLL_SYNC_TOP_OFFSET),
+      editorMaxTop,
+    )
+
+    const actualTop = scrollDOM.scrollTop
+    // CodeMirror 自己的测量校正也可能修改编辑器 scrollTop：吸收为新的 current
+    // 继续收敛，不视为取消；用户接管通过明确的 wheel / pointer 事件取消。
+    const current = f.lastWrite === null || Math.abs(actualTop - f.lastWrite) > SCROLL_SYNC_EXTERNAL_DRIFT_PX
+      ? actualTop
+      : f.lastWrite
+
+    const dt = f.lastTime === null ? 16 : Math.min(now - f.lastTime, SCROLL_SYNC_FOLLOW_MAX_DT_MS)
+    f.lastTime = now
+    const alpha = 1 - Math.exp(-dt / SCROLL_SYNC_FOLLOW_TAU_MS)
+    const next = current + (target - current) * alpha
+
+    scrollDOM.scrollTop = Math.max(0, Math.min(next, editorMaxTop))
+    f.lastWrite = scrollDOM.scrollTop
+
+    const settled = Math.abs(target - f.lastWrite) < SCROLL_SYNC_FOLLOW_EPSILON_PX
+    const targetStable = f.lastTarget !== null && Math.abs(target - f.lastTarget) < SCROLL_SYNC_FOLLOW_EPSILON_PX
+    f.lastTarget = target
+    f.stableFrames = settled && targetStable ? f.stableFrames + 1 : 0
+
+    if (f.stableFrames >= SCROLL_SYNC_FOLLOW_STABLE_FRAMES) {
+      // 收敛后仅执行一次 CodeMirror 精确测量校正（不能在连续同步事件中反复调用）。
+      // 到达这里时已确认：仍是同一个 EditorView、同一同步 effect 生命周期（generation）、
+      // 动画未被用户取消（active）、当前 pos 未被后续 retarget 替换（retarget 会重置 stableFrames）。
+      f.active = false
+      f.pos = null
+      view.dispatch({
+        effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: SCROLL_SYNC_TOP_OFFSET }),
+      })
+      return
+    }
+
+    f.frameId = window.requestAnimationFrame(stepEditorFollower)
+  }, [cancelEditorFollower, setScrollSyncSource])
+
+  /** 预览被动动画帧：编辑器滚动驱动预览平滑逼近静态目标 */
+  const stepPreviewFollower = useCallback((now: number) => {
+    const f = previewFollowerRef.current
+    f.frameId = null
+    if (!f.active || f.target === null) return
+    const container = f.container
+    if (!container || leftPreviewRef.current !== container
+      || f.generation !== scrollFollowerGenerationRef.current) {
+      cancelPreviewFollower()
+      return
+    }
+
+    // 每帧续锁原始 source：动画写预览产生的 scroll 事件不得反向同步编辑器
+    setScrollSyncSource('editor')
+
+    // 写入前把目标限制在合法滚动范围（0 ... scrollHeight - clientHeight）；
+    // 预览虚拟化下容器几何逐帧变化，需每帧重取
+    const previewMaxTop = Math.max(0, container.scrollHeight - container.clientHeight)
+    const target = Math.min(f.target, previewMaxTop)
+    if (f.lastWrite !== null && Math.abs(container.scrollTop - f.lastWrite) > SCROLL_SYNC_EXTERNAL_DRIFT_PX) {
+      // 预览虚拟化、图片、KaTeX 等渲染补偿修改了 scrollTop：停止预览 follower，
+      // 让外部补偿或用户操作接管
+      cancelPreviewFollower()
+      return
+    }
+    const current = f.lastWrite ?? container.scrollTop
+
+    const dt = f.lastTime === null ? 16 : Math.min(now - f.lastTime, SCROLL_SYNC_FOLLOW_MAX_DT_MS)
+    f.lastTime = now
+    const alpha = 1 - Math.exp(-dt / SCROLL_SYNC_FOLLOW_TAU_MS)
+    const next = current + (target - current) * alpha
+
+    container.scrollTop = Math.max(0, Math.min(next, previewMaxTop))
+    f.lastWrite = container.scrollTop
+
+    const settled = Math.abs(target - f.lastWrite) < SCROLL_SYNC_FOLLOW_EPSILON_PX
+    const targetStable = f.lastTarget !== null && Math.abs(target - f.lastTarget) < SCROLL_SYNC_FOLLOW_EPSILON_PX
+    f.lastTarget = target
+    f.stableFrames = settled && targetStable ? f.stableFrames + 1 : 0
+
+    if (f.stableFrames >= SCROLL_SYNC_FOLLOW_STABLE_FRAMES) {
+      f.active = false
+      f.target = null
+      return
+    }
+
+    f.frameId = window.requestAnimationFrame(stepPreviewFollower)
+  }, [cancelPreviewFollower, setScrollSyncSource])
+
+  const startEditorFollower = useCallback((view: EditorView, pos: number) => {
+    const f = editorFollowerRef.current
+    f.pos = pos
+    f.stableFrames = 0
+    if (f.active && f.frameId !== null) {
+      // 连续同步事件只更新目标，不取消并重新启动 rAF
+      f.view = view
+      return
+    }
+    f.active = true
+    f.view = view
+    f.lastWrite = view.scrollDOM.scrollTop
+    f.lastTime = null
+    f.lastTarget = null
+    if (f.frameId !== null) window.cancelAnimationFrame(f.frameId)
+    f.frameId = window.requestAnimationFrame(stepEditorFollower)
+  }, [stepEditorFollower])
+
+  const startPreviewFollower = useCallback((container: HTMLElement, target: number) => {
+    const f = previewFollowerRef.current
+    f.target = target
+    f.stableFrames = 0
+    if (f.active && f.frameId !== null) {
+      f.container = container
+      return
+    }
+    f.active = true
+    f.container = container
+    f.lastWrite = container.scrollTop
+    f.lastTime = null
+    f.lastTarget = null
+    if (f.frameId !== null) window.cancelAnimationFrame(f.frameId)
+    f.frameId = window.requestAnimationFrame(stepPreviewFollower)
+  }, [stepPreviewFollower])
+
   const syncPreviewToEditorLine = useCallback((line: number) => {
     const container = leftPreviewRef.current
     if (!container) return
@@ -1309,8 +1554,9 @@ export function EditorArea() {
     if (typeof targetTop !== 'number') return
 
     setScrollSyncSource('editor')
-    container.scrollTo({ top: Math.max(0, targetTop - SCROLL_SYNC_TOP_OFFSET) })
-  }, [activePreview.version, setScrollSyncSource])
+    // 映射计算保持不变：只把瞬时写入改成更新预览 follower 的静态目标
+    startPreviewFollower(container, Math.max(0, targetTop - SCROLL_SYNC_TOP_OFFSET))
+  }, [activePreview.version, setScrollSyncSource, startPreviewFollower])
 
   const syncEditorToPreviewLine = useCallback((line: number) => {
     const view = editorViewRef.current
@@ -1319,19 +1565,21 @@ export function EditorArea() {
     const pos = view.state.doc.line(line).from
     setScrollSyncSource('preview')
     // 长行、表格等内容尚未进入视口时，CodeMirror 的高度映射可能仍是估算值。
-    // 直接读取 lineBlockAt(pos).top 会把这个瞬时估算固化为 scrollTop，待布局测量
-    // 校正后编辑器仍停在错误文档块。交给 CodeMirror 的滚动 effect，使其在测量周期内
-    // 完成目标行定位与必要的二次校正。
-    view.dispatch({
-      effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: SCROLL_SYNC_TOP_OFFSET }),
-    })
-  }, [setScrollSyncSource])
+    // 动画期间每帧动态读取 lineBlockAt(pos).top 平滑逼近，收敛后仅执行一次
+    // scrollIntoView 精确测量校正，避免把瞬时估算固化为 scrollTop。
+    startEditorFollower(view, pos)
+  }, [setScrollSyncSource, startEditorFollower])
 
   useEffect(() => {
     if (viewMode !== 'edit-preview' || !syncScroll) return
     const view = editorViewRef.current
     const preview = leftPreviewRef.current
     if (!view || !preview) return
+
+    // 新生命周期代数：上一个生命周期的 follower 帧即使漏取消也会在下一帧自杀
+    const generation = ++scrollFollowerGenerationRef.current
+    editorFollowerRef.current.generation = generation
+    previewFollowerRef.current.generation = generation
 
     const handleEditorScroll = () => {
       if (scrollSyncSessionRef.current.source === 'preview') return
@@ -1366,12 +1614,22 @@ export function EditorArea() {
       })
     }
 
-    const handleEditorWheel = () => setScrollSyncSource('editor')
+    const handleEditorWheel = () => {
+      // 用户接管被动面：立即取消正在写编辑器 scrollTop 的动画，最迟下一帧让路
+      cancelEditorFollower()
+      setScrollSyncSource('editor')
+    }
     const handlePreviewWheel = () => {
+      cancelPreviewFollower()
       previewGestureAtRef.current = Date.now()
       setScrollSyncSource('preview')
     }
+    const handleEditorPointerDown = () => {
+      // 仅用于取消编辑器 follower（覆盖拖动编辑器滚动条）
+      cancelEditorFollower()
+    }
     const handlePreviewPointerDown = () => {
+      cancelPreviewFollower()
       previewPointerDownRef.current = true
       previewGestureAtRef.current = Date.now()
     }
@@ -1383,6 +1641,7 @@ export function EditorArea() {
     preview.addEventListener('scroll', handlePreviewScroll, { passive: true })
     view.scrollDOM.addEventListener('wheel', handleEditorWheel, { passive: true })
     preview.addEventListener('wheel', handlePreviewWheel, { passive: true })
+    view.scrollDOM.addEventListener('pointerdown', handleEditorPointerDown, { passive: true })
     preview.addEventListener('pointerdown', handlePreviewPointerDown, { passive: true })
     window.addEventListener('pointerup', handlePreviewPointerUp, true)
     window.addEventListener('pointercancel', handlePreviewPointerUp, true)
@@ -1392,9 +1651,13 @@ export function EditorArea() {
       preview.removeEventListener('scroll', handlePreviewScroll)
       view.scrollDOM.removeEventListener('wheel', handleEditorWheel)
       preview.removeEventListener('wheel', handlePreviewWheel)
+      view.scrollDOM.removeEventListener('pointerdown', handleEditorPointerDown)
       preview.removeEventListener('pointerdown', handlePreviewPointerDown)
       window.removeEventListener('pointerup', handlePreviewPointerUp, true)
       window.removeEventListener('pointercancel', handlePreviewPointerUp, true)
+      cancelEditorFollower()
+      cancelPreviewFollower()
+      scrollFollowerGenerationRef.current += 1
       if (editorScrollFrameRef.current !== null) {
         window.cancelAnimationFrame(editorScrollFrameRef.current)
         editorScrollFrameRef.current = null
@@ -1404,7 +1667,7 @@ export function EditorArea() {
         previewScrollFrameRef.current = null
       }
     }
-  }, [activeTab?.id, activePreview.version, setScrollSyncSource, syncEditorToPreviewLine, syncPreviewToEditorLine, syncScroll, viewMode])
+  }, [activeTab?.id, activePreview.version, cancelEditorFollower, cancelPreviewFollower, setScrollSyncSource, syncEditorToPreviewLine, syncPreviewToEditorLine, syncScroll, viewMode])
 
   const handleSave = useCallback(async () => {
     const state = useEditorStore.getState()
@@ -1503,13 +1766,16 @@ export function EditorArea() {
   const jumpToLine = useCallback((line: number) => {
     const view = editorViewRef.current
     if (!view || line < 1 || line > view.state.doc.lines) return
+    // 目录/标题跳转属于程序性接管编辑器滚动：先取消正在写编辑器 scrollTop 的
+    // follower，避免其每帧覆写压制本次跳转、收敛后还把编辑器拉回旧目标
+    cancelEditorFollower()
     const pos = view.state.doc.line(line).from
     view.dispatch({
       selection: { anchor: pos },
       effects: EditorView.scrollIntoView(pos, { y: 'start' }),
     })
     view.focus()
-  }, [])
+  }, [cancelEditorFollower])
 
   const handleLeftPreviewHeadingClick = useCallback((line: number) => {
     if (viewModeRef.current !== 'edit-preview') return
@@ -1615,11 +1881,14 @@ export function EditorArea() {
   }, [handleInsertImagePaths])
 
   const jumpToPreviewHeading = useCallback((item: TocItem) => {
-    // 目录跳转属于用户在预览侧的主动导航：标记手势，使预览平滑滚动期间的
-    // scroll 事件可继续反向同步编辑器（与用户滚轮滚动预览一致）。
+    // 目录跳转属于用户在预览侧的主动导航：先取消正在写预览 scrollTop 的 follower
+    // （其每帧覆写会压制 scrollToLine 的平滑步进，导致目录点击无响应），
+    // 并标记手势，使预览平滑滚动期间的 scroll 事件可继续反向同步编辑器
+    // （与用户滚轮滚动预览一致）。
+    cancelPreviewFollower()
     previewGestureAtRef.current = Date.now()
     leftMarkdownPreviewRef.current?.scrollToLine(item.line)
-  }, [])
+  }, [cancelPreviewFollower])
 
   const jumpToRightPreviewHeading = useCallback((item: TocItem) => {
     rightMarkdownPreviewRef.current?.scrollToLine(item.line)

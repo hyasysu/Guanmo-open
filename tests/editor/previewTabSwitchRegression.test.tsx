@@ -463,10 +463,18 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
 
       const preview = getLeftPreviewContainer(container)!
       const editorScroller = container.querySelector<HTMLElement>('.cm-scroller')!
-      const scrollTo = vi.fn((options: ScrollToOptions) => {
-        preview.scrollTop = Number(options.top ?? 0)
+      // 同步滚动动画通过直接写 scrollTop 平滑跟随（不调用 scrollTo），
+      // 这里捕获 scrollTop 写入以断言“编辑器滚动确实驱动了预览”
+      const previewScrollWrites: number[] = []
+      let previewScrollTopValue = preview.scrollTop
+      Object.defineProperty(preview, 'scrollTop', {
+        configurable: true,
+        get: () => previewScrollTopValue,
+        set: (value: number) => {
+          previewScrollTopValue = value
+          previewScrollWrites.push(value)
+        },
       })
-      Object.defineProperty(preview, 'scrollTo', { configurable: true, value: scrollTo })
 
       act(() => {
         editorScroller.scrollTop = 1_200
@@ -474,7 +482,7 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
         fireEvent.scroll(editorScroller)
         vi.advanceTimersByTime(20)
       })
-      expect(scrollTo).toHaveBeenCalled()
+      expect(previewScrollWrites.length).toBeGreaterThan(0)
 
       act(() => {
         fireEvent.scroll(preview)
