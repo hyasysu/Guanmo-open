@@ -324,6 +324,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const measuredHeightsRef = useRef<Map<string, number>>(new Map())
   /** 未挂载目标的行定位校正任务：目标块挂载测量后执行一次即清空（幂等，无反馈循环） */
   const pendingLineCorrectionRef = useRef<{ line: number } | null>(null)
+  /** 未挂载搜索目标的精确定位校正任务：目标 Range 挂载后执行一次即清空 */
+  const pendingSearchCorrectionRef = useRef<{ from: number; to: number; blockId: string; appliedTop?: number } | null>(null)
   const blockRefs = useRef<Map<number, HTMLDivElement | null>>(new Map())
   const blockResizeObserverRef = useRef<ResizeObserver | null>(null)
   const measurementKeyRef = useRef<{
@@ -515,6 +517,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   // 文档内容变化：旧 offset 全部失效，清除搜索索引与选区状态
   useEffect(() => {
     pendingLineCorrectionRef.current = null
+    pendingSearchCorrectionRef.current = null
     searchMatchesByBlockRef.current = null
     const hadSearch = searchStateRef.current !== null
     const hadSelection = selectionRangeRef.current !== null
@@ -764,10 +767,29 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       const index = findBlockIndexByOffset(model, offset)
       const block = index >= 0 ? model.blocks[index] : undefined
       if (!block) return
-      const localSource = model.rawContent.slice(block.startOffset, Math.max(block.startOffset, offset))
-      const line = block.startLine + (localSource.match(/\r\n|\r|\n/g)?.length ?? 0)
       const container = scrollContainerRef.current
       if (!container) return
+      const match = searchMatchesByBlockRef.current?.get(block.blockId)?.find((item) => item.from === offset)
+      const to = match?.to ?? Math.min(block.endOffset, offset + 1)
+      const element = blockRefs.current.get(index)
+      const rangeElement = element ?? (requiresWholeDocumentRender ? rootRef.current : null)
+      const exactTop = rangeElement
+        ? getMountedSourceRangeTop(rangeElement, container, offset, to)
+        : undefined
+      if (typeof exactTop === 'number') {
+        pendingSearchCorrectionRef.current = null
+        container.scrollTo({ top: Math.max(0, exactTop - 24) })
+        return
+      }
+      if (element) {
+        pendingSearchCorrectionRef.current = null
+        const blockTop = element.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+        container.scrollTo({ top: Math.max(0, blockTop - 24) })
+        return
+      }
+      const localSource = model.rawContent.slice(block.startOffset, Math.max(block.startOffset, offset))
+      const line = block.startLine + (localSource.match(/\r\n|\r|\n/g)?.length ?? 0)
+      pendingSearchCorrectionRef.current = { from: offset, to, blockId: block.blockId }
       const top = getEstimatedPreviewTopForLine(model, line, estimateBlockHeight, measuredHeightsRef.current)
       if (typeof top === 'number') container.scrollTo({ top: Math.max(0, top - 24) })
     },
@@ -802,7 +824,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       selectionAnchorRef.current = null
       applySelection(null)
     },
-  }), [model, estimateBlockHeight, scrollToLineInternal, setSearchStateImpl, applySelection])
+  }), [model, estimateBlockHeight, requiresWholeDocumentRender, scrollToLineInternal, setSearchStateImpl, applySelection])
 
   // Visible range
   const visible = useMemo(
@@ -875,6 +897,33 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       container.scrollTop = desired
     }
   })
+
+  // 未挂载搜索目标的单次幂等校正：目标块进入虚拟窗口后，优先按真实 DOM Range
+  // 对齐关键词；无精确标注时退回块顶部，不重新计算全文估算位置。
+  useLayoutEffect(() => {
+    const pending = pendingSearchCorrectionRef.current
+    if (!pending) return
+    const container = scrollContainerRef.current
+    if (!container) return
+    const index = model.blocks.findIndex((block) => block.blockId === pending.blockId)
+    const element = index >= 0 ? blockRefs.current.get(index) : undefined
+    if (!element) return
+    const exactTop = getMountedSourceRangeTop(element, container, pending.from, pending.to)
+    const targetTop = typeof exactTop === 'number'
+      ? exactTop
+      : element.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+    if (pending.appliedTop !== undefined && Math.abs(pending.appliedTop - targetTop) < 1) {
+      pendingSearchCorrectionRef.current = null
+      return
+    }
+    const appliedPending = { ...pending, appliedTop: targetTop }
+    pendingSearchCorrectionRef.current = appliedPending
+    const desired = Math.max(0, targetTop - 24)
+    if (Math.abs(container.scrollTop - desired) >= 1) container.scrollTop = desired
+    requestAnimationFrame(() => {
+      if (pendingSearchCorrectionRef.current === appliedPending) pendingSearchCorrectionRef.current = null
+    })
+  }, [model, scrollState.scrollTop, visible.blockTops, visible.startIndex, visible.endIndex])
 
   const overlayRectRef = useRef<{ top: number; left: number; width: number } | null>(null)
 
@@ -1748,6 +1797,27 @@ function getMountedPreviewLineForTop(
     if (block.endLine <= block.startLine) return block.startLine
     const progress = Math.max(0, Math.min(1, (targetViewportTop - rect.top) / rect.height))
     return Math.round(block.startLine + (block.endLine - block.startLine) * progress)
+  }
+  return undefined
+}
+
+function getMountedSourceRangeTop(
+  element: HTMLElement,
+  container: HTMLElement,
+  from: number,
+  to: number,
+): number | undefined {
+  const ranges = buildDomRangesForSourceRange(element, from, to)
+  for (const range of ranges) {
+    const rangeWithGeometry = range as globalThis.Range & {
+      getClientRects?: () => DOMRectList
+      getBoundingClientRect?: () => DOMRect
+    }
+    const rects = rangeWithGeometry.getClientRects?.() ?? []
+    const rect = rects.length > 0 ? rects[0] : rangeWithGeometry.getBoundingClientRect?.()
+    if (!rect) continue
+    if (rect.width <= 0 && rect.height <= 0) continue
+    return rect.top - container.getBoundingClientRect().top + container.scrollTop
   }
   return undefined
 }
