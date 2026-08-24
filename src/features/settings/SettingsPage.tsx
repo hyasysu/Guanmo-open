@@ -65,8 +65,25 @@ import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/services/requestTimeout'
 import { AdvancedTimeoutSettings } from '@/features/settings/AdvancedTimeoutSettings'
 import { ThemePicker } from '@/features/settings/ThemePicker'
 import { requestProductTour } from '@/features/productTour/productTourEvents'
+import { AiSprite } from '@/components/ai/AiSprite'
+import type { AssistantState } from '@/services/assistantState'
 
 const AI_ROUTING_GUIDE_URL = 'https://github.com/we-used-to-be/Guanmo-open/blob/main/docs/AI_ROUTING_GUIDE.md'
+
+const AI_SPRITE_PREVIEW_STATES: ReadonlyArray<{
+  state: AssistantState
+  label: string
+  description: string
+}> = [
+  { state: 'idle', label: '空闲', description: '等待任务' },
+  { state: 'reading', label: '读取', description: '读取文档' },
+  { state: 'retrieving', label: '检索', description: '检索知识库' },
+  { state: 'searching', label: '搜索', description: '联网搜索' },
+  { state: 'thinking', label: '思考', description: '规划回答' },
+  { state: 'generating', label: '生成', description: '输出回答' },
+  { state: 'success', label: '完成', description: '任务完成' },
+  { state: 'error', label: '失败', description: '请求失败' },
+]
 
 async function openUrl(url: string, external: boolean) {
   if (external) {
@@ -200,6 +217,55 @@ function SettingField({
         {description && <p className={`text-caption text-gm-text-tertiary mt-0.5 ${descriptionClassName}`}>{description}</p>}
       </div>
       <div className="gm-setting-control flex-1 flex items-center justify-end min-w-0">{children}</div>
+    </div>
+  )
+}
+
+function AiSpritePreviewModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  if (!open) return null
+
+  return (
+    <div
+      className="gm-ai-sprite-preview-scrim fixed inset-0 z-[1110] flex items-center justify-center bg-black/45 p-5"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="ai-sprite-preview-title"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <section className="gm-ai-sprite-preview-dialog w-full max-w-lg overflow-hidden rounded-2xl border border-gm-border bg-gm-surface shadow-2xl">
+        <header className="flex items-start justify-between gap-4 border-b border-gm-border px-5 py-4">
+          <div>
+            <h2 id="ai-sprite-preview-title" className="text-heading font-bold text-gm-text">
+              小球样式预览
+            </h2>
+            <p className="mt-1 text-caption text-gm-text-secondary">
+              查看 AI 助手在不同工作状态下的动画表现。
+            </p>
+          </div>
+          <Button type="text" size="small" onClick={onClose} aria-label="关闭小球样式预览">
+            关闭
+          </Button>
+        </header>
+
+        <div className="grid grid-cols-2 gap-2.5 p-4 sm:grid-cols-4">
+          {AI_SPRITE_PREVIEW_STATES.map((item) => (
+            <div
+              key={item.state}
+              className="flex min-h-[112px] flex-col items-center justify-center rounded-xl border border-gm-border-subtle bg-gm-surface-elevated px-2 py-3"
+            >
+              <AiSprite state={item.state} size={56} className="mb-2" />
+              <span className="text-caption font-bold text-gm-text">{item.label}</span>
+              <span className="mt-0.5 text-micro text-gm-text-tertiary">{item.description}</span>
+            </div>
+          ))}
+        </div>
+
+        <footer className="flex justify-end border-t border-gm-border px-5 py-3">
+          <Button type="default" size="small" onClick={onClose}>完成</Button>
+        </footer>
+      </section>
     </div>
   )
 }
@@ -1252,6 +1318,7 @@ function GeneralSettings() {
   const [loadingReleaseNotes, setLoadingReleaseNotes] = useState(false)
   const [checkingUpdate, setCheckingUpdate] = useState(false)
   const [updateCheckFeedback, setUpdateCheckFeedback] = useState<ManualUpdateCheckFeedback | null>(null)
+  const [spritePreviewOpen, setSpritePreviewOpen] = useState(false)
   const mountedRef = useRef(true)
 
   useEffect(() => {
@@ -1269,6 +1336,18 @@ function GeneralSettings() {
       mountedRef.current = false
     }
   }, [])
+
+  useEffect(() => {
+    if (!spritePreviewOpen) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      setSpritePreviewOpen(false)
+    }
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [spritePreviewOpen])
 
   const handleCheckUpdate = async () => {
     setCheckingUpdate(true)
@@ -1335,7 +1414,7 @@ function GeneralSettings() {
       modePerformancePolicy: 'balanced',
       defaultOpenMode: 'preview',
     })
-    updateAppearanceSettings({ customCursorEnabled: true, aiAvatarStyle: 'icon', themeId: 'warm' })
+    updateAppearanceSettings({ customCursorEnabled: true, aiAvatarStyle: 'sprite', themeId: 'warm' })
     updateWebSearchConfig({ provider: 'duckduckgo', apiKey: '', maxResults: 5, customUrl: '', timeout: DEFAULT_REQUEST_TIMEOUT_MS })
     updateUsageTrackingSettings({ enabled: true })
     resetAiShortcutActions()
@@ -1488,26 +1567,10 @@ function GeneralSettings() {
       <SettingField label="定制光标" description="使用 animal-island-ui 的手作风光标">
         <Switch checked={appearance.customCursorEnabled} onChange={(v) => updateAppearanceSettings({ customCursorEnabled: v })} />
       </SettingField>
-      <SettingField label="AI 头像风格" description="AI 助手图标和消息头像的展示风格；「小球」会随 AI 工作状态变化">
-        <div className="gm-default-mode-segmented" role="radiogroup" aria-label="AI 头像风格">
-          {([
-            { key: 'icon', label: '图标' },
-            { key: 'mascot', label: '吉祥物' },
-            { key: 'sprite', label: '小球' },
-          ] as const).map((option) => (
-            <button
-              key={option.key}
-              type="button"
-              className="gm-default-mode-segmented__item"
-              data-active={appearance.aiAvatarStyle === option.key}
-              role="radio"
-              aria-checked={appearance.aiAvatarStyle === option.key}
-              onClick={() => updateAppearanceSettings({ aiAvatarStyle: option.key })}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
+      <SettingField label="AI 头像" description="统一使用简约小球，可预览不同工作状态下的动作表现">
+        <Button type="default" size="small" onClick={() => setSpritePreviewOpen(true)}>
+          预览小球样式
+        </Button>
       </SettingField>
       <Sep />
       <Button type="default" block onClick={handleRestoreDefaults}>恢复默认设置</Button>
@@ -1548,6 +1611,7 @@ function GeneralSettings() {
         }
       />
       <Footer type="tree" className="mt-6 opacity-70" />
+      <AiSpritePreviewModal open={spritePreviewOpen} onClose={() => setSpritePreviewOpen(false)} />
     </div>
   )
 }

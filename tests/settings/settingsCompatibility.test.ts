@@ -49,7 +49,7 @@ describe('设置兼容', () => {
     const state = store.getState()
 
     expect(state.editor).toMatchObject({ fontSize: 18, lineHeight: 1.65, fullscreenContentPadding: 88, inlinePreviewEdit: true })
-    expect(state.appearance).toMatchObject({ themeId: 'dark', lastLightThemeId: 'warm', aiAvatarStyle: 'icon' })
+    expect(state.appearance).toMatchObject({ themeId: 'dark', lastLightThemeId: 'warm', aiAvatarStyle: 'sprite' })
   })
 
   it('将旧主题组合迁移为统一主题 ID', async () => {
@@ -284,30 +284,30 @@ describe('旧字段迁移', () => {
     expect(store.getState().appearance.aiAvatarStyle).toBe('sprite')
   })
 
-  it('只有旧 aiMascotAvatarEnabled=true 时迁移为 mascot', async () => {
+  it('只有旧 aiMascotAvatarEnabled=true 时迁移为 sprite', async () => {
     const store = await loadSettingsStore({
       appearance: { aiMascotAvatarEnabled: true },
     } as unknown as Record<string, unknown>)
-    expect(store.getState().appearance.aiAvatarStyle).toBe('mascot')
+    expect(store.getState().appearance.aiAvatarStyle).toBe('sprite')
   })
 
-  it('只有旧 aiMascotAvatarEnabled=false 时迁移为 icon', async () => {
+  it('只有旧 aiMascotAvatarEnabled=false 时迁移为 sprite', async () => {
     const store = await loadSettingsStore({
       appearance: { aiMascotAvatarEnabled: false },
     } as unknown as Record<string, unknown>)
-    expect(store.getState().appearance.aiAvatarStyle).toBe('icon')
+    expect(store.getState().appearance.aiAvatarStyle).toBe('sprite')
   })
 
-  it('aiAvatarStyle 非法时回退旧布尔迁移，两者皆缺省为 icon', async () => {
+  it('aiAvatarStyle 非法或缺失时统一迁移为 sprite', async () => {
     const invalidStyleStore = await loadSettingsStore({
       appearance: { aiAvatarStyle: 'bogus', aiMascotAvatarEnabled: true },
     } as unknown as Record<string, unknown>)
-    expect(invalidStyleStore.getState().appearance.aiAvatarStyle).toBe('mascot')
+    expect(invalidStyleStore.getState().appearance.aiAvatarStyle).toBe('sprite')
 
     const missingStore = await loadSettingsStore({
       appearance: {},
     })
-    expect(missingStore.getState().appearance.aiAvatarStyle).toBe('icon')
+    expect(missingStore.getState().appearance.aiAvatarStyle).toBe('sprite')
   })
 
   it('迁移后运行时对象不含旧 aiMascotAvatarEnabled 字段', async () => {

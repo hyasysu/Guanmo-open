@@ -53,14 +53,20 @@ describe('AI 状态小球（AiSprite）', () => {
     expect(root.getAttribute('role')).toBe('img')
   })
 
-  it('SVG 各状态部件均在文档中，动画交给 CSS 控制', () => {
+  it('SVG 只保留圆球和两枚眼睛，动画交给 CSS 控制', () => {
     const { container } = render(<AiSprite state="idle" />)
     expect(container.querySelector('.gm-ai-sprite__core')).not.toBeNull()
-    expect(container.querySelector('.gm-ai-sprite__orbit')).not.toBeNull()
-    expect(container.querySelector('.gm-ai-sprite__pulse')).not.toBeNull()
-    expect(container.querySelector('.gm-ai-sprite__dot--3')).not.toBeNull()
-    expect(container.querySelector('.gm-ai-sprite__eyes-happy')).not.toBeNull()
-    expect(container.querySelector('.gm-ai-sprite__eyes-flat')).not.toBeNull()
+    expect(container.querySelector('.gm-ai-sprite__body')).not.toBeNull()
+    expect(container.querySelectorAll('.gm-ai-sprite__eye')).toHaveLength(2)
+    expect(container.querySelector('.gm-ai-sprite__mouth')).toBeNull()
+    expect(container.querySelector('.gm-ai-sprite__orbit')).toBeNull()
+    expect(container.querySelector('.gm-ai-sprite__pulse')).toBeNull()
+    expect(container.querySelector('.gm-ai-sprite__dot')).toBeNull()
+  })
+
+  it('animated=false 时标记为静态头像', () => {
+    const { container } = render(<AiSprite state="idle" animated={false} />)
+    expect(container.querySelector('.gm-ai-sprite')?.getAttribute('data-animated')).toBe('false')
   })
 
   it('未显式传入 state 时跟随全局助手状态实时变化', () => {

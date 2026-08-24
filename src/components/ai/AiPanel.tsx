@@ -4,11 +4,9 @@ import { useChatStore } from '@/stores/chatStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import type { RagSource, TimelineItem, PendingEdit } from '@/stores/chatStore'
 import { useAiChat } from '@/hooks/useAiChat'
-import { Button, Icon } from 'animal-island-ui'
+import { Button } from 'animal-island-ui'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import mascotIdle from '@/assets/ai-mascot/mascot-idle.png'
-import mascotStreaming from '@/assets/ai-mascot/mascot-streaming.gif'
 import { AiSprite } from '@/components/ai/AiSprite'
 import { PromptComposer } from '@/components/ai/PromptComposer'
 import { readRememberedFile } from '@/services/persistedFileAccess'
@@ -1540,7 +1538,7 @@ export const ChatBubble = memo(function ChatBubble({
       } : undefined}
     >
       {!isUser && (
-        <AiAvatar size="message" streaming={isAssistantStreaming} bounce={isEmpty} />
+        <AiAvatar size="message" animated={isLast} streaming={isAssistantStreaming} />
       )}
       <div className="group relative min-w-0 w-fit max-w-[80%]">
         <div
@@ -1646,43 +1644,23 @@ function deriveArtifactTitle(type: ReadingArtifactType, content: string): string
 
 function AiAvatar({
   size,
+  animated = true,
   streaming = false,
-  bounce = false,
 }: {
   size: 'empty' | 'message'
+  animated?: boolean
   streaming?: boolean
-  bounce?: boolean
 }) {
-  const avatarStyle = useSettingsStore((s) => s.appearance.aiAvatarStyle)
   const className = size === 'empty'
     ? 'gm-ai-empty-icon-shell w-16 h-16 rounded-2xl flex items-center justify-center mb-4'
     : 'gm-ai-avatar w-9 h-9 rounded-xl flex items-center justify-center mr-2 flex-shrink-0 mt-1'
 
-  if (avatarStyle === 'sprite') {
-    // 历史消息头像固定 idle 静态展示，仅空态图标与当前流式消息跟随实时状态
-    const forceIdle = size === 'message' && !streaming
-    return (
-      <div className={className}>
-        <AiSprite size={size === 'empty' ? 56 : 30} state={forceIdle ? 'idle' : undefined} />
-      </div>
-    )
-  }
-
-  if (avatarStyle !== 'mascot') {
-    return (
-      <div className={className}>
-        <Icon name="icon-chat" size={size === 'empty' ? 38 : 20} bounce={bounce} className="gm-ai-chat-icon" />
-      </div>
-    )
-  }
-
+  // 历史消息头像固定 idle 静态展示，仅空态图标与当前流式消息跟随实时状态。
+  const forceIdle = size === 'message' && !streaming
+  const spriteClassName = size === 'message' ? `${className} gm-ai-avatar--sprite` : className
   return (
-    <div className={`${className} gm-ai-avatar--mascot`} data-streaming={streaming || undefined}>
-      {streaming ? (
-        <img src={mascotStreaming} alt="AI 正在生成" className="gm-ai-mascot-image gm-ai-mascot-image--streaming" />
-      ) : (
-        <img src={mascotIdle} alt="AI 吉祥物" className="gm-ai-mascot-image" />
-      )}
+    <div className={spriteClassName}>
+      <AiSprite size={size === 'empty' ? 56 : 44} state={forceIdle ? 'idle' : undefined} animated={animated} />
     </div>
   )
 }

@@ -43,7 +43,8 @@ export const THEME_IDS = ['warm', 'light', 'dark', 'paper', 'github-light'] as c
 export type ThemeId = typeof THEME_IDS[number]
 export type NonDarkThemeId = Exclude<ThemeId, 'dark'>
 
-export const AI_AVATAR_STYLES = ['icon', 'mascot', 'sprite'] as const
+// 保留字段名与持久化结构，避免旧版本配置读取失败；运行时唯一头像方案为小球。
+export const AI_AVATAR_STYLES = ['sprite'] as const
 export type AiAvatarStyle = typeof AI_AVATAR_STYLES[number]
 
 interface AppearanceSettings {
@@ -114,7 +115,7 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
 
 const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   customCursorEnabled: false,
-  aiAvatarStyle: 'icon',
+  aiAvatarStyle: 'sprite',
   themeId: 'warm',
   lastLightThemeId: 'warm',
 }
@@ -165,18 +166,10 @@ export function resolveAiAvatarStyle(
   appearance: unknown,
   current: { appearance: AppearanceSettings },
 ): AiAvatarStyle {
-  if (appearance && typeof appearance === 'object') {
-    const saved = appearance as Record<string, unknown>
-    // 新枚举字段优先
-    if (typeof saved.aiAvatarStyle === 'string' && AI_AVATAR_STYLES.includes(saved.aiAvatarStyle as AiAvatarStyle)) {
-      return saved.aiAvatarStyle as AiAvatarStyle
-    }
-    // 迁移旧布尔值：true→吉祥物，false→图标
-    if (typeof saved.aiMascotAvatarEnabled === 'boolean') {
-      return saved.aiMascotAvatarEnabled ? 'mascot' : 'icon'
-    }
-  }
-  return current.appearance.aiAvatarStyle
+  // 兼容旧版 aiAvatarStyle 与 aiMascotAvatarEnabled，但已移除的方案统一迁移为小球。
+  void appearance
+  void current
+  return 'sprite'
 }
 
 export function syncDocumentTheme(themeId: ThemeId) {
