@@ -156,6 +156,23 @@ describe('embedDocument oversized input fallback', () => {
 })
 
 describe('embedding preprocessing compatibility', () => {
+  it('does not calculate embedding input hashes when no embedding model is configured', async () => {
+    const content = 'anonymous chunk without embedding configuration'
+    const reconciled = await reconcileDocumentChunks(
+      undefined,
+      {
+        id: 'anonymous-document', filePath: 'D:/anonymous/no-model.md', title: 'anonymous', content,
+        contentHash: 'document-hash', lastModified: 1,
+      },
+      [createChunk(content)],
+      null,
+    )
+
+    expect(reconciled.document.chunks[0].embeddingInputHash).toBeUndefined()
+    expect(reconciled.document.chunks[0].embeddingModel).toBeNull()
+    expect(reconciled.stats.reembedded).toBe(0)
+  })
+
   it('keeps the parent id while progressively replacing a v1 vector', async () => {
     const content = 'unchanged anonymous parent chunk'
     const inputHash = await createEmbeddingInputHash({ content })

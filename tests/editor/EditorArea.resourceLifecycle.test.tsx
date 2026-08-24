@@ -1096,7 +1096,7 @@ describe('Smart large doc prewarm suppression', () => {
     expect(resourceBalance('left-preview')).toBe(1)
   })
 
-  it('turbo + 100000-char doc still prewarms preview', async () => {
+  it('turbo + 100000-char doc does not create a blocking hidden preview', async () => {
     const content = 'x'.repeat(100000)
     setup([anonymousTab('doc-a', content)], 'doc-a', 'edit', { modePerformancePolicy: 'speed' })
     render(<EditorArea />)
@@ -1107,9 +1107,8 @@ describe('Smart large doc prewarm suppression', () => {
     act(() => vi.advanceTimersByTime(2500))
     act(() => vi.advanceTimersByTime(2500))
 
-    // Turbo should still prewarm preview for large docs
-    expect(countEvent('model-create')).toBeGreaterThan(modelCreatesBefore)
-    expect(resourceBalance('left-preview')).toBe(1)
+    expect(countEvent('model-create')).toBe(modelCreatesBefore)
+    expect(resourceBalance('left-preview')).toBe(0)
   })
 })
 
