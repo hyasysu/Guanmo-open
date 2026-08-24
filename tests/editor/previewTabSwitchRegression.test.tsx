@@ -185,7 +185,7 @@ async function settleLazyEditorModules() {
 }
 
 describe('preview horizontal overflow boundary', () => {
-  it('hides pane-wide horizontal overflow while preserving local scrollers', () => {
+  it('hides pane-wide horizontal overflow while preserving local scrollers', async () => {
     const content = [
       '# 横向溢出边界',
       '',
@@ -208,6 +208,7 @@ describe('preview horizontal overflow boundary', () => {
     })
 
     const { container } = render(<EditorArea />)
+    await settleLazyEditorModules()
     const previewPanes = container.querySelectorAll(
       '.overflow-y-auto.overflow-x-hidden.select-text.bg-gm-surface',
     )
@@ -226,7 +227,7 @@ describe('preview horizontal overflow boundary', () => {
 // ============================================================
 describe('preview visibility regression: restoredPreviewKeysRef race', () => {
   describe('mode switch on same tab with saved scroll position', () => {
-    it('preview→edit→preview cycle does not permanently hide preview', () => {
+    it('preview→edit→preview cycle does not permanently hide preview', async () => {
       // The "Document switch" useEffect has viewMode in its dependency array.
       // When viewMode changes (even without tab change), the effect body runs.
       // But the guard `if (prev && activeTabId && prev !== activeTabId)` prevents
@@ -237,6 +238,7 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
       const tab = anonymousTab('tab-a', longContent)
       setupEditor([tab], 'tab-a', 'preview', { modePerformancePolicy: 'balanced' })
       const { container } = render(<EditorArea />)
+      await settleLazyEditorModules()
 
       const preview = getLeftPreviewContainer(container)
       expect(preview).toBeTruthy()
@@ -263,11 +265,12 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
       expect(container.textContent).toContain('模式切换')
     })
 
-    it('edit-preview→edit→edit-preview cycle preserves preview visibility', () => {
+    it('edit-preview→edit→edit-preview cycle preserves preview visibility', async () => {
       const longContent = '# 编辑预览模式\n\n' + Array.from({ length: 80 }, (_, i) => `内容 ${i + 1}`).join('\n\n')
       const tab = anonymousTab('tab-a', longContent)
       setupEditor([tab], 'tab-a', 'edit-preview', { syncScroll: true, modePerformancePolicy: 'balanced' })
       const { container } = render(<EditorArea />)
+      await settleLazyEditorModules()
 
       const preview = getLeftPreviewContainer(container)
       expect(preview).toBeTruthy()
@@ -298,7 +301,7 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
   })
 
   describe('tab switch in preview mode', () => {
-    it('tab switch remounts container and keeps preview visible', () => {
+    it('tab switch remounts container and keeps preview visible', async () => {
       // When switching tabs, the preview container's key changes, causing a remount.
       // The new container starts with scrollTop=0, so leftPreviewMasked should be false.
       // The restore useLayoutEffect fires because activePreview.version changes.
@@ -315,6 +318,7 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
       const tabB = anonymousTab('tab-b', '# 文档 B\n\n段落 B\n'.repeat(40))
       setupEditor([tabA, tabB], 'tab-a', 'preview')
       const { container } = render(<EditorArea />)
+      await settleLazyEditorModules()
 
       expect(container.textContent).toContain('文档 A')
 
@@ -348,7 +352,7 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
       expect(blocks[1]).toHaveAttribute('data-md-line', '6')
     })
 
-    it('three-way tab switch preserves preview visibility', () => {
+    it('three-way tab switch preserves preview visibility', async () => {
       const tabs = [
         anonymousTab('tab-a', '# A\n\n' + '内容 A\n'.repeat(50)),
         anonymousTab('tab-b', '# B\n\n内容 B'),
@@ -356,6 +360,7 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
       ]
       setupEditor(tabs, 'tab-a', 'preview')
       const { container } = render(<EditorArea />)
+      await settleLazyEditorModules()
 
       // Save scroll for tab-a
       const preview = getLeftPreviewContainer(container)
@@ -380,11 +385,12 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
   })
 
   describe('tab switch in edit-preview mode', () => {
-    it('switching tabs in edit-preview keeps both editor and preview visible', () => {
+    it('switching tabs in edit-preview keeps both editor and preview visible', async () => {
       const tabA = anonymousTab('tab-a', '# 编辑预览 A\n\n' + '段落\n'.repeat(50))
       const tabB = anonymousTab('tab-b', '# 编辑预览 B\n\n其他内容')
       setupEditor([tabA, tabB], 'tab-a', 'edit-preview', { syncScroll: true })
       const { container } = render(<EditorArea />)
+      await settleLazyEditorModules()
 
       // Save scroll for tab-a's preview
       const preview = getLeftPreviewContainer(container)
@@ -412,12 +418,13 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
   })
 
   describe('virtualized preview scroll synchronization', () => {
-    it('keeps advancing the editor after the preview scrolls beyond the initially mounted blocks', () => {
+    it('keeps advancing the editor after the preview scrolls beyond the initially mounted blocks', async () => {
       const scrollIntoViewSpy = vi.spyOn(EditorView, 'scrollIntoView')
       const longContent = '# 连续同步测试\n\n' + Array.from({ length: 240 }, (_, i) => `段落 ${i + 1}\n第二行 ${i + 1}`).join('\n\n')
       const tab = anonymousTab('tab-a', longContent)
       setupEditor([tab], 'tab-a', 'edit-preview', { syncScroll: true, modePerformancePolicy: 'balanced' })
       const { container } = render(<EditorArea />)
+      await settleLazyEditorModules()
       act(() => vi.advanceTimersByTime(50))
 
       const preview = getLeftPreviewContainer(container)
@@ -461,10 +468,11 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
       })
     })
 
-    it('does not persist the preview target scroll produced by an editor scroll', () => {
+    it('does not persist the preview target scroll produced by an editor scroll', async () => {
       const longContent = '# 来源隔离测试\n\n' + Array.from({ length: 160 }, (_, i) => `段落 ${i + 1}`).join('\n\n')
       setupEditor([anonymousTab('tab-a', longContent)], 'tab-a', 'edit-preview', { syncScroll: true })
       const { container } = render(<EditorArea />)
+      await settleLazyEditorModules()
       act(() => vi.advanceTimersByTime(50))
 
       const preview = getLeftPreviewContainer(container)!
@@ -500,11 +508,12 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
       })
     })
 
-    it('preview render-induced scroll and content update never move the left editor', () => {
+    it('preview render-induced scroll and content update never move the left editor', async () => {
       const longContent = '# 左侧稳定测试\n\n' + Array.from({ length: 160 }, (_, i) => `段落 ${i + 1}\n第二行 ${i + 1}`).join('\n\n')
       const tab = anonymousTab('tab-a', longContent)
       setupEditor([tab], 'tab-a', 'edit-preview', { syncScroll: true, modePerformancePolicy: 'balanced' })
       const { container } = render(<EditorArea />)
+      await settleLazyEditorModules()
       act(() => vi.advanceTimersByTime(50))
 
       const preview = getLeftPreviewContainer(container)!

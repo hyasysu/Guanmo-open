@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { EditorView } from '@codemirror/view'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
@@ -20,9 +20,9 @@ import { markStartupPoint } from '@/services/startupPerformance'
 import { hasBootSnapshotContent } from '@/services/bootSnapshot'
 import { OPEN_EDITOR_SEARCH_EVENT } from '@/services/editorEvents'
 import { EditorContextMenu } from './EditorContextMenu'
-import { MarkdownPreview, MarkdownToc, type MarkdownBlockCommitRequest, type MarkdownPreviewHandle } from './MarkdownPreview'
+import { MarkdownToc } from './MarkdownToc'
+import type { MarkdownBlockCommitRequest, MarkdownPreviewHandle } from './markdownPreviewTypes'
 import { CodeMirrorEditor } from './CodeMirrorEditor'
-import { MarkdownDiffView } from './MarkdownDiffView'
 import { SearchOverlay } from './SearchOverlay'
 import { TabBar } from './TabBar'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
@@ -40,6 +40,13 @@ import {
   type PrewarmedModeKeys,
   type InstanceType,
 } from '@/services/editorSession'
+
+const LazyMarkdownPreview = lazy(() => import('./MarkdownPreview').then(({ MarkdownPreview }) => ({ default: MarkdownPreview })))
+const LazyMarkdownDiffView = lazy(() => import('./MarkdownDiffView').then(({ MarkdownDiffView }) => ({ default: MarkdownDiffView })))
+
+function PreviewSuspenseFallback() {
+  return <div className="h-full min-h-0 w-full bg-gm-surface" aria-hidden="true" />
+}
 
 interface PreviewMenuState {
   x: number
@@ -279,6 +286,9 @@ export function EditorArea() {
   const [tocFocus, setTocFocus] = useState<'editor' | 'preview'>('editor')
   const [previewMenu, setPreviewMenu] = useState<PreviewMenuState | null>(null)
   const [prewarmedModeKeys, setPrewarmedModeKeys] = useState<PrewarmedModeKeys>({})
+  const [activeDocumentFirstScreenReady, setActiveDocumentFirstScreenReady] = useState(false)
+  const activeDocumentFirstScreenReadyRef = useRef(false)
+  const firstScreenDocumentIdRef = useRef<string | null>(activeTabId)
   const prewarmedModeKeysRef = useRef<PrewarmedModeKeys>({})
   prewarmedModeKeysRef.current = prewarmedModeKeys
   const warmedModeKeysRef = useRef<Set<string>>(new Set())
@@ -312,6 +322,9 @@ export function EditorArea() {
   const rightTab = retainedRightTabRef.current
   const leftPreviewVisible = viewMode === 'preview' || viewMode === 'edit-preview' || viewMode === 'dual-preview'
   const editorVisible = viewMode === 'edit' || viewMode === 'edit-preview'
+  const previewContentReady = Boolean(activeTab && (
+    !activeTab.filePath || activeTab.modified || activeTab.content.length > 0 || hasBootSnapshotContent(activeTab)
+  ))
 
   const [leftPreviewMounted, setLeftPreviewMounted] = useState(false)
   const [rightPreviewMounted, setRightPreviewMounted] = useState(false)
@@ -627,14 +640,35 @@ export function EditorArea() {
 
   // Emit first-visible events after DOM commit (requestAnimationFrame)
   const editorBecameVisibleRef = useRef(false)
-  const previewBecameVisibleRef = useRef(false)
+  const markActiveDocumentFirstScreenReady = useCallback((documentId: string) => {
+    if (activeTabIdRef.current !== documentId) return false
+    if (firstScreenDocumentIdRef.current !== documentId) {
+      firstScreenDocumentIdRef.current = documentId
+      activeDocumentFirstScreenReadyRef.current = false
+    }
+    if (activeDocumentFirstScreenReadyRef.current) return true
+    activeDocumentFirstScreenReadyRef.current = true
+    setActiveDocumentFirstScreenReady(true)
+    return true
+  }, [])
+
+  useEffect(() => {
+    if (firstScreenDocumentIdRef.current === activeTabId) return
+    firstScreenDocumentIdRef.current = activeTabId
+    activeDocumentFirstScreenReadyRef.current = false
+    editorBecameVisibleRef.current = false
+    setActiveDocumentFirstScreenReady(false)
+  }, [activeTabId])
+
   useEffect(() => {
     const contentReady = activeTab && (
       !activeTab.filePath || activeTab.modified || activeTab.content.length > 0 || hasBootSnapshotContent(activeTab)
     )
     if (editorVisible && editorMounted && !editorBecameVisibleRef.current && activeTab?.id && contentReady) {
       editorBecameVisibleRef.current = true
+      const documentId = activeTab.id
       const raf = requestAnimationFrame(() => {
+        if (!markActiveDocumentFirstScreenReady(documentId)) return
         markStartupPoint('active-document-first-visible', {
           surface: 'editor',
           charCount: activeTab.content.length,
@@ -657,38 +691,7 @@ export function EditorArea() {
     if (!editorVisible && !editorMounted) {
       editorBecameVisibleRef.current = false
     }
-  }, [editorVisible, editorMounted, activeTab?.id, activeTab?.content.length, viewMode, modePerformancePolicy])
-
-  useEffect(() => {
-    const contentReady = activeTab && (
-      !activeTab.filePath || activeTab.modified || activeTab.content.length > 0 || hasBootSnapshotContent(activeTab)
-    )
-    if (leftPreviewVisible && leftPreviewMounted && !previewBecameVisibleRef.current && activeTab?.id && contentReady) {
-      previewBecameVisibleRef.current = true
-      const raf = requestAnimationFrame(() => {
-        markStartupPoint('active-document-first-visible', {
-          surface: 'preview',
-          charCount: activeTab.content.length,
-        })
-        markStartupPoint('preview-first-visible', {
-          charCount: activeTab.content.length,
-          mode: viewMode,
-          policy: modePerformancePolicy,
-        })
-        if (import.meta.env.DEV) {
-          eventMarker.mark('preview-first-visible', {
-            charCount: activeTab.content.length,
-            mode: viewMode,
-            policy: modePerformancePolicy,
-          })
-        }
-      })
-      return () => cancelAnimationFrame(raf)
-    }
-    if (!leftPreviewVisible && !leftPreviewMounted) {
-      previewBecameVisibleRef.current = false
-    }
-  }, [leftPreviewVisible, leftPreviewMounted, activeTab?.id, activeTab?.content.length, viewMode, modePerformancePolicy])
+  }, [activeTab?.content.length, activeTab?.id, editorMounted, editorVisible, markActiveDocumentFirstScreenReady, modePerformancePolicy, viewMode])
 
   // Document switch: always release old document instances
   const prevActiveTabIdRef = useRef(activeTabId)
@@ -857,6 +860,7 @@ export function EditorArea() {
   useEffect(() => {
     const canPrewarm = modePrewarm !== 'off' && modeResourcePolicy !== 'memory'
     if (!activeTab?.id || !canPrewarm) return
+    if (!activeDocumentFirstScreenReadyRef.current || !activeDocumentFirstScreenReady) return
     if (activePreview.pending || rightPreview.pending) return
 
     const target = getNextPrewarmTarget({
@@ -913,6 +917,7 @@ export function EditorArea() {
     return () => window.clearTimeout(timer)
   }, [
     activeDiffLineCount,
+    activeDocumentFirstScreenReady,
     activePreview.pending,
     activeTab?.content.length,
     activeTab?.id,
@@ -929,6 +934,7 @@ export function EditorArea() {
   useEffect(() => {
     const canPrewarm = modePrewarm !== 'off' && modeResourcePolicy !== 'memory'
     if (!activeTab?.id || !canPrewarm) return
+    if (!activeDocumentFirstScreenReadyRef.current || !activeDocumentFirstScreenReady) return
     const requestedModes = Object.keys(prewarmedModeKeys) as PrewarmTargetMode[]
     if (requestedModes.length === 0) return
     const now = Date.now()
@@ -999,7 +1005,7 @@ export function EditorArea() {
         setResourceMounted('diff', false)
       })
     }
-  }, [activeTab?.id, modePrewarm, prewarmedModeKeys, decideHiddenResource, setResourceMounted]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeDocumentFirstScreenReady, activeTab?.id, modePrewarm, prewarmedModeKeys, decideHiddenResource, setResourceMounted]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const getStoredPreviewTop = useCallback((tabId: string | null | undefined, pane: 'left' | 'right' = 'left') => {
     if (!tabId) return 0
@@ -1202,8 +1208,6 @@ export function EditorArea() {
     }
     if (leftPreviewVisible) {
       reportPreviewSwitchPerformance(activeTab.id, restoreStartedAt)
-      markStartupPoint('preview-render-complete', { mode: viewMode })
-      eventMarker.mark('preview-render-complete', { mode: viewMode })
     }
   }, [
     activePreview.version,
@@ -2256,6 +2260,32 @@ export function EditorArea() {
     return { previewSources }
   }
 
+  const handlePreviewFirstVisible = useCallback((documentId: string | null) => {
+    if (!documentId || !activeTab || !previewContentReady) return
+    if (!markActiveDocumentFirstScreenReady(documentId)) return
+    markStartupPoint('active-document-first-visible', {
+      surface: 'preview',
+      charCount: activeTab.content.length,
+    })
+    markStartupPoint('preview-first-visible', {
+      charCount: activeTab.content.length,
+      mode: viewMode,
+      policy: modePerformancePolicy,
+    })
+    if (import.meta.env.DEV) {
+      eventMarker.mark('preview-first-visible', {
+        charCount: activeTab.content.length,
+        mode: viewMode,
+        policy: modePerformancePolicy,
+      })
+    }
+  }, [activeTab?.content.length, activeTab?.id, markActiveDocumentFirstScreenReady, modePerformancePolicy, previewContentReady, viewMode])
+
+  const handlePreviewRenderComplete = useCallback(() => {
+    markStartupPoint('preview-render-complete', { mode: viewMode })
+    eventMarker.mark('preview-render-complete', { mode: viewMode })
+  }, [viewMode])
+
   return (
     <div
       className="flex-1 flex flex-col overflow-hidden bg-gm-canvas"
@@ -2270,17 +2300,19 @@ export function EditorArea() {
           <>
             {(viewMode === 'diff-preview' || diffMounted) && (
               <div className={viewMode === 'diff-preview' ? 'flex min-w-0 flex-1' : 'hidden'}>
-                <MarkdownDiffView
-                  original={activeTab?.originalContent || ''}
-                  current={activeTab?.content || ''}
-                  fontSize={editorFontSize}
-                  lineHeight={editorLineHeight}
-                  fontFamily={editorFontFamily}
-                  wordWrap={editorWordWrap}
-                  lineNumbers={editorLineNumbers}
-                  documentKey={activeTab?.id}
-                  resource="diff"
-                />
+                <Suspense fallback={<PreviewSuspenseFallback />}>
+                  <LazyMarkdownDiffView
+                    original={activeTab?.originalContent || ''}
+                    current={activeTab?.content || ''}
+                    fontSize={editorFontSize}
+                    lineHeight={editorLineHeight}
+                    fontFamily={editorFontFamily}
+                    wordWrap={editorWordWrap}
+                    lineNumbers={editorLineNumbers}
+                    documentKey={activeTab?.id}
+                    resource="diff"
+                  />
+                </Suspense>
               </div>
             )}
             <div className={`${viewMode === 'diff-preview' ? 'hidden' : 'flex'} flex-1 overflow-hidden bg-gm-surface`}>
@@ -2334,23 +2366,28 @@ export function EditorArea() {
                 onContextMenu={(e) => handlePreviewContextMenu(e, 'left')}
               >
                 {viewMode === 'dual-preview' && <PaneHeader title={activeTab?.title || ''} />}
-                <MarkdownPreview
-                  ref={leftMarkdownPreviewRef}
-                  content={leftPreviewRenderRef.current.content}
-                  filePath={leftPreviewRenderRef.current.filePath}
-                  fontSize={editorFontSize}
-                  lineHeight={editorLineHeight}
-                  fontFamily={editorFontFamily}
-                  wordWrap={editorWordWrap}
-                  documentKey={activeTab?.id}
-                  documentVersion={getContentSignature(activeTab?.content || '')}
-                  inlineEditEnabled={inlinePreviewEdit}
-                  onBlockCommit={handlePreviewBlockCommit}
-                  onHeadingClick={handleLeftPreviewHeadingClick}
-                  onTaskToggle={activeTab ? handleActiveTaskToggle : undefined}
-                  onDraftStateChange={handleLeftDraftStateChange}
-                  resource="left-preview"
-                />
+                <Suspense fallback={<PreviewSuspenseFallback />}>
+                  <LazyMarkdownPreview
+                    ref={leftMarkdownPreviewRef}
+                    content={leftPreviewRenderRef.current.content}
+                    filePath={leftPreviewRenderRef.current.filePath}
+                    fontSize={editorFontSize}
+                    lineHeight={editorLineHeight}
+                    fontFamily={editorFontFamily}
+                    wordWrap={editorWordWrap}
+                    documentKey={activeTab?.id}
+                    documentVersion={getContentSignature(activeTab?.content || '')}
+                    inlineEditEnabled={inlinePreviewEdit}
+                    onBlockCommit={handlePreviewBlockCommit}
+                    onHeadingClick={handleLeftPreviewHeadingClick}
+                    onTaskToggle={activeTab ? handleActiveTaskToggle : undefined}
+                    onDraftStateChange={handleLeftDraftStateChange}
+                    isVisible={leftPreviewVisible && previewContentReady}
+                    onFirstVisible={() => handlePreviewFirstVisible(activeTab?.id ?? null)}
+                    onRenderComplete={handlePreviewRenderComplete}
+                    resource="left-preview"
+                  />
+                </Suspense>
               </div>
             )}
 
@@ -2380,22 +2417,25 @@ export function EditorArea() {
                 }}
               />
               {rightTab ? (
-                <MarkdownPreview
-                  ref={rightMarkdownPreviewRef}
-                  content={rightPreview.content}
-                  filePath={rightTab.filePath}
-                  fontSize={editorFontSize}
-                  lineHeight={editorLineHeight}
-                  fontFamily={editorFontFamily}
-                  wordWrap={editorWordWrap}
-                  documentKey={rightTab.id}
-                  documentVersion={getContentSignature(rightTab.content)}
-                  inlineEditEnabled={inlinePreviewEdit}
-                  onBlockCommit={handlePreviewBlockCommit}
-                  onTaskToggle={handleRightTaskToggle}
-                  onDraftStateChange={handleRightDraftStateChange}
-                  resource="right-preview"
-                />
+                <Suspense fallback={<PreviewSuspenseFallback />}>
+                  <LazyMarkdownPreview
+                    ref={rightMarkdownPreviewRef}
+                    content={rightPreview.content}
+                    filePath={rightTab.filePath}
+                    fontSize={editorFontSize}
+                    lineHeight={editorLineHeight}
+                    fontFamily={editorFontFamily}
+                    wordWrap={editorWordWrap}
+                    documentKey={rightTab.id}
+                    documentVersion={getContentSignature(rightTab.content)}
+                    inlineEditEnabled={inlinePreviewEdit}
+                    onBlockCommit={handlePreviewBlockCommit}
+                    onTaskToggle={handleRightTaskToggle}
+                    onDraftStateChange={handleRightDraftStateChange}
+                    isVisible={viewMode === 'dual-preview'}
+                    resource="right-preview"
+                  />
+                </Suspense>
               ) : (
                 <div className="flex items-center justify-center h-full text-gm-text-tertiary text-caption">
                   {'拖拽标签页到此处，或右键选择"在右栏打开"'}

@@ -1,7 +1,8 @@
 import { act, render } from '@testing-library/react'
 import { createRef } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MarkdownPreview, type MarkdownPreviewHandle } from '@/components/editor/MarkdownPreview'
+import { MarkdownPreview } from '@/components/editor/MarkdownPreview'
+import type { MarkdownPreviewHandle } from '@/components/editor/markdownPreviewTypes'
 
 const MINIMAL_FRONT_MATTER_DOCUMENT = [
   '---',

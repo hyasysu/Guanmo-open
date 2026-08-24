@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from 'animal-island-ui'
-import { MarkdownPreview } from '@/components/editor/MarkdownPreview'
 import { toast } from '@/services/toast'
 import {
   GITHUB_REPOSITORY_URL,
@@ -8,6 +7,8 @@ import {
   openReleaseInSystemBrowser,
 } from '@/services/updateService'
 import { useUpdateStore } from '@/stores/updateStore'
+
+const LazyMarkdownPreview = lazy(() => import('@/components/editor/MarkdownPreview').then(({ MarkdownPreview }) => ({ default: MarkdownPreview })))
 
 export function UpdateDetailsModal() {
   const details = useUpdateStore((state) => state.selectedRelease)
@@ -110,10 +111,12 @@ export function UpdateDetailsModal() {
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           <h3 className="mb-3 text-body font-bold text-gm-text">更新说明</h3>
-          <MarkdownPreview
-            content={details.release.body?.trim() || '本次发布暂无详细说明。'}
-            skipHtml
-          />
+          <Suspense fallback={<div className="min-h-32 w-full bg-gm-surface" aria-hidden="true" />}>
+            <LazyMarkdownPreview
+              content={details.release.body?.trim() || '本次发布暂无详细说明。'}
+              skipHtml
+            />
+          </Suspense>
         </div>
 
         <footer className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-gm-border px-5 py-4">

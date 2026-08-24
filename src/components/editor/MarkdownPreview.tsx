@@ -4,11 +4,11 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
-import { createContext, forwardRef, isValidElement, memo, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createContext, forwardRef, isValidElement, lazy, memo, Suspense, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '@/hooks/useTauri'
-import { createHeadingId, type TocItem } from '@/services/markdownToc'
+import { createHeadingId } from '@/services/markdownToc'
 import { remarkStandaloneDisplayMath } from '@/services/markdownMath'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { createMarkdownPreviewModel, computeVisibleRange, findAnchorTarget, findBlockIndexByOffset, getEstimatedPreviewLineForTop, getEstimatedPreviewTopForLine, getSourceOffsetForLine, searchVisibleText, type PreviewBlock } from '@/services/markdownPreviewModel'
@@ -20,10 +20,27 @@ import {
   findWordRangeAt,
   getTextForSourceRange,
   previewHighlightRegistry,
-  type DocumentRange,
 } from '@/services/previewHighlight'
 import { eventMarker } from '@/services/eventMarker'
-import { InlineMarkdownBlockEditor } from './InlineMarkdownBlockEditor'
+import type {
+  MarkdownPreviewHandle,
+  MarkdownPreviewProps,
+  PreviewSearchState,
+} from './markdownPreviewTypes'
+export type {
+  MarkdownBlockCommitRequest,
+  MarkdownBlockCommitResult,
+  MarkdownPreviewHandle,
+  MarkdownPreviewProps,
+  PreviewSearchState,
+  PreviewSelectionSnapshot,
+} from './markdownPreviewTypes'
+
+const LazyInlineMarkdownBlockEditor = lazy(() => import('./InlineMarkdownBlockEditor').then(({ InlineMarkdownBlockEditor }) => ({ default: InlineMarkdownBlockEditor })))
+
+function InlineMarkdownEditorSuspenseFallback() {
+  return <div className="gm-inline-markdown-editor min-h-12" aria-hidden="true" />
+}
 
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath, remarkStandaloneDisplayMath]
 const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex, rehypeHighlight]
@@ -41,67 +58,6 @@ function loadMarkdownHtmlPlugins(): Promise<RehypePlugins> {
   markdownHtmlPluginsPromise ??= import('@/services/markdownHtml')
     .then(({ MARKDOWN_HTML_REHYPE_PLUGINS }) => MARKDOWN_HTML_REHYPE_PLUGINS)
   return markdownHtmlPluginsPromise
-}
-
-export interface MarkdownBlockCommitRequest {
-  block: PreviewBlock
-  draft: string
-  documentKey: string
-  documentVersion: number | string
-}
-
-export type MarkdownBlockCommitResult =
-  | { status: 'applied'; content?: string }
-  | { status: 'conflict'; currentSource: string }
-
-/** 预览全文搜索状态：SearchOverlay 通过模型驱动各实例的高亮与 active 项 */
-export interface PreviewSearchState {
-  query: string
-  /** 当前 active 匹配的全局源码 offset（起点） */
-  activeOffset?: number
-}
-
-/** 统一 Range 选区快照：供右键菜单、复制、AI 上下文等消费 */
-export interface PreviewSelectionSnapshot {
-  range: DocumentRange
-  from: number
-  to: number
-  text: string
-  startLine: number
-  endLine: number
-}
-
-export interface MarkdownPreviewHandle {
-  scrollToLine: (line: number) => void
-  scrollToOffset: (offset: number) => void
-  getTopForLine: (line: number) => number | undefined
-  getLineForTop: (top: number) => number | undefined
-  /** 当前视口顶部对应的源码 offset（供搜索锚点定位最近匹配）；无容器/未挂载时返回 undefined */
-  getViewportOffset: () => number | undefined
-  setSearchState: (state: PreviewSearchState | null) => void
-  /** 基于可见文本投影搜索全文，返回源码 offset 匹配（供 SearchOverlay 统一计数语义） */
-  searchVisible: (query: string) => Array<{ from: number; to: number }>
-  getSelection: () => PreviewSelectionSnapshot | null
-  selectAll: () => void
-  clearSelection: () => void
-}
-
-interface MarkdownPreviewProps {
-  content: string
-  filePath?: string | null
-  fontSize?: number
-  lineHeight?: number
-  fontFamily?: string
-  wordWrap?: boolean
-  skipHtml?: boolean
-  documentKey?: string
-  documentVersion?: number | string
-  inlineEditEnabled?: boolean
-  onBlockCommit?: (request: MarkdownBlockCommitRequest) => Promise<MarkdownBlockCommitResult> | MarkdownBlockCommitResult
-  onTaskToggle?: (line: number, checked: boolean) => void
-  onHeadingClick?: (line: number) => void
-  onDraftStateChange?: (hasDraft: boolean) => void
-  resource?: 'preview' | 'left-preview' | 'right-preview'
 }
 
 interface ActiveBlockEdit {
@@ -260,6 +216,9 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   onTaskToggle,
   onHeadingClick,
   onDraftStateChange,
+  isVisible = true,
+  onFirstVisible,
+  onRenderComplete,
   resource = 'preview',
 }: MarkdownPreviewProps, ref: React.ForwardedRef<MarkdownPreviewHandle>) {
   const rootRef = useRef<HTMLDivElement>(null)
@@ -276,6 +235,9 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const handledAltClickRef = useRef(false)
   const mountedRef = useRef(true)
   const onBlockCommitRef = useRef(onBlockCommit)
+  const onFirstVisibleRef = useRef(onFirstVisible)
+  const onRenderCompleteRef = useRef(onRenderComplete)
+  const firstVisibleRef = useRef(false)
   const lifecycleMetadataRef = useRef({ documentKey, resource })
   const scrollRestoreRef = useRef<{ scrollTop: number; container: HTMLElement } | null>(null)
   const displayedContent = activeEdit?.contentSnapshot ?? optimisticContent?.content ?? content
@@ -384,6 +346,19 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   optimisticContentRef.current = optimisticContent
   documentVersionRef.current = documentVersion
   onBlockCommitRef.current = onBlockCommit
+  onFirstVisibleRef.current = onFirstVisible
+  onRenderCompleteRef.current = onRenderComplete
+
+  useLayoutEffect(() => {
+    if (!isVisible || firstVisibleRef.current || !rootRef.current) return
+    firstVisibleRef.current = true
+    onFirstVisibleRef.current?.()
+  }, [documentKey, isVisible, resource])
+
+  useLayoutEffect(() => {
+    if (!isVisible || !rootRef.current) return
+    onRenderCompleteRef.current?.()
+  }, [displayedContent, documentKey, documentVersion, isVisible, resource])
 
   useEffect(() => {
     onDraftStateChange?.(activeEdit !== null)
@@ -437,6 +412,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   ) => {
     const block = modelRef.current.blocks[index]
     if (!block) return
+    const hasExplicitKinds = kinds.search !== undefined || kinds.selection !== undefined
+    if (!hasExplicitKinds && !searchStateRef.current && !selectionRangeRef.current) return
     const next: { search?: globalThis.Range[]; searchActive?: globalThis.Range[]; selection?: globalThis.Range[] } = {}
     if (kinds.search !== false) {
       const searchState = searchStateRef.current
@@ -1755,21 +1732,23 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
             zIndex: 10,
           }}
         >
-          <InlineMarkdownBlockEditor
-            block={activeEdit.block}
-            initialCursor={activeEdit.initialCursor}
-            fontSize={fontSize}
-            lineHeight={lineHeight}
-            fontFamily={fontFamily}
-            wordWrap={wordWrap}
-            conflict={activeEdit.conflict}
-            onDraftChange={(draft) => { draftRef.current = draft }}
-            onSubmit={(draft) => {
-              draftRef.current = draft
-              void submitActiveEdit()
-            }}
-            onCopyDraft={(draft) => void navigator.clipboard.writeText(draft)}
-          />
+          <Suspense fallback={<InlineMarkdownEditorSuspenseFallback />}>
+            <LazyInlineMarkdownBlockEditor
+              block={activeEdit.block}
+              initialCursor={activeEdit.initialCursor}
+              fontSize={fontSize}
+              lineHeight={lineHeight}
+              fontFamily={fontFamily}
+              wordWrap={wordWrap}
+              conflict={activeEdit.conflict}
+              onDraftChange={(draft) => { draftRef.current = draft }}
+              onSubmit={(draft) => {
+                draftRef.current = draft
+                void submitActiveEdit()
+              }}
+              onCopyDraft={(draft) => void navigator.clipboard.writeText(draft)}
+            />
+          </Suspense>
         </div>
       )}
       {zoomImage && (
@@ -2148,110 +2127,5 @@ function MermaidBlock({ code, startLine, endLine }: { code: string; startLine?: 
         <div className="text-caption text-gm-text-tertiary">正在渲染 Mermaid...</div>
       )}
     </div>
-  )
-}
-
-interface MarkdownTocSection {
-  key: string
-  title: string
-  toc: TocItem[]
-  onHeadingClick: (item: TocItem) => void
-  emptyText?: string
-  activeHeading?: string | null
-}
-
-export function MarkdownToc({
-  toc = [],
-  collapsed,
-  onToggle,
-  onHeadingClick,
-  sections,
-  activeHeading,
-}: {
-  toc?: TocItem[]
-  collapsed: boolean
-  onToggle: () => void
-  onHeadingClick?: (item: TocItem) => void
-  sections?: MarkdownTocSection[]
-  activeHeading?: string | null
-}) {
-  const explicitSections = sections && sections.length > 0
-    ? sections.slice(0, 2)
-    : null
-  const visibleSections = explicitSections
-    ? explicitSections
-    : toc.length > 1
-      ? [{ key: 'toc', title: '目录', toc, onHeadingClick: onHeadingClick ?? (() => {}) }]
-      : []
-  const dualColumn = visibleSections.length > 1
-
-  if (visibleSections.length === 0) return null
-
-  return (
-    <aside
-      className={`gm-markdown-toc relative h-full flex-shrink-0 ${dualColumn ? 'gm-markdown-toc--dual' : ''} ${
-        collapsed ? 'w-0' : 'gm-markdown-toc--expanded border-l border-gm-border-subtle bg-gm-surface'
-      }`}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-label={collapsed ? '展开目录' : '收起目录'}
-        aria-expanded={!collapsed}
-        className="absolute left-0 top-1/2 z-10 flex h-12 w-5 -translate-x-full -translate-y-1/2 items-center justify-center rounded-l-2xl border border-r-0 border-gm-border bg-gm-surface text-gm-text-tertiary shadow-sm hover:border-gm-primary/40 hover:bg-gm-surface-hover hover:text-gm-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gm-primary/40"
-        title={collapsed ? '展开目录' : '收起目录'}
-      >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d={collapsed ? 'M15 18l-6-6 6-6' : 'M9 18l6-6-6-6'} />
-        </svg>
-      </button>
-      {!collapsed && (
-        <nav aria-label="文档目录" className="h-full pl-4 pr-0 py-3 text-micro text-gm-text-tertiary">
-          <div className={dualColumn ? 'flex h-full gap-3 overflow-hidden' : 'max-h-full space-y-4 overflow-y-auto'}>
-            {visibleSections.map((section) => (
-              <section key={section.key} className={dualColumn ? 'flex min-h-0 min-w-0 flex-1 flex-col' : 'pr-4'}>
-                <div className="mb-2 truncate font-bold text-gm-text-secondary" title={section.title}>
-                  {section.title}
-                </div>
-                <div className={dualColumn ? 'min-h-0 flex-1 space-y-1 overflow-y-auto' : 'space-y-1'}>
-                  {section.toc.length > 1 ? (
-                    section.toc.map((item) => {
-                      const currentActive = section.activeHeading !== undefined ? section.activeHeading : activeHeading
-                      const isActive = currentActive === item.id
-                      return (
-                        <button
-                          key={`${section.key}-${item.id}-${item.line}`}
-                          type="button"
-                          onClick={() => section.onHeadingClick(item)}
-                          className={`block w-full truncate rounded-md py-1 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gm-primary/30 ${
-                            isActive
-                              ? 'font-bold'
-                              : 'hover:bg-gm-surface-hover hover:text-gm-primary'
-                          }`}
-                          style={{
-                            paddingLeft: 6 + Math.max(0, item.level - 1) * 10,
-                            ...(isActive ? {
-                              backgroundColor: 'color-mix(in srgb, var(--gm-active-indicator) 10%, transparent)',
-                              color: 'var(--gm-active-indicator)',
-                            } : {}),
-                          }}
-                          title={`${item.text}（第 ${item.line} 行）`}
-                        >
-                          {item.text}
-                        </button>
-                      )
-                    })
-                  ) : (
-                    <div className="rounded-md border border-dashed border-gm-border-subtle px-3 py-2 text-gm-text-muted">
-                      {section.emptyText ?? '无目录'}
-                    </div>
-                  )}
-                </div>
-              </section>
-            ))}
-          </div>
-        </nav>
-      )}
-    </aside>
   )
 }

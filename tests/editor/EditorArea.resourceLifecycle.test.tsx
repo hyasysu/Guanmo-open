@@ -163,6 +163,18 @@ async function waitForAsyncCommit(expectedCalls: number) {
   })
 }
 
+async function settleLazyEditorModules() {
+  await act(async () => {
+    await vi.dynamicImportSettled()
+    await Promise.resolve()
+  })
+  await act(async () => {
+    await vi.dynamicImportSettled()
+  })
+  // 阶段 2：预热只允许从真实编辑器/预览首屏回调之后开始计时。
+  act(() => vi.advanceTimersByTime(1))
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'Date'] })
   vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
@@ -228,9 +240,10 @@ afterEach(() => {
 // 1. Real component TTL evidence
 // ============================================================
 describe('Real component TTL lifecycle', () => {
-  it('balanced small doc stays mounted for 45s then disposes via real create/dispose events', () => {
+  it('balanced small doc stays mounted for 45s then disposes via real create/dispose events', async () => {
     setup([anonymousTab('doc-a', '# Small')], 'doc-a', 'edit-preview')
     render(<EditorArea />)
+    await settleLazyEditorModules()
 
     expect(resourceBalance('left-preview')).toBe(1)
 
@@ -243,10 +256,11 @@ describe('Real component TTL lifecycle', () => {
     expect(resourceBalance('left-preview')).toBe(0)
   })
 
-  it('balanced 100000-char doc stays mounted for 5s then disposes', () => {
+  it('balanced 100000-char doc stays mounted for 5s then disposes', async () => {
     const content = 'x'.repeat(100000)
     setup([anonymousTab('doc-big', content)], 'doc-big', 'edit-preview')
     render(<EditorArea />)
+    await settleLazyEditorModules()
 
     act(() => useEditorStore.getState().setViewMode('edit'))
     act(() => vi.advanceTimersByTime(BALANCED_LARGE_DOC_TTL_MS - 1))
@@ -256,9 +270,10 @@ describe('Real component TTL lifecycle', () => {
     expect(countEvent('model-dispose')).toBeGreaterThanOrEqual(1)
   })
 
-  it('rerenders do not reset or cancel TTL', () => {
+  it('rerenders do not reset or cancel TTL', async () => {
     setup([anonymousTab('doc-a', '# Small')], 'doc-a', 'edit-preview')
     const result = render(<EditorArea />)
+    await settleLazyEditorModules()
 
     act(() => useEditorStore.getState().setViewMode('edit'))
     act(() => vi.advanceTimersByTime(10000))
@@ -268,9 +283,10 @@ describe('Real component TTL lifecycle', () => {
     expect(countEvent('model-dispose')).toBeGreaterThanOrEqual(1)
   })
 
-  it('showing a hidden preview again cancels its old TTL', () => {
+  it('showing a hidden preview again cancels its old TTL', async () => {
     setup([anonymousTab('doc-a', '# Small')], 'doc-a', 'edit-preview')
     render(<EditorArea />)
+    await settleLazyEditorModules()
 
     act(() => useEditorStore.getState().setViewMode('edit'))
     act(() => vi.advanceTimersByTime(10000))
@@ -288,9 +304,10 @@ describe('Real component TTL lifecycle', () => {
     expect(resourceBalance('left-preview')).toBe(1)
   })
 
-  it('switching policy cancels the old balanced TTL', () => {
+  it('switching policy cancels the old balanced TTL', async () => {
     setup([anonymousTab('doc-a', '# Small')], 'doc-a', 'edit-preview')
     render(<EditorArea />)
+    await settleLazyEditorModules()
 
     act(() => useEditorStore.getState().setViewMode('edit'))
     act(() => vi.advanceTimersByTime(10000))
@@ -332,6 +349,7 @@ describe('Right preview pending/conflict', () => {
     setup(tabs, 'doc-a', 'dual-preview', { modePerformancePolicy: 'balanced' })
     useEditorStore.setState({ rightPaneTabId: 'doc-b', rightPaneUserSelected: true })
     const { container } = render(<EditorArea />)
+    await settleLazyEditorModules()
 
     // Verify right preview is mounted
     expect(countEvent('model-create')).toBeGreaterThanOrEqual(1)
@@ -374,6 +392,7 @@ describe('Right preview pending/conflict', () => {
     setup(tabs, 'doc-a', 'dual-preview', { modePerformancePolicy: 'memory' })
     useEditorStore.setState({ rightPaneTabId: 'doc-b', rightPaneUserSelected: true })
     const { container } = render(<EditorArea />)
+    await settleLazyEditorModules()
 
     // Alt+click to enter block editing in right preview
     altClickRightBlock(container, 0)
@@ -427,6 +446,7 @@ describe('Right preview pending/conflict', () => {
     setup(tabs, 'doc-a', 'dual-preview', { modePerformancePolicy: 'memory' })
     useEditorStore.setState({ rightPaneTabId: 'doc-b', rightPaneUserSelected: true })
     const { container } = render(<EditorArea />)
+    await settleLazyEditorModules()
 
     altClickRightBlock(container, 0)
     fireEvent.pointerDown(document.body, { pointerId: 2, clientX: 500, clientY: 500 })
@@ -459,13 +479,14 @@ describe('Right preview pending/conflict', () => {
 // 3. 100000-char loop test with real create/dispose balance
 // ============================================================
 describe('Large document lifecycle balance', () => {
-  it('create/dispose balance across repeated 100000-char mode/document switches with balanced policy', () => {
+  it('create/dispose balance across repeated 100000-char mode/document switches with balanced policy', async () => {
     const tabs = [
       anonymousTab('doc-a', 'a'.repeat(100000)),
       anonymousTab('doc-b', 'b'.repeat(100000)),
     ]
     setup(tabs, 'doc-a', 'edit-preview', { modePerformancePolicy: 'balanced' })
     const result = render(<EditorArea />)
+    await settleLazyEditorModules()
 
     const modes: ViewMode[] = ['edit', 'edit-preview', 'preview', 'dual-preview', 'diff-preview', 'edit-preview', 'edit']
     const docs = ['doc-a', 'doc-b', 'doc-a', 'doc-b', 'doc-a', 'doc-b', 'doc-a']
@@ -477,6 +498,7 @@ describe('Large document lifecycle balance', () => {
           useEditorStore.getState().setActiveTab(docs[i])
           useEditorStore.getState().setViewMode(modes[i])
         })
+        await settleLazyEditorModules()
         act(() => vi.advanceTimersByTime(BALANCED_LARGE_DOC_TTL_MS + 100))
         act(() => vi.advanceTimersByTime(1))
 
@@ -513,7 +535,7 @@ describe('Large document lifecycle balance', () => {
     expect(vi.getTimerCount()).toBe(0)
   }, 15000)
 
-  it('old document callbacks do not release new document instances', () => {
+  it('old document callbacks do not release new document instances', async () => {
     const tabs = [
       anonymousTab('doc-a', 'a'.repeat(100000)),
       anonymousTab('doc-b', 'b'.repeat(100000)),
@@ -521,6 +543,7 @@ describe('Large document lifecycle balance', () => {
     // balanced policy: large doc TTL = 5s
     setup(tabs, 'doc-a', 'edit-preview', { modePerformancePolicy: 'balanced' })
     const result = render(<EditorArea />)
+    await settleLazyEditorModules()
 
     // Switch to doc-b — doc-a's instances start their 5s TTL
     act(() => {
@@ -545,9 +568,61 @@ describe('Large document lifecycle balance', () => {
 // 4. Smart/turbo candidate coverage
 // ============================================================
 describe('Prewarm candidate lifecycle', () => {
-  it('smart creates real left preview candidate', () => {
+  it.each(['balanced', 'speed'] as const)('restores %s prewarm after switching preview tabs and ignores the old schedule', async (policy) => {
+    setup([
+      anonymousTab('doc-a', '# A'),
+      anonymousTab('doc-b', '# B'),
+    ], 'doc-a', 'preview', { modePerformancePolicy: policy })
+    render(<EditorArea />)
+    await settleLazyEditorModules()
+
+    const initialSchedules = lifecycle.events.filter((event) => event.type === 'prewarm-schedule')
+    const oldScheduleId = initialSchedules.at(-1)?.metadata?.scheduleId
+    expect(oldScheduleId).toBeTruthy()
+
+    act(() => useEditorStore.getState().setActiveTab('doc-b'))
+    await settleLazyEditorModules()
+
+    const switchedSchedules = lifecycle.events.filter((event) => event.type === 'prewarm-schedule')
+    const newScheduleId = switchedSchedules.at(-1)?.metadata?.scheduleId
+    expect(newScheduleId).toBeTruthy()
+    expect(newScheduleId).not.toBe(oldScheduleId)
+
+    act(() => vi.advanceTimersByTime(2500))
+    await settleLazyEditorModules()
+
+    const prewarmCreates = lifecycle.events.filter((event) => (
+      event.type === 'prewarm-create' && event.metadata?.resource === 'editor'
+    ))
+    expect(prewarmCreates).toHaveLength(1)
+    expect(prewarmCreates[0].metadata?.scheduleId).toBe(newScheduleId)
+    expect(countResourceEvent('editor-create', 'editor', 'doc-a')).toBe(0)
+    expect(countResourceEvent('editor-create', 'editor', 'doc-b')).toBe(1)
+  })
+
+  it('does not prewarm after a preview tab switch under the memory policy', async () => {
+    setup([
+      anonymousTab('doc-a', '# A'),
+      anonymousTab('doc-b', '# B'),
+    ], 'doc-a', 'preview', { modePerformancePolicy: 'memory' })
+    render(<EditorArea />)
+    await settleLazyEditorModules()
+
+    act(() => useEditorStore.getState().setActiveTab('doc-b'))
+    await settleLazyEditorModules()
+    act(() => vi.advanceTimersByTime(2500))
+
+    expect(lifecycle.events.some((event) => event.type === 'prewarm-schedule')).toBe(false)
+    expect(countResourceEvent('editor-create', 'editor', 'doc-b')).toBe(0)
+  })
+
+  it('smart creates real left preview candidate', async () => {
     setup([anonymousTab('doc-a', '# A')], 'doc-a', 'edit', { modePerformancePolicy: 'balanced' })
     render(<EditorArea />)
+
+    // 首屏真实可见回调尚未 flush 时，不得创建隐藏预览。
+    expect(countResourceEvent('model-create', 'left-preview', 'doc-a')).toBe(0)
+    await settleLazyEditorModules()
 
     // No preview yet
     expect(countEvent('model-create')).toBeGreaterThanOrEqual(1) // editor
@@ -558,7 +633,7 @@ describe('Prewarm candidate lifecycle', () => {
     expect(countEvent('model-create')).toBeGreaterThanOrEqual(2)
   })
 
-  it('turbo creates editor candidate based on usage', () => {
+  it('turbo creates editor candidate based on usage', async () => {
     // Preview mode: editor is not initially mounted (editorMounted=false).
     // turbo prewarms edit-preview based on high usage, creating the editor.
     setup([anonymousTab('doc-a', '# A')], 'doc-a', 'preview', { modePerformancePolicy: 'speed' })
@@ -566,6 +641,7 @@ describe('Prewarm candidate lifecycle', () => {
       viewModeUsage: { 'edit-preview': { count: 15, lastUsedAt: Date.now() } },
     })
     render(<EditorArea />)
+    await settleLazyEditorModules()
 
     // Editor not mounted initially in preview-only mode
     expect(countEvent('editor-create')).toBe(0)
@@ -575,7 +651,7 @@ describe('Prewarm candidate lifecycle', () => {
     expect(countEvent('editor-create')).toBeGreaterThanOrEqual(1)
   })
 
-  it('turbo creates right preview candidate', () => {
+  it('turbo creates right preview candidate', async () => {
     const tabs = [anonymousTab('doc-a', '# A'), anonymousTab('doc-b', '# B')]
     setup(tabs, 'doc-a', 'edit', { modePerformancePolicy: 'speed' })
     useEditorStore.setState({
@@ -583,22 +659,27 @@ describe('Prewarm candidate lifecycle', () => {
     })
     useEditorStore.setState({ rightPaneTabId: 'doc-b', rightPaneUserSelected: true })
     render(<EditorArea />)
+    await settleLazyEditorModules()
 
     act(() => vi.advanceTimersByTime(2500))
     act(() => vi.advanceTimersByTime(2500))
     expect(countResourceEvent('model-create', 'right-preview', 'doc-b')).toBe(1)
   })
 
-  it('turbo creates diff candidate and releases it', () => {
+  it('turbo creates diff candidate and releases it', async () => {
     setup([anonymousTab('doc-a', '# A')], 'doc-a', 'preview', { modePerformancePolicy: 'speed' })
     useEditorStore.setState({
       viewModeUsage: { 'diff-preview': { count: 12, lastUsedAt: Date.now() } },
     })
     render(<EditorArea />)
+    await settleLazyEditorModules()
 
     expect(countEvent('diff-create')).toBe(0)
 
     act(() => vi.advanceTimersByTime(2500))
+    await act(async () => {
+      await vi.dynamicImportSettled()
+    })
     // Flush RAF
     act(() => vi.advanceTimersByTime(1))
     expect(countEvent('diff-create')).toBeGreaterThanOrEqual(1)
@@ -607,9 +688,10 @@ describe('Prewarm candidate lifecycle', () => {
     expect(countEvent('diff-dispose')).toBeGreaterThanOrEqual(1)
   })
 
-  it('prewarm-off releases all hidden candidates', () => {
+  it('prewarm-off releases all hidden candidates', async () => {
     setup([anonymousTab('doc-a', '# A')], 'doc-a', 'edit', { modePerformancePolicy: 'balanced' })
     render(<EditorArea />)
+    await settleLazyEditorModules()
 
     act(() => vi.advanceTimersByTime(2500))
     expect(countResourceEvent('model-create', 'left-preview', 'doc-a')).toBe(1)
@@ -621,6 +703,9 @@ describe('Prewarm candidate lifecycle', () => {
   it('user activity cancels idle prewarm', () => {
     setup([anonymousTab('doc-a', '# A')], 'doc-a', 'edit', { modePerformancePolicy: 'balanced' })
     render(<EditorArea />)
+
+    // 先完成真实编辑器首屏，再在空闲窗口内模拟用户活动。
+    act(() => vi.advanceTimersByTime(1))
 
     // Trigger user activity before prewarm timer fires
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' })))
@@ -645,9 +730,10 @@ describe('Prewarm candidate lifecycle', () => {
     })
   })
 
-  it('leaving diff releases diff instance', () => {
+  it('leaving diff releases diff instance', async () => {
     setup([anonymousTab('doc-a', '# A')], 'doc-a', 'diff-preview', { modePerformancePolicy: 'memory' })
     render(<EditorArea />)
+    await settleLazyEditorModules()
 
     expect(countEvent('diff-create')).toBe(1)
     expect(countEvent('diff-dispose')).toBe(0)
@@ -962,10 +1048,11 @@ describe('Performance policy enforcement', () => {
 // 7. Smart large doc: no hidden preview prewarm
 // ============================================================
 describe('Smart large doc prewarm suppression', () => {
-  it('smart + 100000-char doc in edit mode does not create hidden preview', () => {
+  it('smart + 100000-char doc in edit mode does not create hidden preview', async () => {
     const content = 'x'.repeat(100000)
     setup([anonymousTab('doc-a', content)], 'doc-a', 'edit', { modePerformancePolicy: 'balanced' })
     render(<EditorArea />)
+    await settleLazyEditorModules()
 
     const modelCreatesBefore = countEvent('model-create')
 
@@ -978,10 +1065,11 @@ describe('Smart large doc prewarm suppression', () => {
     expect(resourceBalance('left-preview')).toBe(0)
   })
 
-  it('smart + 200000-char doc in edit mode does not create hidden preview', () => {
+  it('smart + 200000-char doc in edit mode does not create hidden preview', async () => {
     const content = 'x'.repeat(200000)
     setup([anonymousTab('doc-a', content)], 'doc-a', 'edit', { modePerformancePolicy: 'balanced' })
     render(<EditorArea />)
+    await settleLazyEditorModules()
 
     const modelCreatesBefore = countEvent('model-create')
 
@@ -992,10 +1080,11 @@ describe('Smart large doc prewarm suppression', () => {
     expect(resourceBalance('left-preview')).toBe(0)
   })
 
-  it('smart + small doc (50000 chars) still creates hidden preview', () => {
+  it('smart + small doc (50000 chars) still creates hidden preview', async () => {
     const content = 'x'.repeat(50000)
     setup([anonymousTab('doc-a', content)], 'doc-a', 'edit', { modePerformancePolicy: 'balanced' })
     render(<EditorArea />)
+    await settleLazyEditorModules()
 
     const modelCreatesBefore = countEvent('model-create')
 
@@ -1007,10 +1096,11 @@ describe('Smart large doc prewarm suppression', () => {
     expect(resourceBalance('left-preview')).toBe(1)
   })
 
-  it('turbo + 100000-char doc still prewarms preview', () => {
+  it('turbo + 100000-char doc still prewarms preview', async () => {
     const content = 'x'.repeat(100000)
     setup([anonymousTab('doc-a', content)], 'doc-a', 'edit', { modePerformancePolicy: 'speed' })
     render(<EditorArea />)
+    await settleLazyEditorModules()
 
     const modelCreatesBefore = countEvent('model-create')
 
@@ -1027,6 +1117,16 @@ describe('Smart large doc prewarm suppression', () => {
 // 8. Preview mode: no hidden editor creation
 // ============================================================
 describe('Preview mode editor suppression', () => {
+  it('edit mode does not request or mount the preview implementation', async () => {
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'edit', { modePerformancePolicy: 'memory' })
+    render(<EditorArea />)
+
+    expect(countResourceEvent('model-create', 'left-preview')).toBe(0)
+    await settleLazyEditorModules()
+    expect(countResourceEvent('model-create', 'left-preview')).toBe(0)
+    expect(lifecycle.events.some((event) => event.type === 'preview-first-visible')).toBe(false)
+  })
+
   it('preview mode does not create editor instance', () => {
     setup([anonymousTab('doc-a', '# A')], 'doc-a', 'preview', { modePerformancePolicy: 'balanced' })
     render(<EditorArea />)
@@ -1048,9 +1148,10 @@ describe('Preview mode editor suppression', () => {
     expect(resourceBalance('editor')).toBe(1)
   })
 
-  it('switching from preview to edit-preview creates editor and preview works', () => {
+  it('switching from preview to edit-preview creates editor and preview works', async () => {
     setup([anonymousTab('doc-a', '# A')], 'doc-a', 'preview', { modePerformancePolicy: 'balanced' })
     render(<EditorArea />)
+    await settleLazyEditorModules()
 
     act(() => useEditorStore.getState().setViewMode('edit-preview'))
 
@@ -1087,9 +1188,10 @@ describe('First-visible events', () => {
     })
   })
 
-  it('emits preview-first-visible after preview mount', () => {
+  it('emits preview-first-visible after preview mount', async () => {
     setup([anonymousTab('doc-a', '# A')], 'doc-a', 'preview', { modePerformancePolicy: 'balanced' })
     render(<EditorArea />)
+    await settleLazyEditorModules()
 
     act(() => vi.advanceTimersByTime(1))
 

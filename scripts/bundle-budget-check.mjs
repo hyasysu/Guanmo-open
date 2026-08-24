@@ -38,6 +38,48 @@ if (mode === 'web') {
   const preloadFiles = Array.from(html.matchAll(/rel="modulepreload"[^>]+href="\.\/assets\/([^"]+\.js)"/g), (match) => match[1])
   const initialJsBytes = entryBytes + totalBytes(preloadFiles)
 
+  const editorChunks = jsFiles.filter((file) => /^EditorArea-.*\.js$/.test(file))
+  assert.equal(editorChunks.length, 1, `未找到唯一 EditorArea chunk：${editorChunks.join(', ')}`)
+  const editorSource = await readFile(join(dist, 'assets', editorChunks[0]), 'utf8')
+  assert.doesNotMatch(
+    editorSource,
+    /from["']\.\/MarkdownPreview-.*\.js["']/,
+    'EditorArea 不得静态 import MarkdownPreview chunk',
+  )
+  assert.match(
+    editorSource,
+    /import\(["']\.\/MarkdownPreview-.*\.js["']\)/,
+    'EditorArea 必须保留 MarkdownPreview 的动态 import 边界',
+  )
+
+  const updateChunks = jsFiles.filter((file) => /^UpdateManager-.*\.js$/.test(file))
+  assert.equal(updateChunks.length, 1, `未找到唯一 UpdateManager chunk：${updateChunks.join(', ')}`)
+  const updateSource = await readFile(join(dist, 'assets', updateChunks[0]), 'utf8')
+  assert.doesNotMatch(
+    updateSource,
+    /from["']\.\/MarkdownPreview-.*\.js["']/,
+    'UpdateManager 不得静态 import MarkdownPreview chunk',
+  )
+  assert.match(
+    updateSource,
+    /import\(["']\.\/MarkdownPreview-.*\.js["']\)/,
+    'UpdateManager 必须保留 MarkdownPreview 的动态 import 边界',
+  )
+
+  const previewChunks = jsFiles.filter((file) => /^MarkdownPreview-.*\.js$/.test(file))
+  assert.equal(previewChunks.length, 1, `未找到唯一 MarkdownPreview chunk：${previewChunks.join(', ')}`)
+  const previewSource = await readFile(join(dist, 'assets', previewChunks[0]), 'utf8')
+  assert.doesNotMatch(
+    previewSource,
+    /from["']\.\/InlineMarkdownBlockEditor-.*\.js["']/,
+    'MarkdownPreview 不得静态 import InlineMarkdownBlockEditor chunk',
+  )
+  assert.match(
+    previewSource,
+    /import\(["']\.\/InlineMarkdownBlockEditor-.*\.js["']\)/,
+    'MarkdownPreview 必须保留 InlineMarkdownBlockEditor 的动态 import 边界',
+  )
+
   assert.ok(entryBytes <= 1_350_000, `桌面入口脚本超出 1.35 MB：${entryBytes} bytes`)
   assert.deepEqual(oversized, [], `存在超出 1.3 MB 的桌面脚本：${oversized.join(', ')}`)
   assert.ok(initialJsBytes <= 2_000_000, `桌面首屏 JS 超出 2 MB：${initialJsBytes} bytes`)

@@ -1,337 +1,307 @@
-# 观墨缺陷与能力缺口分阶段修复计划
+# 观墨首屏启动按模式拆包与延迟初始化计划
 
-> 本文件是本任务唯一状态来源。执行者必须使用 staged-task-handoff Skill，完整读取后只执行当前阶段，不得提前实施后续阶段。
+> 本文件是本任务唯一状态来源。执行者必须使用 `staged-task-handoff` Skill，完整读取后只执行当前阶段，不得提前实施后续阶段。
 
 ## 当前状态
 
 - 项目状态：进行中
-- 当前阶段：阶段 15｜路由与 Prompt 评测闭环
-- 阶段状态：已完成
-- 上次执行结果（阶段 15）：新增 `src/services/ai/promptVersions.ts`（路由规则 v1 + Prompt v1 版本元数据、8 段 FNV-1a 分段指纹与组合指纹、评测配置快照与 A/B 口径比较）；新增匿名固定回归集 `tests/agent/fixtures/promptEvaluation.json`（33 案例 + 12 路由探针，全部合成数据）；新增 `scripts/prompt-offline-evaluation.ts` 与 `scripts/run-prompt-offline-evaluation.mjs` 离线确定性评测 runner（`npm run test:prompt-eval`）；新增 `tests/agent/promptVersioning.test.ts` 12 项版本/口径/匿名性测试
-- 验证结果（阶段 15 基线）：Direct 误判 0/9、Agent 误判 1/24（selection-format）、能力漏选 0/33、能力多选 4/33、工具解析 12/12、平均候选工具 1.91；延迟：路由 p50 0.917ms/p95 1.498ms、Prompt 组装 p50 0.001ms、工具解析 p50 0.054ms；A/B 口径：同配置可重复、Prompt 变体可检出、异配置拒绝归因
-- 验证结果（阶段 15 检查）：`npm run test:prompt-eval`、`npm run test:routing-matrix`（155/155）、`npm run test:agent-parser`、定向 Vitest promptVersioning+aiChatOrchestration（16/16）、`npm run typecheck`、定向 ESLint（0 error）、`git diff --check` 全部通过
-- 本阶段剩余：无
-- 本阶段允许修改：阶段 15 已完成，不再开放修改
-- 阻塞问题：无
-- 下一阶段：阶段 16｜条件项审计与总体验收
-- Git 状态：分支 `main`；阶段 15 修改（promptVersions、评测 runner、promptVersioning 测试、package.json 脚本、本文件）尚未提交，未推送；	ests/agent/fixtures/promptEvaluation.json 受 .gitignore 的 *.json 规则影响，提交时需 git add -f（与既有 	ests/rag/fixtures/offlineEvaluation.json 跟踪方式一致）；工作区存在其他用户未提交修改，已按约定避开
+- 当前阶段：阶段 4｜返修后桌面性能复测
+- 阶段状态：阻塞
+- 上次执行结果：返修后 ready 回调按活动文档 ID归属；迟到的旧文档预览回调和编辑器 RAF 被拒绝；预览 Tab 切换后 `balanced` / `speed` 恢复预热，`memory` 仍不预热；Fix → Re-review 无 HIGH-confidence P0/P1
+- 已知证据：返修后隔离 Release `src-tauri/target-stage4-acceptance/release/guanmo.exe`，24,618,496 bytes，SHA-256 `B0E2A2C10E079491495272916E0A7C276C2C8418A9D052CCE0B1542140E299EC`；Desktop 95 chunks，`EditorArea-hkKOE7lN.js` 72.39 KB、`MarkdownPreview-CifIPx0q.js` 226.34 KB、`InlineMarkdownBlockEditor-B58xGhSW.js` 2.03 KB，bundle 边界通过
+- 已知基线：同一当前环境旧 Release 编辑 `frontendToSurface` 中位数/P90/最大值为 493/600/654ms，返修 Release 为 479/510/596ms（中位数改善 2.8%）；旧 Release 预览为 431/508/519ms，返修 Release 为 415/454/489ms（中位数改善 3.7%）
+- 验证结果：返修 Release 编辑/预览各取得 10 个有效样本；定向测试 92 passed/2 skipped；typecheck、lint（0 errors）、Desktop build、bundle gate、`git diff --check`、Release 安全校验 9 项通过、0 阻断；Tauri Release 使用 `CARGO_BUILD_JOBS=1` 成功构建
+- 未执行项：在磁盘和页面文件充足、WebView2 测量脚本无竞态的干净环境重跑绝对启动目标；当前环境返修编辑中位数 479ms，未达到 ≤400ms
+- 本阶段剩余：不改代码；在干净验收环境重跑编辑/预览各 10 次，确认绝对目标或记录环境限制后再关闭阶段
+- 本阶段允许修改：仅 `AI_IMPLEMENTATION_PLAN.md`；不得借环境问题扩大代码范围
+- 阻塞问题：本机本轮出现页面文件不足（`os error 1455`）、磁盘空间耗尽和 WebView2 临时页面竞态；旧版同环境也高于历史基线，无法将绝对值未达标归因于返修
+- 下一阶段：干净环境复测通过后进入交付整理；不重做拆包、不进入 DocumentRange 索引优化
+- Git 边界：保留所有既有修改和未跟踪文件；未经明确授权不提交、不推送、不打 tag、不创建 Release
 
 ## 项目目标
 
-以 `D:/八股/观墨-缺陷与能力缺口修复清单.md` 为需求源，分阶段修复已经确认的正确性和稳定性问题，建立上下文与 RAG 评测闭环，再处理运行时可靠性和高风险产品能力。每次只完成一个编号或一个紧密关联的小组，保持旧索引、旧向量、旧配置、旧聊天和 SQLite 数据兼容。
+切断编辑模式对 Markdown 预览实现的启动依赖，使编辑首屏只加载真实编辑器所需代码；预览、双栏预览和差异模式按需加载。真实文档首屏完成后，再初始化隐藏模式预热和非首屏交互能力。在不牺牲 Markdown 语义、DocumentRange、选区、搜索、复制、AI 上下文、预览内编辑和滚动同步正确性的前提下，追回后续预览能力扩展造成的启动回退。
+
+本任务不承诺消除约 0.8s 的原生进程/WebView2 启动底座；`appReady`、AppShell 可见和真实编辑器/预览可见必须分别报告。
 
 ## 技术栈
 
-- 运行环境：Tauri 2 桌面应用，Windows 为主要验收环境
+- 运行环境：Tauri 2、Windows、WebView2
 - 前端：React 18、TypeScript 5、Vite 6
-- 桌面端：Rust、SQLx、SQLite、reqwest、Tauri Channel
-- 测试：Vitest、Node 定向检查、Rust 单元测试
-- 构建：Vite、Cargo、Tauri CLI
+- 编辑器：CodeMirror 6
+- Markdown：ReactMarkdown、remark/rehype、顶层块虚拟化
+- 测试：Vitest、React Testing Library、现有启动测量脚本
+- 构建：Vite Desktop、Cargo/Tauri Release
 
-## 需求边界与状态
+## 已确认的根因与边界
 
-### 本计划必须实施
+1. `src/components/layout/AppLayout.tsx` 已在首个 rAF 后懒加载 `EditorArea`。
+2. `EditorArea` 顶层静态导入 `MarkdownPreview`、`MarkdownToc` 和 `MarkdownDiffView`。
+3. Desktop 构建中 `MarkdownPreview` 已是约 491 KB 的独立 chunk，但仍是 `EditorArea` 的静态依赖，因此编辑模式必须先请求、解析该 chunk 才能执行 `EditorArea`。
+4. `MarkdownToc` 与 `MarkdownPreview` 位于同一文件；编辑模式需要 TOC，不能只把 JSX 条件改成懒加载而保留该导入。
+5. 默认 `balanced` 模式会在空闲期预热隐藏模式；拆包后必须确保预热只在真实首屏完成后触发，否则 chunk 会被过早拉取。
+6. `createMarkdownPreviewModel` 是真实预览、虚拟化、锚点和全文坐标的必要数据。前两阶段不得为了数字直接延迟它、切换 Worker 或显示伪正文 Skeleton。
+7. `perf_monitor` 延迟扫描优化仍在，不属于本次回退根因；SVG HTML 安全链路已经按需加载，不作为本任务修改范围。
 
-- 确定缺陷：RAG-01、RAG-02、RAG-03、AGENT-01、CONTEXT-02。
-- 稳定性修复：RAG-04。
-- 建立评测后再实施的质量能力：RAG-05、RAG-06、RAG-07、CONTEXT-01。
-- 运行时可靠性：HTTP-01、HTTP-02、AGENT-02、PERF-01。
-- 高风险能力：MD-01、SOURCE-01、PROMPT-01，必须各自独立验收。
+## 总体成功标准
 
-### 条件触发，不作为当前交付完成条件
-
-- RAG-08：只有真实知识库规模和基线证明全量扫描不可接受时，才评估 ANN、FTS5 或其他索引方案。
-- AGENT-03：只有出现跨重启长任务、后台研究、多次确认恢复或多 Agent 状态图需求时，才评估 checkpoint 或成熟状态图框架。
-- 未使用 LangChain 不视为缺陷，不为了框架化重写当前 Agent。
+- 编辑模式在 `editor-first-visible` 前不请求、不解析 `MarkdownPreview-*.js` 和 `markdownHtml-*.js`。
+- `EditorArea-*.js` 的静态 imports 中不再包含 `MarkdownPreview-*.js`。
+- 编辑模式 `frontendToSurface` 中位数从约 532ms 降至不高于 400ms，或相对同机新鲜基线至少改善 120ms。
+- 编辑模式真实首屏预计改善 0.12–0.25s；该区间是预期，不作为虚假承诺。
+- 预览模式 `frontendToSurface` 与 `launchToSurface` 中位数不得比同机新鲜基线恶化超过 10%；P90 不出现新的稳定性退化。
+- `appReady`、AppShell 可见、编辑器可见、预览首次可见和预览渲染完成继续保持不同语义。
+- 搜索、选区、复制、Ctrl+A、AI 上下文、锚点、目录、滚动同步、预览内编辑、快速切换文档和左右预览不回退。
+- 不新增依赖，不放宽 bundle 预算，不用 Skeleton、人工延迟或提前打点制造收益。
 
 ## 总体约束
 
-- 每个会话默认只执行一个阶段，不提前实现后续阶段。
-- 优先最小修改，不新增当前阶段不需要的依赖，不重构无关模块。
-- RAG 和长期记忆继续以 SQLite 为业务主存储；Rust 内存索引只做查询加速。
-- 旧向量、旧预处理版本、旧配置和旧聊天必须保持可读；禁止清库、重置配置或要求用户重建内容。
-- 不调整检索权重、阈值或排序策略，除非阶段 7 的离线评测提供收益证据。
-- 外部 HTTP 必须继续通过 `src/services/externalHttp.ts` 和受限 Rust 代理，不增加 WebView 直连回退。
-- Markdown 预览继续遵守同步 ReactMarkdown、顶层块虚拟化及跨块语义兼容契约。
-- 自动化验证不替代真实 Tauri 验收；流式、取消、长对话和长文档阶段必须使用新鲜桌面进程验证。
-- 测试只使用匿名 Fixture、临时目录和临时数据库，不读取真实用户数据。
-- 不修改或夹带现有 `.trae/`、Android/长文档/使用统计计划和 `design-qa.md`。
+- 每次只执行一个阶段；阶段 1、2 达标后才判断是否需要阶段 3。
+- 优先改变模块边界，不在阶段 1 重写 `EditorArea` 或 `MarkdownPreview` 内部架构。
+- DOM 仍只是全文模型的渲染结果；搜索、选区、复制和 AI 上下文继续以源码 offset / DocumentRange 为准。
+- 动态 import 完成时必须校验当前文档和模式，迟到结果不得恢复旧文档实例或覆盖当前状态。
+- Suspense fallback 只保留真实容器背景，不伪造正文；fallback 期间不得上报预览已可见或渲染完成。
+- 保留现有模式性能策略语义：`memory` 不预热，`balanced` 智能预热，`speed` 积极预热；只调整首次允许预热的时机。
+- 不修改 Tauri/Rust 启动链、数据库、文件权限、RAG、AI 请求、窗口 reveal 和更新检查。
 - 未经明确要求不提交、推送、打 tag、创建 Release 或 PR。
+
+## Blast Radius
+
+直接影响：
+
+- `EditorArea` 的静态/动态模块边界
+- `MarkdownPreview`、`MarkdownToc`、`MarkdownDiffView` 的加载时机
+- 预览首次可见与渲染完成的生命周期标记
+- 隐藏模式预热的首次允许时机
+
+间接依赖：
+
+- 编辑、预览、编辑+预览、双栏预览、差异预览
+- 快速切换 Tab、模式和左右文档
+- 预览 ref、阅读位置、草稿、搜索和高亮注册表
+- 更新详情弹窗对 `MarkdownPreview` chunk 的共享引用
+
+高风险点：
+
+- Suspense mount/unmount、ref 可用时机和 cleanup
+- 动态 import 无法真正取消，可能产生模式/文档竞态
+- 隐藏预热可能在首屏未完成时争抢主线程
+- `leftPreviewMounted` 不再等价于预览真实 DOM 已提交，旧打点会提前
+- 阶段 3 若触发，会涉及文档模型、缓存失效和全文坐标不变量
+
+禁止影响：
+
+- Tab 内容、Store Source of Truth 和持久化数据
+- DocumentRange 坐标、全文搜索域和复制语义
+- Markdown 安全渲染与跨块语义
+- Web/Desktop 能力边界及现有 bundle 上限
 
 ## 阶段计划
 
-### 阶段 1｜RAG 检索加权正确性（RAG-01）
+### 阶段 1｜按编辑、预览与差异模式拆包
 
-- 目标：向量和关键词分支只产生原始分数，融合完成后每个结果统一且仅调用一次场景加权。
-- 范围：`src-tauri/src/rag_index.rs` 内检索合并逻辑及同文件 Rust 单元测试、本文件。
-- 验收标准：纯关键词、纯向量、混合命中都只加权一次；分数不超过 1；排序稳定；作用域、去重、多文档轮询和 TopK 不变。
-- 检查命令：定向 Rust 测试、`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`、`git diff --check`。
-- 暂不处理：融合权重、BM25、RRF、MMR、全量扫描优化。
+- 目标：编辑模式真实首屏不再被预览 chunk 阻塞。
+- 范围：抽离预览类型和 TOC；按模式懒加载预览与差异组件；修正动态加载后的真实可见打点；增加稳定的构建依赖边界检查。
+- 验收标准：Desktop 产物中 `EditorArea` 不静态依赖 `MarkdownPreview`；编辑、预览、双栏和差异模式的挂载及打点测试通过。
+- 检查命令：定向 EditorArea 生命周期测试、`npm run typecheck`、`npm run lint`、`npm run build:desktop`、bundle 依赖边界检查、`git diff --check`。
+- 暂不处理：预热策略时机、`createMarkdownPreviewModel`、DocumentRange 索引延迟、窗口 reveal。
 
-### 阶段 2｜语义分块配置归一（RAG-02）
+### 阶段 2｜首帧后预热与非首屏能力初始化
 
-- 目标：删除失效的 `chunkSize/chunkOverlap` 配置和透传，让配置、实现和契约统一描述当前 AST 语义分块策略。
-- 范围：RAG 配置类型、pipeline、chunker、语义分块直接测试、本文件。
-- 验收标准：不存在无效配置入口；普通段落、无安全边界文本、代码、公式、列表和表格行为明确；不引入滑动窗口或 overlap。
-- 检查命令：语义分块定向测试、`npm run test:agent-parser`、`npm run typecheck`、定向 ESLint、`git diff --check`。
-- 暂不处理：Embedding 子块、上下文装箱和数据库迁移。
+- 目标：真实编辑器或预览首屏完成前，不导入隐藏模式和非首屏交互代码。
+- 范围：将模式预热门槛绑定到真实活动文档首屏完成 + 现有空闲窗口；按需加载预览内块编辑器；跳过没有搜索/选区状态时的空高亮同步，但不改变注册表恢复语义。
+- 验收标准：首屏前无隐藏模式 prewarm-create；用户活动仍可取消预热；`memory/balanced/speed` 语义不变；预览内编辑和高亮生命周期回归通过。
+- 检查命令：模式生命周期、资源泄漏、预览切换、预览交互和高亮注册表定向测试，typecheck、lint、desktop build、bundle 检查、`git diff --check`。
+- 暂不处理：拆分文档模型或延迟必要的首屏 Markdown 解析。
 
-### 阶段 3｜Agent 单工具超时（AGENT-01）
+### 阶段 3｜条件性 DocumentRange 索引延迟
 
-- 目标：使用一个可清理的超时控制完成子任务 abort 和结构化终止，保留父会话取消转发。
-- 范围：Agent executor、Agent 执行预算直接测试、本文件。
-- 验收标准：成功、失败、取消、超时四条路径均清理计时器和监听器；区分 timeout、cancelled、tool_error；迟到结果不能覆盖当前消息；写入确认不变。
-- 检查命令：Agent 执行预算定向测试、`npm run typecheck`、定向 ESLint、`git diff --check`。
-- 暂不处理：整次 Agent deadline、工具重试、Provider 传输取消。
+- 进入条件：阶段 1、2 完成后，真实预览首屏仍比同机基线恶化超过 10%，且性能标记证明 `collectTextSegments` / DocumentRange 派生索引是主要相邻耗时；否则本阶段记录为“无需实施”并直接进入阶段 4。
+- 目标：保留首屏必需的块、TOC、offset、锚点和虚拟化模型，将仅供搜索、复制与 AI 选区提取的派生索引延迟到首帧后空闲或首次使用。
+- 范围：`markdownPreviewModel`、`previewHighlight`、`MarkdownPreview` 及对应契约测试；不得改变源码 offset 坐标系。
+- 验收标准：索引只构建一次；用户提前操作时同步补齐；按文档 ID + 内容版本失效；旧异步结果不能覆盖新文档；DOM 卸载不影响全文能力。
+- 检查命令：DocumentRange、visible text、selection context、SearchOverlay、预览高亮、快速切换和大文档定向测试，typecheck、lint、desktop build、真实预览测量、`git diff --check`。
+- 暂不处理：Worker、并行解析、新依赖、Markdown 渲染器替换。
 
-### 阶段 4｜RAG 完整语义块装箱（RAG-03）
+### 阶段 4｜新鲜 Release 冷启动验收
 
-- 目标：以预算装入完整 Chunk，消除 `buildContext` 对最后一个来源的字符硬截断，并准确标记跳过与覆盖范围。
-- 范围：RAG 上下文构建、直接调用类型/测试、本文件；如需新增通用预算接口，只建立阶段 6 可复用的最小边界。
-- 验收标准：不产生未闭合代码围栏、公式或表格；元数据与实际内容一致；放不下时可尝试更短候选；输出不超过预算。
-- 检查命令：RAG 上下文定向测试、`npm run typecheck`、定向 ESLint、`git diff --check`。
-- 暂不处理：聊天历史摘要、模型级总预算、邻居扩展。
-
-### 阶段 5｜Embedding 超长输入兜底（RAG-04）
-
-- 目标：保留展示 Chunk 的语义完整性，为超长 Embedding 输入提供安全子块、父块映射和有限失败降级。
-- 前置：先冻结父 Chunk、Embedding 子块、向量聚合、行号映射和旧向量兼容契约；涉及接口时先记录前后端字段。
-- 范围：语义分块/Embedding 输入、pipeline、RAG 持久化与直接测试、本文件；确有必要时最小扩展数据库 Schema 和 Rust 解码。
-- 验收标准：超长代码、公式、HTML、无边界长文本不阻断整篇入库；错误可定位但不记录正文；结果映射回原文件和准确行号；旧向量继续可读并渐进重建。
-- 检查命令：`npm run test:rag-index`、相关 Schema/迁移定向测试、`npm run typecheck`、定向 ESLint、Rust 定向测试、`git diff --check`。
-- 暂不处理：标题路径增强、召回权重调整和大型向量数据库。
-
-### 阶段 6｜统一模型上下文预算（CONTEXT-02、CONTEXT-01）
-
-- 目标：建立 Direct、Agent、最终综合回答共用的总预算，统一装箱系统 Prompt、当前问题、历史、RAG、Memory、选区和工具结果。
-- 实施顺序：先建立模型窗口和输出预留契约；再接普通聊天与 Agent；最后接 RAG/选区完整语义原子和一次无副作用超限降级。
-- 验收标准：长对话不再无条件发送全部历史；近期原文、用户约束、授权和未完成事项不可淘汰；原始 SQLite 历史不修改；超限最多安全重试一次且不重复副作用；匿名诊断不含正文。
-- 检查命令：小窗口假模型定向测试、选区/RAG/Agent 相关定向测试、runtime schema、typecheck、定向 ESLint、desktop build、真实 Tauri 长对话验收、`git diff --check`。
-- 暂不处理：调整检索排名和 Prompt A/B 平台。
-
-### 阶段 7｜RAG 离线评测基线（RAG-05）
-
-- 目标：建立匿名化问题—证据集，固定现有关键词、融合权重、阈值和多样化规则作为 baseline。
-- 范围：独立评测 Fixture、评测 runner、结果格式和文档、本文件；不得读取真实用户数据。
-- 验收标准：可重复记录 Recall@K、MRR/NDCG、来源准确率、无答案误召回率、冷/热延迟和回答 groundedness；基线结果可比较。
-- 检查命令：RAG 评测 runner、`npm run test:rag-query`、`git diff --check`。
-- 暂不处理：在没有基线证据时引入 BM25、RRF、MMR 或 reranker。
-
-### 阶段 8｜结构化 Embedding 与邻居扩展（RAG-06、RAG-07）
-
-- 目标：将文档标题、标题路径和块类型纳入版本化 Embedding 输入，并在剩余预算内扩展同文档相邻证据。
-- 范围：Embedding 预处理版本、渐进重建、检索结果邻居装箱、直接测试、本文件。
-- 验收标准：旧向量兼容；标题变化触发正确重建；邻居不跨越不相关标题边界、不重复、标记为 `neighbor-context`；阶段 7 指标不回退且目标场景有收益。
-- 检查命令：RAG index/query/评测定向检查、runtime schema、typecheck、Rust 定向测试、`git diff --check`。
-- 暂不处理：无评测证据的 reranker 或全新检索引擎。
-
-### 阶段 9｜Rust 原生请求取消（HTTP-01）
-
-- 目标：通过 requestId 和 Rust CancellationToken 让前端取消真正终止 reqwest 请求，并幂等清理注册表。
-- 前置：先冻结开始请求、Channel 事件、取消命令和终止状态契约。
-- 范围：`externalHttp`、受限 Rust HTTP 代理、runtime schema、AI HTTP 直接测试、本文件。
-- 验收标准：取消能停止 Rust 响应读取；正常完成、失败、超时和取消均清理；Origin/DNS/IP/重定向安全边界不变；Web 端仍抛 `UnsupportedCapabilityError`。
-- 检查命令：`npm run test:ai-http`、runtime schema、typecheck、Rust 定向测试、desktop build、新鲜 Tauri 取消验收、`git diff --check`。
-- 暂不处理：背压窗口和整次 Agent deadline。
-
-### 阶段 10｜Agent 全局 deadline（AGENT-02）
-
-- 目标：模型调用和工具调用共享整次任务 deadline，所有局部超时由剩余时间收敛。
-- 范围：Agent 请求配置、executor、Provider 调用衔接、直接测试、本文件。
-- 验收标准：deadline 到达后基于已有证据降级回答并声明缺失；仅只读幂等操作允许有限重试；写入和确认类工具绝不自动重试。
-- 检查命令：Agent orchestration/预算定向测试、typecheck、定向 ESLint、新鲜 Tauri 验收、`git diff --check`。
-- 暂不处理：checkpoint、跨重启恢复和多 Agent 状态图。
-
-### 阶段 11｜端到端有界背压（HTTP-02）
-
-- 目标：为 Rust 上游流、Tauri Channel 和前端 ReadableStream 定义有界缓冲、批次、ACK 窗口和慢消费者策略。
-- 前置：先采集文本流和高速本地模型基线，若实际流量未触发风险，只完成契约与压力测试并保持实现后置。
-- 验收标准：缓冲字节数有硬上限；取消/超时不会死锁；慢消费者按契约降级或终止；SSE 解析接口保持兼容。
-- 检查命令：AI HTTP 压力定向测试、Rust 定向测试、desktop build、新鲜 Tauri 高速流验收、`git diff --check`。
-- 暂不处理：音视频或大文件传输能力。
-
-### 阶段 12｜RAG 性能档位调度（PERF-01）
-
-- 目标：让节省内存、平衡、极速档位按知识库规模、可用内存、近期使用和用户活动调度 RAG 初始化、预热与取消。
-- 范围：现有性能模式调度、RAG 初始化状态、直接测试、本文件。
-- 验收标准：预热不阻塞首屏；用户输入/切文档/内存压力可取消；节省内存保持按需初始化；不得在无测量时增加主动释放。
-- 检查命令：app warmup/RAG query 定向检查、typecheck、Rust 定向测试、desktop build、新鲜 Tauri 性能验收、`git diff --check`。
-- 暂不处理：RAG-08 全量扫描替换。
-
-### 阶段 13｜跨块 Markdown 语义虚拟化（MD-01）
-
-- 目标：分别为 Reference、Footnote 和必要 HTML 建立跨块语义模型，减少整篇同步渲染降级范围。
-- 实施顺序：Reference 独立阶段；Footnote 独立阶段；HTML 独立评估。任一子阶段未通过真实桌面验收不得推进下一项。
-- 验收标准：引用、脚注、目录、搜索定位、同步滚动、预览内编辑和虚拟高度校正均不回退；桌面构建无预览 Worker 产物。
-- 检查命令：对应 Markdown 定向测试、typecheck、定向 ESLint、desktop build、真实长文档 Tauri 验收、`git diff --check`。
-- 暂不处理：重写 Markdown 渲染器或静默牺牲语义。
-
-### 阶段 14｜结论级来源引用（SOURCE-01）
-
-- 目标：为本轮真实工具结果分配稳定来源 ID，校验回答中的引用并支持定位到文件行号或网页。
-- 范围：Agent/Direct 来源协议、运行时解码、回答渲染与来源打开、直接测试、本文件。
-- 验收标准：引用 ID 必须来自本轮实际结果；未引用候选不展示为已采用；旧回答级来源继续兼容；无来源回答不显示占位。
-- 检查命令：reading quality/source/AI panel 定向测试、runtime schema、typecheck、desktop build、真实 Tauri 来源跳转验收、`git diff --check`。
-- 暂不处理：自动生成不存在的引用或修改旧聊天正文。
-
-### 阶段 15｜路由与 Prompt 评测闭环（PROMPT-01）
-
-- 目标：为路由规则和 Prompt 建立版本号、匿名固定回归集及可比较的 A/B 结果。
-- 范围：路由/Prompt 版本元数据、评测 runner、匿名诊断和文档、本文件。
-- 验收标准：记录 Direct/Agent 误判率、能力漏选/多选率、工具成功率、调用数和延迟；版本切换不改变用户数据；结论来自同模型同配置基线。
-- 检查命令：routing matrix、Agent parser/orchestration、Prompt 评测 runner、typecheck、`git diff --check`。
-- 暂不处理：在没有真实需求时引入 Agent 框架或 checkpoint。
-
-### 阶段 16｜条件项审计与总体验收（RAG-08、AGENT-03）
-
-- 目标：汇总前序阶段结果，判断条件项是否达到实施门槛；未达到则明确维持现状并完成整体交接。
-- 验收标准：每个必做编号均有实现、自动化结果和必要桌面证据；RAG-08/AGENT-03 有明确的实施或不实施依据；未验证项不得标记完成。
-- 检查命令：只重跑受最终修改影响的定向检查；如进入发布准备，另行取得授权后执行发布门禁。
-- 暂不处理：提交、推送、tag 和 Release，除非用户另行明确授权。
+- 目标：使用当前源码的新鲜隔离 Release 对编辑与预览进行可复现验收，并决定是否达到交付标准。
+- 范围：构建和测量；仅修复本任务引入的明确回归，不进入新的优化方向。
+- 验收标准：编辑和预览各 10 次冷启动，报告中位数、P90、最大相邻阶段；编辑达到总体成功标准；预览不超过 10% 回退；打点语义和 chunk 请求边界符合预期。
+- 检查命令：本任务所有定向测试、typecheck、lint、desktop build/bundle gate、新鲜 Tauri Release 构建、两种 surface 各 10 次测量、`git diff --check`。
+- 暂不处理：提交、推送、tag、Release，以及原生/WebView2 的下一轮优化。
 
 ## 当前阶段详细任务
 
+### 阶段 3｜进入判断（已完成：无需实施）
+
+#### 目标
+
+先用同机新鲜 Release 数据确认是否存在需要修复的预览首屏回退；证据不足或未超过阈值时不改动 DocumentRange 或文档模型。
+
+#### 允许修改
+
+- `AI_IMPLEMENTATION_PLAN.md`
+- 阶段 4 测量所需的既有脚本和临时隔离产物（仅在当前阶段实际需要时）
+- `src/services/markdownPreviewModel.ts`、`src/services/previewHighlight.ts`、`src/components/editor/MarkdownPreview.tsx` 及对应契约测试（仅在进入条件满足后）
+
+#### 实施任务
+
+1. 按阶段 4 口径取得同机新鲜 Release 的预览 `frontendToSurface`、`launchToSurface`、中位数、P90 和最大相邻阶段。
+2. 只有真实预览首屏回退超过 10%，且性能标记证明 `collectTextSegments` / DocumentRange 派生索引是主要相邻耗时，才进入索引延迟实现。
+3. 若条件不满足，将阶段 3 记录为“无需实施”，直接进入阶段 4；若条件满足，另起实现阶段，不在本次判断中提前修改模型。
+
+#### 验收标准
+
+- [x] 完成同机新鲜 Release 预览测量，并记录中位数、P90、最大相邻阶段及与基线的差值。
+- [x] 明确记录阶段 3 为“无需实施”：预览 `frontendToSurface` 中位数回退 8.1%，低于 10% 阈值；最大相邻阶段为 `app-ready → active-document-first-visible` 109ms，不是 `collectTextSegments` / DocumentRange 派生索引。
+- [x] 未满足进入条件前未修改 `markdownPreviewModel`、`previewHighlight` 或 DocumentRange 派生索引。
+
+#### 检查命令
+
+```powershell
+node scripts/pre-push-check.mjs --release
+真实隔离 Release 预览冷启动测量（按阶段 4 口径）
+git diff --check
+```
+
+#### 禁止事项
+
+- 不以单次或非同机测量代替新鲜 Release 数据。
+- 不把预期优化当作已验证收益，不在证据不足时改动索引、Worker、并行解析、新依赖或 Markdown 渲染器。
+- 不提交、推送、打 tag、创建 Release 或 PR。
+
+### 阶段 4｜新鲜 Release 冷启动验收（已完成）
+
+#### 验收结果
+
+- 新鲜 Release：`src-tauri/target-stage3-release/release/guanmo.exe`，构建时间戳 2026-08-22 21:42:28；前端 95 chunks，bundle gate 通过。首次并行 Rust 构建因 Windows 页面文件不足失败，改用 `CARGO_BUILD_JOBS=1` 复用缓存后成功，不属于源码失败。
+- 编辑模式 10 次：`frontendToSurface` 中位数/P90/最大值为 274/316/319ms；`launchToSurface` 为 965/1095/1122ms；最大相邻阶段为 `app-ready → active-document-first-visible` 125ms。编辑中位数低于 400ms 总体标准。
+- 预览模式 10 次：`frontendToSurface` 中位数/P90/最大值为 267/273/289ms；`launchToSurface` 为 977/1015/1020ms；最大相邻阶段为 `app-ready → active-document-first-visible` 109ms。
+- 相对同机旧 Release 预览基线：`frontendToSurface` 中位数 +20ms（+8.1%）、P90 +7ms（+2.6%）、最大值 +17ms（+6.3%）；`launchToSurface` 中位数 +26ms（+2.7%）、P90 +6ms（+0.6%）、最大值 -30ms（-2.9%）。未超过 10% 回退阈值，P90 未出现稳定性退化。
+- 打点语义保持：编辑/预览均分别等待真实 surface 标记与 `app-ready`；阶段 3 未修改首屏必要模型或全文坐标。
+
+#### 检查结果
+
+- [x] `node scripts/pre-push-check.mjs --release`：9 项通过、0 阻断；主分支、脏工作区、已有大文件/Tag 等 6 项警告已保留并记录。
+- [x] 阶段 2 定向测试：89 passed、2 skipped。
+- [x] `npm run typecheck`、`npm run lint`（0 errors）、`npm run build:desktop`、`npm run check:bundle:desktop`、`git diff --check`。
+- [x] 新鲜 Tauri Release 构建及编辑/预览各 10 次隔离冷启动测量。
+
+#### 交付边界
+
+- 本任务代码与验证已完成，但没有提交、推送、打 tag 或创建 Release；新鲜 Release target 和测量日志均作为本地验收产物保留。
+
+## 阶段 2 已完成明细（归档）
+
 ### 目标
 
-只完成 PROMPT-01：为路由规则和 Prompt 建立版本号、匿名固定回归集及可比较的 A/B 结果。
+只完成阶段 2：真实活动文档首屏完成前不创建隐藏模式预热实例，并将预览内块编辑器等非首屏交互代码移出预览首屏模块。
 
 ### 允许修改
 
-- 路由/Prompt 版本元数据、评测 runner、匿名诊断和直接测试
+- `src/components/editor/EditorArea.tsx`
+- `src/components/editor/MarkdownPreview.tsx`
+- `src/components/editor/InlineMarkdownBlockEditor.tsx`（仅在按需加载边界需要调整导出时）
+- `src/services/previewHighlight.ts`（仅在保持注册表恢复语义所必需时；优先不改）
+- `tests/editor/EditorArea.resourceLifecycle.test.tsx`
+- `tests/editor/modeResourceLeak.test.tsx`
+- `tests/editor/previewTabSwitchRegression.test.tsx`
+- `tests/markdown/MarkdownPreview.inlineEdit.test.tsx`
+- `tests/services/previewHighlightRegistry.test.ts`
+- `tests/editor/SearchOverlay.preview.test.tsx`（仅当高亮/搜索入口回归需要）
+- `scripts/bundle-budget-check.mjs`（仅增加阶段 2 的稳定依赖边界断言）
 - `AI_IMPLEMENTATION_PLAN.md`
 
 ### 实施任务
 
-1. 冻结当前路由规则、Prompt 内容、模型配置和指标口径。
-2. 为路由与 Prompt 建立兼容的版本元数据，不修改用户数据。
-3. 建立匿名固定回归集和可重复 A/B runner。
-4. 输出 Direct/Agent 误判、能力漏选/多选、工具成功率、调用数与延迟对比。
+1. 将模式预热的首次调度和实例创建绑定到当前活动文档真实编辑器或预览 DOM 首屏完成；保留现有空闲窗口、用户活动取消、`memory/balanced/speed` 策略和资源生命周期语义。
+2. 在文档切换时重置首屏完成状态，迟到的旧文档预热不得创建实例或发出 `prewarm-create`。
+3. 将 `InlineMarkdownBlockEditor` 从 `MarkdownPreview` 首屏静态依赖改为交互触发后的动态加载；局部 fallback 只保留编辑区域背景/尺寸，不显示伪正文。
+4. 仅在没有搜索/选区状态的普通块挂载同步中跳过空高亮注册；搜索或选区清除路径仍必须显式清除旧 Range，保持注册表恢复和虚拟块重新挂载语义。
+5. 增加或更新定向测试，覆盖首屏前无隐藏预热、首屏后按既有策略预热、用户活动取消、内联编辑动态加载及搜索/选区高亮生命周期。
+6. 在 Desktop 构建依赖检查中增加稳定断言，确认 `MarkdownPreview` 不静态依赖 `InlineMarkdownBlockEditor`；不通过 bundle 阈值或 `manualChunks` 伪造边界。
+7. 完成阶段验证后更新本文件顶部状态与阶段历史；不得提前实施阶段 3 的 DocumentRange 索引延迟。
 
 ### 验收标准
 
-- [x] 路由与 Prompt 版本可追溯，版本切换不修改用户数据。
-- [x] 匿名固定集可重复比较同模型、同配置下的 A/B 结果。
-- [x] 记录 Direct/Agent 误判率、能力漏选/多选率、工具成功率、调用数和延迟。
-- [x] routing matrix、Agent parser/orchestration、Prompt 评测 runner、typecheck 与 diff 检查通过。
+- [x] 真实编辑器或预览首屏完成前无隐藏模式 `prewarm-create`；首屏后现有预热目标仍按策略创建。
+- [x] 文档切换后旧首屏状态和旧预热调度失效；返修后回调按 documentId 校验，预览 Tab 切换后的 balanced/speed 与 memory 回归通过。
+- [x] `InlineMarkdownBlockEditor` 仅在进入预览内编辑后加载，预览普通首屏不静态请求该实现。
+- [x] 无搜索/选区状态的普通块挂载不注册空高亮；搜索/选区建立、清除、虚拟块卸载与重新挂载行为不回退。
+- [x] 模式生命周期、资源泄漏、预览切换、预览内编辑和高亮注册表定向测试通过。
+- [x] typecheck、lint、Desktop build、bundle 依赖边界检查和 `git diff --check` 真实通过。
+- [x] 不修改 Store Source of Truth、文档模型、DocumentRange、Markdown 渲染语义和模式性能策略。
+- [x] 所有本阶段 Machine Gate 真实通过后，阶段状态才可标记为已完成。
 
 ### 检查命令
 
-- 检查命令：`npm run test:prompt-eval`、`npm run test:routing-matrix`、`npm run test:agent-parser`、`npx vitest run tests/agent/promptVersioning.test.ts tests/agent/aiChatOrchestration.test.ts`、`npm run typecheck`、定向 ESLint（`src/services/ai/promptVersions.ts`、`tests/agent/promptVersioning.test.ts`）、`git diff --check`。
+```powershell
+npx vitest run tests/editor/EditorArea.resourceLifecycle.test.tsx tests/editor/modeResourceLeak.test.tsx tests/editor/previewTabSwitchRegression.test.tsx tests/markdown/MarkdownPreview.inlineEdit.test.tsx tests/services/previewHighlightRegistry.test.ts tests/editor/SearchOverlay.preview.test.tsx --maxWorkers=1
+npm run typecheck
+npm run lint
+npm run build:desktop
+npm run check:bundle:desktop
+git diff --check
+```
+
+阶段 2 不要求全量测试、全量 E2E 或 Release 构建；真实冷启动统一在阶段 4 使用新鲜隔离 Release 验收。
 
 ### 禁止事项
 
-- 不在不同模型或不同配置之间直接归因 Prompt 收益。
-- 不为评测引入 Agent 框架、checkpoint 或用户数据采集。
-- 不提前实施阶段 16 的条件项审计。
-- 不修改或夹带已有无关工作区文件。
+- 不修改 `createMarkdownPreviewModel`、`markdownPreviewModel.ts` 或 DocumentRange 索引策略。
+- 不调整模式预热延迟、资源保留策略或用户设置；只调整首次允许预热的门槛。
+- 不通过 `manualChunks`、放宽 bundle 阈值或合并大 chunk 伪造拆包结果。
+- 不添加 Skeleton、伪正文或提前打点。
+- 不修改窗口 reveal、Rust 启动链、数据库、文件系统、RAG、AI、更新功能或 Markdown 渲染语义。
+- 不修改、删除或夹带工作区既有用户文件。
 - 不自动提交、推送、打 tag、创建 Release 或 PR。
 
 ## 阶段历史
 
-### 阶段 1｜RAG 检索加权正确性
+### 阶段 4｜返修后桌面性能复测
+
+- 状态：阻塞
+- 完成内容：用返修源码构建隔离 Tauri Release；编辑与预览各取得 10 个有效 WebView2 冷启动样本，并用同一当前环境旧 Release 做对照。
+- 测量结果：返修编辑 `frontendToSurface` 为 479/510/596ms，旧版为 493/600/654ms；返修预览为 415/454/489ms，旧版为 431/508/519ms。相对旧版没有性能回退，但编辑绝对中位数仍未达到 400ms。
+- 机器检查：Release 构建 PASS（首次并行构建因页面文件不足失败，改用 `CARGO_BUILD_JOBS=1` 成功）；安全校验 9 PASS/0 阻断；定向测试 92 passed/2 skipped；typecheck、lint、Desktop build、bundle gate、`git diff --check` PASS。
+- 遗留问题：当前机器资源和测量脚本均出现临时故障，需在干净环境确认绝对性能门槛；未提交、未推送、未打 tag、未创建 Release。
+
+### 验收返修｜文档切换后的首屏就绪时序
 
 - 状态：已完成
-- 完成内容：移除关键词候选阶段的提前加权；融合结果集合统一应用一次当前文件/最近文档加权；增加纯关键词、纯向量、混合检索、分数上限和重复查询稳定性回归
-- 验证结果：`cargo test --manifest-path src-tauri/Cargo.toml rag_index::tests --lib --jobs 1` 4/4 通过，1 项真实用户数据库测试按设计忽略；Rust fmt、`git diff --check` 通过
-- 遗留问题：无
+- 完成内容：首屏 ready 回调携带并校验当前 documentId；新文档回调先建立 ready 归属，父 effect 不再清零；编辑器 RAF 与预览回调的陈旧结果不能改变当前文档状态；补充预览 Tab 切换后的 balanced/speed 预热恢复、旧 schedule 失效及 memory 不预热回归。
+- 本次实测：当前 Release 编辑 `frontendToSurface` 中位数/P90/最大值 351/383/406ms；当前 Release 预览 319/337/419ms；同会话旧 Release 预览 307/350/361ms。当前预览中位数相对旧 Release 回退 3.9%，`launchToSurface` 反而由 1255ms 降至 1158ms；性能验收通过。
+- 机器检查：定向 Vitest PASS（92 passed、2 skipped）；`npm run typecheck` PASS；`npm run lint` PASS（0 errors、43 warnings）；`npm run build:desktop` PASS；`npm run check:bundle:desktop` PASS；`git diff --check` PASS；Fix → Re-review PASS。返修后真实 Tauri Release 冷启动数据已在上方“阶段 4｜返修后桌面性能复测”记录，本返修未改变拆包、模型或预热参数。
+- 返修边界：只修复活动文档首屏 ready 的归属/时序并补一条切 Tab 后预热回归；不得扩大到预览模型、DocumentRange、渲染语义或启动链。
 
-### 阶段 2｜语义分块配置归一
-
-- 状态：已完成
-- 完成内容：删除 `RAGConfig`、默认值、pipeline 和 `chunkMarkdown` 中失效的 `chunkSize/chunkOverlap`；补充安全段落边界、无边界超长文本、列表和表格测试，保留代码/公式整体语义
-- 验证结果：`npx vitest run tests/rag/semanticChunker.test.ts` 8/8、`npm run test:agent-parser`、`npm run typecheck` 通过；定向 ESLint 0 error（3 个既有 warning）；`git diff --check` 通过
-- 遗留问题：无
-
-### 阶段 3｜Agent 单工具超时
+### 阶段 4｜新鲜 Release 冷启动验收
 
 - 状态：已完成
-- 完成内容：将 abort 与竞速 reject 的双计时器合并为一个可清理控制；超时先 abort 子工具，父取消可终止不响应 abort 的工具；执行结果区分 success、timeout、cancelled、tool_error，迟到结果不回写
-- 验证结果：`npx vitest run tests/agent/agentExecutionBudget.test.ts` 10/10、`npm run typecheck` 通过；定向 ESLint 0 error（3 个既有 warning）；`git diff --check` 通过
-- 遗留问题：无
+- 完成内容：使用独立 target 构建当前源码的新鲜 Tauri Release；编辑与预览各完成 10 次隔离 WebView2 冷启动测量。编辑 `frontendToSurface` 中位数/P90/最大值为 274/316/319ms；预览为 267/273/289ms，相对同机旧 Release 预览基线中位数回退 8.1%，低于 10% 阈值。
+- 验证结果：Release 安全校验 9 项通过、0 阻断；阶段 2 定向测试 89 passed/2 skipped；typecheck、lint、Desktop build、bundle gate、Release 构建、两种 surface 测量和 `git diff --check` 通过。
+- 遗留问题：无；未提交、未推送、未打 tag、未创建 Release。
 
-### 阶段 4｜RAG 完整语义块装箱
+### 阶段 3｜条件性 DocumentRange 索引延迟
 
-- 状态：已完成
-- 完成内容：新增结构化上下文装箱结果；按完整 Chunk 原子装入字符预算，跳过过长候选后继续尝试后续候选；固定前缀、来源头、分隔符和跳过提示全部计入预算；直接聊天来源与实际装入内容一致
-- 验证结果：`npx vitest run tests/rag/ragContext.test.ts` 7/7、`npm run typecheck` 通过；定向 ESLint 0 error（1 个既有 warning）；`git diff --check` 通过
-- 遗留问题：无
+- 状态：已完成（无需实施）
+- 完成内容：同机新鲜 Release 预览相对旧 Release 方向性基线的 `frontendToSurface` 中位数回退为 8.1%，未超过 10% 进入阈值；最大相邻阶段为 `app-ready → active-document-first-visible` 109ms，未证明 `collectTextSegments` / DocumentRange 派生索引为主要耗时。
+- 验证结果：已完成新鲜 Release 预览测量，并记录中位数、P90、最大相邻阶段及差值；未修改 `markdownPreviewModel`、`previewHighlight` 或 DocumentRange 派生索引。
+- 遗留问题：无；未提交、未推送。
 
-### 阶段 5｜Embedding 超长输入兜底
-
-- 状态：已完成
-- 完成内容：超长父 Chunk 仅在 Embedding 请求层按安全边界拆分并保留准确行号；成功子向量均值聚合回父 Chunk；批量失败后每个子输入最多重试一次，匿名错误不含正文；v1 向量保持可读并按 v2 预处理版本渐进重建
-- 验证结果：`npx vitest run tests/rag` 35/35、`npm run test:rag-index`、`npm run test:runtime-schemas`、`npm run typecheck` 通过；定向 ESLint 0 error（1 个既有 warning）；`git diff --check` 通过
-- 遗留问题：无
-
-### 阶段 6｜统一模型上下文预算
+### 阶段 2｜首帧后预热与非首屏能力初始化
 
 - 状态：已完成
-- 完成内容：基于 `maxContextLength` 建立统一窗口、25% 输出预留和固定开销契约；Direct、Agent 循环和最终综合回答共用完整消息原子装箱；优先保留系统规则、当前问题、约束、授权和未完成事项；服务端超限仅重装箱并安全重试一次
-- 验证结果：小窗口及降级定向测试与 Agent/RAG 回归 25/25、selection context、runtime schema、typecheck、desktop build 通过；匿名隔离 Tauri 假模型长对话确认请求受预算约束并保留关键约束；定向 ESLint 0 error（3 个既有 warning）；`git diff --check` 通过
-- 遗留问题：无
+- 完成内容：模式预热已绑定真实活动文档 editor/preview 首屏回调；预览内块编辑器改为交互触发动态加载；无搜索/选区状态的普通块挂载跳过空高亮同步，显式清除和注册表恢复路径保持不变；补充 Desktop 依赖边界断言和生命周期测试。
+- 验证结果：定向测试 6 文件、89 passed、2 skipped；`npm run typecheck`、`npm run lint`（0 errors）、`npm run build:desktop`、`npm run check:bundle:desktop`、`git diff --check` 通过。当前 Desktop 产物 95 chunks，`EditorArea` 约 72.31 KB，`MarkdownPreview` 约 226.34 KB，`InlineMarkdownBlockEditor` 约 2.03 KB 独立 chunk。
+- 遗留问题：返修后功能验收通过；阶段 4 仍需在干净环境确认绝对冷启动门槛；未提交、未推送。
 
-### 阶段 7｜RAG 离线评测基线
-
-- 状态：已完成
-- 完成内容：新增匿名固定问题—证据集、内存评测 runner、JSON 指标输出和基线说明；固定现有关键词、向量融合、阈值和多文档多样化逻辑
-- 验证结果：Recall@3、MRR、NDCG@3、来源准确率、groundedness 均为 1.0，无答案误召回率为 0；冷/热延迟可重复记录；`npm run test:rag-query` 与 `git diff --check` 通过
-- 遗留问题：当前 Fixture 为最小确定性基线，后续质量能力应按真实匿名失败场景增量扩充，不得读取用户数据
-
-### 阶段 8｜结构化 Embedding 与邻居扩展
+### 阶段 1｜按编辑、预览与差异模式拆包
 
 - 状态：已完成
-- 完成内容：Embedding v3 将文档标题、标题路径、块类型和正文纳入确定性输入；旧向量按文档触达渐进重建；Rust 为 TopK 主结果附带同文档同标题路径相邻块，前端仅用剩余预算去重装箱并标记 `neighbor-context`
-- 验证结果：RAG 定向 19/19、index/query/eval、runtime schema、typecheck、Rust RAG 与 desktop build 通过；baseline 六项质量指标保持 1.0，邻居目标场景收益为 1.0
-- 遗留问题：无
-
-### 阶段 9｜Rust 原生请求取消
-
-- 状态：已完成
-- 完成内容：前端为每次请求生成 requestId；AbortSignal 与 ReadableStream cancel 调用幂等 Rust 取消命令；CancellationToken 覆盖并发等待、reqwest 发送和响应读取，所有终态清理注册表
-- 验证结果：AI HTTP 传输检查、Rust HTTP 8/8、typecheck、desktop build 通过；隔离 Tauri 流读取首块后取消得到 AbortError，本地匿名服务确认连接关闭
-- 遗留问题：无
-
-### 阶段 10｜Agent 全局 deadline
-
-- 状态：已完成
-- 完成内容：默认 120 秒整次 deadline 覆盖模型和工具调用，局部工具超时按剩余时间收敛；deadline 后不再启动新调用，基于已有证据生成声明缺失信息的降级综合；写入和确认工具不自动重试
-- 验证结果：Agent 定向 14/14、typecheck、定向 ESLint 0 error（4 个既有 warning）、desktop build 通过；隔离 Tauri 匿名假模型 100ms deadline 返回稳定 `deadline` 终态
-- 遗留问题：无
-
-### 阶段 11｜端到端有界背压
-
-- 状态：已完成
-- 完成内容：匿名高速流基线确认原链路只有 16 MiB 总量限制、无在途上限；Rust 按 64 KiB 批次和 4 批 ACK 窗口限制在途数据为 256 KiB，前端按 ReadableStream 拉取消费并 ACK，取消可打断窗口等待
-- 验证结果：AI HTTP 传输与 SSE 兼容检查通过，Rust HTTP 9/9、typecheck、Rust fmt、desktop build、`git diff --check` 通过；隔离 Tauri 慢消费者读取 1,072,142 bytes / 519 批次，用时 2,613ms，无死锁
-- 遗留问题：无
-
-### 阶段 12｜RAG 性能档位调度
-
-- 状态：已完成
-- 完成内容：节省内存保持按需；平衡/极速按知识库规模、可用内存和 7 天近期使用决定闲时预热；用户输入、切文档和内存压力取消前端等待并调用 Rust CancellationToken 终止初始化，不增加主动释放
-- 验证结果：RAG 调度 3/3、app warmup、Rust RAG 5/5（1 项真实用户库测试按设计忽略）、typecheck、Rust fmt、desktop build 通过；隔离 Tauri 空知识库 8ms 跳过预热且索引保持 idle
-- 遗留问题：无
-
-### 阶段 13｜跨块 Markdown 语义虚拟化
-
-- 状态：已完成
-- 完成内容：Reference 定义注入可视块解析上下文；Footnote 共享定义并只渲染一个脚注区；自包含 HTML 按块虚拟化，跨块未闭合 HTML 保留整篇同步兼容；目录、定位、编辑 offset 与高度模型沿用原链路
-- 验证结果：Markdown 定向 48/48、typecheck、定向 ESLint、desktop build、`git diff --check` 通过，构建无预览 Worker；隔离 Tauri 中 Reference 18 块、Footnote 11 块且唯一脚注区、自包含 HTML 18 块，跨块 HTML 保持 whole 模式
-- 遗留问题：无
-
-### 阶段 14｜结论级来源引用
-
-- 状态：已完成
-- 完成内容：Direct/Agent 为实际进入模型的本地与 Web 来源分配本轮稳定 `S1...Sn`；只接受正文中存在于注册表的引用 ID；完整候选来源与可选引用子集兼容持久化；UI 区分“引用来源”和“检索来源/未确认引用”；Web 来源仅允许安全的 HTTP(S) URL，本地来源复用授权与行号定位
-- 验证结果：定向 Vitest 6 文件 78/78、runtime schema、typecheck、Lint 0 error（40 个既有 warning）、desktop build 与 bundle budget、`git diff --check` 通过；专用 identifier `com.guanmo.app.codex-stage14-20260818` 隔离 Tauri 在 1440×900/820×700、长标题、混合来源、本地 L8–10 跳转和重启恢复场景通过
-- 遗留问题：无
-
-### 阶段 15｜路由与 Prompt 评测闭环
-
-- 状态：已完成
-- 完成内容：建立路由规则 v1 与 Prompt v1 版本元数据（8 个 Prompt 段分段指纹 + 组合指纹，FNV-1a，只读不修改用户数据）；匿名固定回归集 33 案例 + 12 探针（全合成文本，无真实用户数据）；离线确定性评测 runner（温度 0、topP 1、不调用真实模型）输出 Direct/Agent 误判率、能力漏选/多选率、工具解析成功率、平均候选工具数、路由/Prompt 组装/工具解析延迟（p50/p95/max）及路由行为指纹；A/B 口径校验：同配置可重复、Prompt 变体可检出、异配置拒绝归因
-- 验证结果：`npm run test:prompt-eval` 通过（基线：Direct 误判 0/9、Agent 误判 1/24、能力漏选 0/33、能力多选 4/33、工具解析 12/12、平均候选 1.91；路由决策 p50 0.917ms/p95 1.498ms）；`npm run test:routing-matrix` 155/155、`npm run test:agent-parser`、定向 Vitest 16/16、`npm run typecheck`、定向 ESLint 0 error、`git diff --check` 通过
-- 遗留问题：selection-format 记为 Agent 误判、4 个弱边界案例存在能力多选（与 routingMatrix 既有差异清单一致），作为 v1 基线记录，本阶段不调整路由规则；scripts/*.mjs 的 no-undef 为既有 lint 口径差异（项目 lint 门禁不含 scripts 目录，阶段 14 已提交的 rag runner 同样如此），未修改 eslint.config.js
+- 完成内容：抽离 `markdownPreviewTypes.ts` 与 `MarkdownToc.tsx`；编辑/预览/差异和更新详情预览按需加载；真实预览 DOM commit 后触发首帧与渲染完成点位；补充依赖边界和生命周期回归。
+- 验证结果：定向测试 51 passed、2 skipped；`npm run typecheck`、`npm run lint`、`npm run build:desktop`、`npm run check:bundle:desktop`、`git diff --check` 通过。
+- 遗留问题：真实隔离 Release 冷启动测量已在阶段 4 完成；未提交、未推送。
 
 ## 新窗口执行提示词
 
