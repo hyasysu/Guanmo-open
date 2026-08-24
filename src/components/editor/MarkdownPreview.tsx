@@ -142,6 +142,20 @@ interface PreviewDragSelection {
   clientY: number
 }
 
+interface ProgrammaticScrollIntent {
+  line: number
+  rafId: number
+  lastTime: number
+  stableFrames: number
+  blockedFrames: number
+  initialDistance: number
+  settleStartedAt: number | null
+  settleStartTop: number
+  cancelNativeScroll: (() => void) | null
+}
+
+const PROGRAMMATIC_SCROLL_SETTLE_MS = 180
+
 function countLineBreaks(text: string): number {
   let n = 0
   for (let i = 0; i < text.length; i += 1) {
@@ -302,6 +316,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   // Virtual scrolling state
   const scrollContainerRef = useRef<HTMLElement | null>(null)
   const measuredHeightsRef = useRef<Map<string, number>>(new Map())
+  const programmaticScrollRef = useRef<ProgrammaticScrollIntent | null>(null)
   /** 未挂载搜索目标的精确定位校正任务：目标 Range 挂载后执行一次即清空 */
   const pendingSearchCorrectionRef = useRef<{ from: number; to: number; blockId: string; appliedTop?: number } | null>(null)
   const blockRefs = useRef<Map<number, HTMLDivElement | null>>(new Map())
@@ -317,6 +332,15 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const [scrollState, setScrollState] = useState<{ scrollTop: number; viewportHeight: number; viewportWidth: number }>({ scrollTop: 0, viewportHeight: 800, viewportWidth: 0 })
   const scrollStateRef = useRef(scrollState)
   const overscanBlocks = 5
+
+  const cancelProgrammaticScroll = useCallback(() => {
+    const intent = programmaticScrollRef.current
+    if (!intent) return
+    intent.cancelNativeScroll?.()
+    intent.cancelNativeScroll = null
+    if (intent.rafId) cancelAnimationFrame(intent.rafId)
+    programmaticScrollRef.current = null
+  }, [])
 
   scrollStateRef.current = scrollState
 
@@ -386,6 +410,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     mountedRef.current = true
     eventMarker.mark('model-create', lifecycleMetadata)
     return () => {
+      cancelProgrammaticScroll()
       eventMarker.mark('model-dispose', lifecycleMetadata)
       previewHighlightRegistry.clearResource(lifecycleMetadata.resource)
       if (activePreviewRoot === root) activePreviewRoot = null
@@ -401,7 +426,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       }
       mountedRef.current = false
     }
-  }, [])
+  }, [cancelProgrammaticScroll])
 
   /* ---------------- 统一 Range：块级高亮同步（挂载/卸载时自动恢复） ---------------- */
 
@@ -494,6 +519,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
 
   // 文档内容变化：旧 offset 全部失效，清除搜索索引与选区状态
   useEffect(() => {
+    cancelProgrammaticScroll()
     pendingSearchCorrectionRef.current = null
     searchMatchesByBlockRef.current = null
     const hadSearch = searchStateRef.current !== null
@@ -503,7 +529,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     selectionAnchorRef.current = null
     if (hadSearch) syncAllMountedBlocks({ search: true, selection: false })
     if (hadSelection) syncAllMountedBlocks({ search: false, selection: true })
-  }, [displayedContent, syncAllMountedBlocks])
+  }, [cancelProgrammaticScroll, displayedContent, syncAllMountedBlocks])
 
   useEffect(() => {
     if (!optimisticContent) return
@@ -541,6 +567,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       const nextState = { scrollTop: el.scrollTop, viewportHeight: el.clientHeight, viewportWidth: el.clientWidth }
       const currentWidth = scrollStateRef.current.viewportWidth
       if (currentWidth !== 0 && currentWidth !== el.clientWidth) {
+        cancelProgrammaticScroll()
         const estimateForResize = (block: PreviewBlock) => estimatePreviewBlockHeight(block, fontSize, lineHeight)
         const before = computeVisibleRange(
           model,
@@ -606,8 +633,10 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
           estimateForObserver,
           0,
         )
-        const anchorDelta = (after.blockTops[anchorIndex] ?? anchorTopBefore) - anchorTopBefore
-        if (anchorDelta !== 0) el.scrollTop += anchorDelta
+        if (!programmaticScrollRef.current) {
+          const anchorDelta = (after.blockTops[anchorIndex] ?? anchorTopBefore) - anchorTopBefore
+          if (anchorDelta !== 0) el.scrollTop += anchorDelta
+        }
         setScrollState({ scrollTop: el.scrollTop, viewportHeight: el.clientHeight, viewportWidth: el.clientWidth })
       }
     })
@@ -617,13 +646,20 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     }
     ro.observe(el)
     el.addEventListener('scroll', update, { passive: true })
+    el.addEventListener('wheel', cancelProgrammaticScroll, { passive: true })
+    el.addEventListener('pointerdown', cancelProgrammaticScroll)
+    el.addEventListener('touchstart', cancelProgrammaticScroll, { passive: true })
     return () => {
+      cancelProgrammaticScroll()
       ro.disconnect()
       blockRo.disconnect()
       blockResizeObserverRef.current = null
       el.removeEventListener('scroll', update)
+      el.removeEventListener('wheel', cancelProgrammaticScroll)
+      el.removeEventListener('pointerdown', cancelProgrammaticScroll)
+      el.removeEventListener('touchstart', cancelProgrammaticScroll)
     }
-  }, [fontSize, lineHeight, model, remeasureMountedBlocks])
+  }, [cancelProgrammaticScroll, fontSize, lineHeight, model, remeasureMountedBlocks])
 
   /** 虚拟块（重新）挂载时恢复 details 展开/折叠等受支持交互 HTML 的用户瞬时状态 */
   const restoreInteractiveHtmlState = useCallback((element: HTMLElement) => {
@@ -684,19 +720,126 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     [fontSize, lineHeight],
   )
 
-  // 沿用 1.5.0 的单次滚动语义：已挂载目标使用实测位置，未挂载目标使用全文模型估算位置。
-  // 两者都只发起一次平滑滚动；挂载后高度变化由虚拟列表的顶部锚点补偿处理，不在动画中途重定向目标。
+  // 主阶段统一使用与编辑模式相同的原生 smooth 控速；目标挂载后用固定时长缓出精确收尾。
+  // 若首次全文模型估算仍未让目标进入挂载窗口，再启用逐帧追踪兜底，保证单击可达。
   const scrollToLineInternal = useCallback((line: number): boolean => {
     const container = scrollContainerRef.current
     if (!container) return false
     const target = rootRef.current?.querySelector<HTMLElement>(`[data-md-line="${line}"]`)
-    const top = target
-      ? target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
-      : getEstimatedPreviewTopForLine(model, line, estimateBlockHeight, measuredHeightsRef.current)
-    if (typeof top !== 'number') return false
-    container.scrollTo({ top: Math.max(0, top - 24), behavior: 'smooth' })
+    cancelProgrammaticScroll()
+    if (target) {
+      const top = target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+      if (typeof top !== 'number') return false
+      container.scrollTo({ top: Math.max(0, top - 24), behavior: 'smooth' })
+      return true
+    }
+
+    const estimatedTop = getEstimatedPreviewTopForLine(model, line, estimateBlockHeight, measuredHeightsRef.current)
+    const initialDistance = typeof estimatedTop === 'number'
+      ? Math.abs(Math.max(0, estimatedTop - 24) - container.scrollTop)
+      : 1
+    const intent: ProgrammaticScrollIntent = {
+      line,
+      rafId: 0,
+      lastTime: performance.now(),
+      stableFrames: 0,
+      blockedFrames: 0,
+      initialDistance: Math.max(1, initialDistance),
+      settleStartedAt: null,
+      settleStartTop: container.scrollTop,
+      cancelNativeScroll: null,
+    }
+    programmaticScrollRef.current = intent
+    const runFrame = (time: number) => {
+      if (programmaticScrollRef.current !== intent || !mountedRef.current) return
+      const currentContainer = scrollContainerRef.current
+      if (currentContainer !== container) {
+        cancelProgrammaticScroll()
+        return
+      }
+      const currentTarget = rootRef.current?.querySelector<HTMLElement>(`[data-md-line="${intent.line}"]`)
+      const top = currentTarget
+        ? currentTarget.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+        : getEstimatedPreviewTopForLine(model, intent.line, estimateBlockHeight, measuredHeightsRef.current)
+      if (typeof top !== 'number') {
+        cancelProgrammaticScroll()
+        return
+      }
+      const current = container.scrollTop
+      let desired = Math.max(0, top - 24)
+      if (!currentTarget && Math.abs(desired - current) <= 1) {
+        const currentLine = getEstimatedPreviewLineForTop(
+          model,
+          current + container.clientHeight / 2,
+          estimateBlockHeight,
+          measuredHeightsRef.current,
+        )
+        const direction = typeof currentLine === 'number' && intent.line < currentLine ? -1 : 1
+        desired = Math.max(0, current + direction * Math.max(240, container.clientHeight * 0.75))
+      }
+      const error = desired - current
+      const deltaTime = Math.min(64, Math.max(1, time - intent.lastTime))
+      intent.lastTime = time
+      const distance = Math.abs(error)
+      let nextTop = current
+      if (currentTarget) {
+        // 目标真实 DOM 挂载后进入固定时长的三次缓出收尾：先明显减速，
+        // 到时直接写入最新实测目标，避免指数逼近造成长拖尾。
+        if (intent.settleStartedAt === null) {
+          intent.settleStartedAt = time
+          intent.settleStartTop = current
+        }
+        const completion = Math.min(1, (time - intent.settleStartedAt) / PROGRAMMATIC_SCROLL_SETTLE_MS)
+        const easedCompletion = 1 - Math.pow(1 - completion, 3)
+        nextTop = intent.settleStartTop + (desired - intent.settleStartTop) * easedCompletion
+      } else {
+        intent.settleStartedAt = null
+        intent.settleStartTop = current
+        // 未挂载阶段继续追踪动态估算位置；目标进入挂载窗口后再切换到固定时长缓停。
+        const progress = Math.max(0, Math.min(1, 1 - distance / intent.initialDistance))
+        const baseScale = 0.35 + 0.3 * progress
+        const curveScale = baseScale + (1 - baseScale) * Math.sin(Math.PI * progress)
+        const easedStep = distance * (1 - Math.exp(-deltaTime / 180)) * curveScale
+        const maxStep = Math.min(distance, Math.max(64, Math.min(1200, distance * 0.1)))
+        // scrollTop 在 Chromium 中按整数像素落地；误差较小时仍写入小数会被舍入回原值。
+        const step = distance > 1 ? Math.min(Math.max(1, easedStep), maxStep) : distance
+        nextTop = current + Math.sign(error) * step
+      }
+      if (Math.abs(nextTop - current) > 0.01) container.scrollTop = nextTop
+
+      if (Math.abs(container.scrollTop - current) < 0.5) intent.blockedFrames += 1
+      else intent.blockedFrames = 0
+      const remaining = Math.abs(desired - container.scrollTop)
+      if (currentTarget && remaining <= 1) intent.stableFrames += 1
+      else intent.stableFrames = 0
+      const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
+      if (intent.stableFrames >= 2 || (intent.blockedFrames >= 3 && container.scrollTop >= maxScrollTop - 1)) {
+        if (currentTarget && remaining > 0.01) container.scrollTop = desired
+        programmaticScrollRef.current = null
+        intent.rafId = 0
+        return
+      }
+      intent.rafId = requestAnimationFrame(runFrame)
+    }
+    let fallbackTimer: number | null = null
+    const startTracking = () => {
+      if (programmaticScrollRef.current !== intent) return
+      intent.cancelNativeScroll?.()
+      intent.cancelNativeScroll = null
+      intent.lastTime = performance.now()
+      intent.rafId = requestAnimationFrame(runFrame)
+    }
+    const cleanupNativeScroll = () => {
+      container.removeEventListener('scrollend', startTracking)
+      if (fallbackTimer !== null) window.clearTimeout(fallbackTimer)
+      fallbackTimer = null
+    }
+    intent.cancelNativeScroll = cleanupNativeScroll
+    container.addEventListener('scrollend', startTracking)
+    fallbackTimer = window.setTimeout(startTracking, 1000)
+    container.scrollTo({ top: Math.max(0, estimatedTop ?? container.scrollTop), behavior: 'smooth' })
     return true
-  }, [model, estimateBlockHeight])
+  }, [cancelProgrammaticScroll, estimateBlockHeight, model])
 
   // Expose scrollToLine for EditorArea to use with TOC jumps
   useImperativeHandle(ref, () => ({
@@ -735,6 +878,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       scrollToLineInternal(line)
     },
     scrollToOffset(offset: number) {
+      cancelProgrammaticScroll()
       const index = findBlockIndexByOffset(model, offset)
       const block = index >= 0 ? model.blocks[index] : undefined
       if (!block) return
@@ -795,7 +939,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       selectionAnchorRef.current = null
       applySelection(null)
     },
-  }), [model, estimateBlockHeight, requiresWholeDocumentRender, scrollToLineInternal, setSearchStateImpl, applySelection])
+  }), [cancelProgrammaticScroll, model, estimateBlockHeight, requiresWholeDocumentRender, scrollToLineInternal, setSearchStateImpl, applySelection])
 
   // Visible range
   const visible = useMemo(
@@ -1035,6 +1179,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   }, [model.blocks, content, displayedContent, documentKey, inlineEditEnabled, onBlockCommit, submitActiveEdit])
 
   const handlePointerDownCapture = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    cancelProgrammaticScroll()
     if (!event.altKey || !inlineEditEnabled || activeEditRef.current && (event.target as Element).closest('.gm-inline-markdown-editor')) return
     const target = event.target
     if (!(target instanceof Element)) return
@@ -1050,7 +1195,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       target,
       moved: false,
     }
-  }, [inlineEditEnabled])
+  }, [cancelProgrammaticScroll, inlineEditEnabled])
 
   const handlePointerMoveCapture = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const intent = altPointerRef.current
@@ -1246,6 +1391,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     const handleAnchorClick = (href?: string, isFootnoteBackref?: boolean) => (event: React.MouseEvent<HTMLAnchorElement>) => {
       if (!href?.startsWith('#')) return
       event.preventDefault()
+      cancelProgrammaticScroll()
       const id = href.slice(1)
       // 仅在预览实例自身范围内查找已挂载目标；不回退 document.getElementById，
       // 避免双栏预览等实例间同 id（如 heading-N）造成的跨实例滚动串扰
@@ -1535,7 +1681,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
             )
           },
         }
-  }, [estimateBlockHeight, filePath, fontSize, footnoteReferences, model, onHeadingClick, onTaskToggle, scrollToLineInternal])
+  }, [cancelProgrammaticScroll, estimateBlockHeight, filePath, fontSize, footnoteReferences, model, onHeadingClick, onTaskToggle, scrollToLineInternal])
 
   return (
     <div
@@ -1547,6 +1693,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       onPointerMoveCapture={handlePointerMoveCapture}
       onPointerUpCapture={handlePointerUpCapture}
       onClickCapture={handleClickCapture}
+      onWheelCapture={cancelProgrammaticScroll}
     >
       {requiresWholeDocumentRender ? (
         <StableMarkdownContent

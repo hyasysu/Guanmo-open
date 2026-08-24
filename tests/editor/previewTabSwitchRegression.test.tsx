@@ -178,6 +178,12 @@ function getLeftPreviewContainer(container: HTMLElement): HTMLElement | null {
   return all[0] as HTMLElement | null
 }
 
+async function settleLazyEditorModules() {
+  await act(async () => {
+    await vi.dynamicImportSettled()
+  })
+}
+
 describe('preview horizontal overflow boundary', () => {
   it('hides pane-wide horizontal overflow while preserving local scrollers', () => {
     const content = [
@@ -523,5 +529,77 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
       // 预览更新后，编辑器滚动位置仍保持原样 —— 右侧渲染不得影响左侧位置
       expect(editorScroller!.scrollTop).toBe(0)
     })
+  })
+})
+
+describe('editor TOC jump settling', () => {
+  it('eases through the latest measured target before the final CodeMirror snap', async () => {
+    let frameTime = 0
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback: FrameRequestCallback) => {
+      return window.setTimeout(() => {
+        frameTime += 16
+        callback(frameTime)
+      }, 16)
+    })
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((handle: number) => {
+      window.clearTimeout(handle)
+    })
+
+    const content = [
+      '# 起始标题',
+      ...Array.from({ length: 80 }, (_, index) => `\n\n正文 ${index + 1}`),
+      '\n\n## 远端标题',
+    ].join('')
+    setupEditor([anonymousTab('tab-a', content)], 'tab-a', 'edit')
+    const view = render(<EditorArea />)
+    await settleLazyEditorModules()
+    act(() => vi.advanceTimersByTime(50))
+
+    const editorScroller = view.container.querySelector<HTMLElement>('.cm-scroller')!
+    let scrollTop = 0
+    const scrollTopWrites: number[] = []
+    Object.defineProperties(editorScroller, {
+      clientHeight: { configurable: true, value: 800 },
+      scrollHeight: { configurable: true, value: 2_000 },
+      scrollTop: {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = value
+          scrollTopWrites.push(value)
+        },
+      },
+      scrollTo: {
+        configurable: true,
+        value: (options: ScrollToOptions) => {
+          scrollTop = Number(options.top)
+          scrollTopWrites.push(scrollTop)
+          window.setTimeout(() => editorScroller.dispatchEvent(new Event('scrollend')), 0)
+        },
+      },
+    })
+
+    let measurementCount = 0
+    vi.spyOn(EditorView.prototype, 'lineBlockAt').mockImplementation(() => {
+      const top = measurementCount++ === 0 ? 800 : 1_000
+      return { from: 0, to: 0, top, bottom: top + 24, height: 24 }
+    })
+    const scrollIntoViewSpy = vi.spyOn(EditorView, 'scrollIntoView')
+
+    fireEvent.click(view.getByRole('button', { name: '远端标题' }))
+    act(() => vi.advanceTimersByTime(260))
+
+    const terminalSteps = scrollTopWrites
+      .slice(1)
+      .map((position, index) => Math.abs(position - scrollTopWrites[index]))
+      .filter((step) => step > 0.1)
+    const finalFourSteps = terminalSteps.slice(-4)
+    expect(finalFourSteps).toHaveLength(4)
+    expect(finalFourSteps[1]).toBeLessThan(finalFourSteps[0])
+    expect(finalFourSteps[2]).toBeLessThan(finalFourSteps[1])
+    expect(finalFourSteps[3]).toBeLessThan(finalFourSteps[2])
+    expect(scrollTop).toBeCloseTo(1_000 - 32, 0)
+    expect(scrollIntoViewSpy).toHaveBeenCalledTimes(1)
+    expect(scrollIntoViewSpy).toHaveBeenCalledWith(expect.any(Number), { y: 'start', yMargin: 32 })
   })
 })
