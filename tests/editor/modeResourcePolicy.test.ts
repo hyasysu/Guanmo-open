@@ -177,12 +177,12 @@ describe('getNextPrewarmTarget', () => {
     expect(result).toBeNull()
   })
 
-  it('turbo + 大文档仍返回 preview 预热目标', () => {
+  it('turbo + 大文档也不返回 preview 预热目标', () => {
     const result = getNextPrewarmTarget(basePrewarmInput({
       contentLength: 200000,
       level: 'turbo',
     }))
-    expect(result).toBe('preview')
+    expect(result).toBeNull()
   })
 
   it('turbo + 小文档返回 preview 预热目标', () => {

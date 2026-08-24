@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import './ai-sprite.css'
 import { useAssistantState } from '@/hooks/useAssistantState'
 import { ASSISTANT_STATE_LABELS, type AssistantState } from '@/services/assistantState'
 
@@ -13,7 +14,7 @@ interface AiSpriteProps {
 
 /**
  * AI 状态小球：简约圆球与两枚眼睛，纯展示组件。
- * 所有动画由 global.css 中 .gm-ai-sprite 规则按 data-state 驱动。
+ * 所有动画由组件专属样式按 data-state 驱动。
  */
 export function AiSprite({ state, animated = true, size = 32, className = '' }: AiSpriteProps) {
   const liveState = useAssistantState()
