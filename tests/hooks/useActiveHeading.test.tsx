@@ -21,14 +21,16 @@ function Harness({
   trigger,
   enabled = true,
   showContainer = true,
+  topOffset = 0,
 }: {
   resolver: ((geometry: ActiveHeadingGeometry) => string | null) | null
   trigger?: unknown
   enabled?: boolean
   showContainer?: boolean
+  topOffset?: number
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const activeHeading = useActiveHeading(containerRef, resolver, trigger, enabled)
+  const activeHeading = useActiveHeading(containerRef, resolver, trigger, enabled, topOffset)
 
   return (
     <>
@@ -74,6 +76,22 @@ describe('useActiveHeading（滚动几何 + 模型驱动 resolver）', () => {
     const callsAfterScroll = resolver.mock.calls.length
     await flushFrames(2)
     expect(resolver.mock.calls.length).toBe(callsAfterScroll)
+  })
+
+  it('按顶部偏移下移检测线，避免标题上方留白命中上一项', async () => {
+    const resolver = vi.fn(({ scrollTop }: ActiveHeadingGeometry) => (
+      scrollTop >= 1000 ? 'target-heading' : 'previous-heading'
+    ))
+    render(<Harness resolver={resolver} topOffset={32} />)
+    const container = screen.getByTestId('preview-container')
+    defineGeometry(container, 800)
+
+    container.scrollTop = 976
+    fireEvent.scroll(container)
+    await flushFrames()
+
+    expect(resolver).toHaveBeenLastCalledWith({ scrollTop: 1008, viewportHeight: 800 })
+    expect(screen.getByText('target-heading', { selector: 'output' })).toBeInTheDocument()
   })
 
   it('长章节区间：resolver 持续返回上一标题时目录项不变空', async () => {

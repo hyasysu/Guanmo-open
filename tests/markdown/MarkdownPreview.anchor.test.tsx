@@ -106,14 +106,14 @@ afterEach(() => {
 })
 
 describe('MarkdownPreview 页内锚点（模型驱动定位）', () => {
-  it('目标位于虚拟窗口外时持续追踪实测位置，单击即可到达', async () => {
+  it('远距离目标渐隐后直接定位并在渐显前完成校正', async () => {
     const { host, scrollToCalls, scrollTopWrites } = createScrollHost()
     installRectMock(host)
     installScrollIntoViewStub()
 
     const content = [
       '[跳转远端](#far-target-section)',
-      ...Array.from({ length: 40 }, (_, index) => `\n\n远端测试段落 ${index + 1} 的匿名填充内容。`),
+      ...Array.from({ length: 140 }, (_, index) => `\n\n远端测试段落 ${index + 1} 的匿名填充内容。`),
       '\n\n## Far Target Section',
     ].join('')
     const view = render(<MarkdownPreview content={content} />, { container: host })
@@ -126,8 +126,8 @@ describe('MarkdownPreview 页内锚点（模型驱动定位）', () => {
       fireEvent.click(view.getByRole('link', { name: '跳转远端' }))
     })
 
-    // 远距离主阶段与编辑模式一致，先交给原生 smooth 控速；追踪动画仅负责实测收尾。
-    // 远端目标挂载后应先逐帧缓停，再在有限时间内精确落定。
+    // 远距离跳转不滚过全文：正文渐隐后直接定位，目标挂载并校正后再渐显。
+    expect(host.style.opacity).toBe('0')
     let heading = host.querySelector<HTMLElement>('[data-md-block-type="heading"]')
     let elapsedFrames = 0
     while (!heading && elapsedFrames < 45) {
@@ -135,41 +135,30 @@ describe('MarkdownPreview 页内锚点（模型驱动定位）', () => {
       elapsedFrames += 1
       heading = host.querySelector<HTMLElement>('[data-md-block-type="heading"]')
     }
-    const terminalPositions = [host.scrollTop]
     while (elapsedFrames < 45) {
       await flushFrame()
       elapsedFrames += 1
-      terminalPositions.push(host.scrollTop)
     }
-    expect(scrollToCalls).toHaveLength(1)
-    expect(scrollToCalls[0]).toEqual(expect.objectContaining({ behavior: 'smooth' }))
+    expect(scrollToCalls).toHaveLength(0)
     expect(scrollTopWrites.length).toBeGreaterThan(0)
 
     // 目标块已挂载
     expect(heading).not.toBeNull()
     expect(heading).toHaveTextContent('Far Target Section')
 
-    const terminalSteps = terminalPositions
-      .slice(1)
-      .map((position, index) => Math.abs(position - terminalPositions[index]))
-      .filter((step) => step > 0.1)
-    const finalFourSteps = terminalSteps.slice(-4)
-    expect(finalFourSteps).toHaveLength(4)
-    expect(finalFourSteps[1]).toBeLessThan(finalFourSteps[0])
-    expect(finalFourSteps[2]).toBeLessThan(finalFourSteps[1])
-    expect(finalFourSteps[3]).toBeLessThan(finalFourSteps[2])
-
     // URL hash 已同步
     expect(window.location.hash).toBe('#far-target-section')
 
     // 最终真实标题对齐到预览顶部留白
     expect(host.scrollTop).toBeCloseTo(Number.parseFloat(heading?.style.top ?? '0') - 24, 0)
+    expect(host.style.opacity).toBe('')
+    expect(scrollTopWrites.length).toBeLessThanOrEqual(4)
 
     // 稳定后不再产生滚动写入：无滚动反馈循环
     const writesAfterStabilization = scrollTopWrites.length
     await flushFrames(10)
     expect(scrollTopWrites.length).toBe(writesAfterStabilization)
-    expect(scrollToCalls).toHaveLength(1)
+    expect(scrollToCalls).toHaveLength(0)
   })
 
   it('锚点不存在时保持安全 no-op：不滚动、不更新 hash', async () => {

@@ -19,6 +19,7 @@ import { eventMarker } from '@/services/eventMarker'
 import { markStartupPoint } from '@/services/startupPerformance'
 import { hasBootSnapshotContent } from '@/services/bootSnapshot'
 import { OPEN_EDITOR_SEARCH_EVENT } from '@/services/editorEvents'
+import { startHeadingScroll } from '@/services/headingScroll'
 import { EditorContextMenu } from './EditorContextMenu'
 import { MarkdownToc } from './MarkdownToc'
 import type { MarkdownBlockCommitRequest, MarkdownPreviewHandle } from './markdownPreviewTypes'
@@ -121,7 +122,6 @@ const SCROLL_SYNC_FOLLOW_EPSILON_PX = 0.5
 const SCROLL_SYNC_FOLLOW_STABLE_FRAMES = 2
 /** 实际 scrollTop 与上一次写入值偏差超过该值视为外部修改（渲染补偿 / CodeMirror 测量校正） */
 const SCROLL_SYNC_EXTERNAL_DRIFT_PX = 1
-const EDITOR_TOC_SCROLL_SETTLE_MS = 180
 const PREVIEW_SWITCH_MARK_PREFIX = 'guanmo:preview-switch'
 
 interface ScheduledPreviewContent {
@@ -821,13 +821,15 @@ export function EditorArea() {
     leftPreviewRef,
     resolveLeftActiveHeading,
     `${viewMode}:${activeTab?.id ?? ''}:${activePreview.version}`,
-    leftPreviewVisible
+    leftPreviewVisible,
+    SCROLL_SYNC_TOP_OFFSET,
   )
   const activeRightHeading = useActiveHeading(
     rightPreviewRef,
     resolveRightActiveHeading,
     `${viewMode}:${rightTab?.id ?? ''}:${rightPreview.version}`,
-    viewMode === 'dual-preview'
+    viewMode === 'dual-preview',
+    SCROLL_SYNC_TOP_OFFSET,
   )
 
   useEffect(() => {
@@ -1784,74 +1786,32 @@ export function EditorArea() {
     cancelEditorFollower()
     cancelEditorHeadingJump()
     const pos = view.state.doc.line(line).from
-    const scrollDOM = view.scrollDOM
-    // 远距离目标行的高度映射可能仍是估算值：先用估算位置启动原生平滑滚动，
-    // 动画结束后用最新几何做短促缓停，再交给 CodeMirror 执行最终精确校正。
-    const targetTop = Math.max(0, view.lineBlockAt(pos).top - SCROLL_SYNC_TOP_OFFSET)
+    const initialTargetTop = view.lineBlockAt(pos).top - SCROLL_SYNC_TOP_OFFSET
     view.dispatch({ selection: { anchor: pos } })
-    if (Math.abs(targetTop - scrollDOM.scrollTop) < 1) {
-      view.focus()
-      return
-    }
-    let terminalFrame: number | null = null
-    let fallbackTimer: number | null = null
-    let nativeSettled = false
-    let terminalStartedAt: number | null = null
-    let terminalStartTop = scrollDOM.scrollTop
-    const cleanup = () => {
-      if (terminalFrame !== null) window.cancelAnimationFrame(terminalFrame)
-      if (fallbackTimer !== null) window.clearTimeout(fallbackTimer)
-      terminalFrame = null
-      fallbackTimer = null
-      scrollDOM.removeEventListener('scrollend', startTerminalSettle)
-      scrollDOM.removeEventListener('wheel', cancelForUser)
-      scrollDOM.removeEventListener('pointerdown', cancelForUser)
-      scrollDOM.removeEventListener('touchstart', cancelForUser)
-      if (editorHeadingJumpCancelRef.current === cleanup) editorHeadingJumpCancelRef.current = null
-    }
-    const cancelForUser = () => cleanup()
-    const runTerminalSettle = (time: number) => {
-      terminalFrame = null
-      if (editorViewRef.current !== view || pos > view.state.doc.length) {
-        cleanup()
-        return
-      }
-      if (terminalStartedAt === null) {
-        terminalStartedAt = time
-        terminalStartTop = scrollDOM.scrollTop
-      }
-      const maxTop = Math.max(0, scrollDOM.scrollHeight - scrollDOM.clientHeight)
-      const latestTarget = Math.min(
-        Math.max(0, view.lineBlockAt(pos).top - SCROLL_SYNC_TOP_OFFSET),
-        maxTop,
-      )
-      const completion = Math.min(1, (time - terminalStartedAt) / EDITOR_TOC_SCROLL_SETTLE_MS)
-      const easedCompletion = 1 - Math.pow(1 - completion, 3)
-      scrollDOM.scrollTop = terminalStartTop + (latestTarget - terminalStartTop) * easedCompletion
-      if (completion < 1) {
-        terminalFrame = window.requestAnimationFrame(runTerminalSettle)
-        return
-      }
-      cleanup()
-      view.dispatch({
-        effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: SCROLL_SYNC_TOP_OFFSET }),
-      })
-    }
-    function startTerminalSettle() {
-      if (nativeSettled) return
-      nativeSettled = true
-      scrollDOM.removeEventListener('scrollend', startTerminalSettle)
-      if (fallbackTimer !== null) window.clearTimeout(fallbackTimer)
-      fallbackTimer = null
-      terminalFrame = window.requestAnimationFrame(runTerminalSettle)
-    }
+    let useInitialTarget = true
+    let cleanup: (() => void) | null = null
+    cleanup = startHeadingScroll({
+      container: view.scrollDOM,
+      fadeElement: view.scrollDOM,
+      getTargetTop: () => {
+        if (editorViewRef.current !== view || pos > view.state.doc.length) return undefined
+        if (useInitialTarget) {
+          useInitialTarget = false
+          return initialTargetTop
+        }
+        return view.lineBlockAt(pos).top - SCROLL_SYNC_TOP_OFFSET
+      },
+      onBeforeReveal: () => {
+        if (editorViewRef.current !== view || pos > view.state.doc.length) return
+        view.dispatch({
+          effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: SCROLL_SYNC_TOP_OFFSET }),
+        })
+      },
+      onSettled: () => {
+        if (cleanup && editorHeadingJumpCancelRef.current === cleanup) editorHeadingJumpCancelRef.current = null
+      },
+    })
     editorHeadingJumpCancelRef.current = cleanup
-    scrollDOM.addEventListener('scrollend', startTerminalSettle)
-    scrollDOM.addEventListener('wheel', cancelForUser, { passive: true })
-    scrollDOM.addEventListener('pointerdown', cancelForUser)
-    scrollDOM.addEventListener('touchstart', cancelForUser, { passive: true })
-    fallbackTimer = window.setTimeout(startTerminalSettle, 1000)
-    scrollDOM.scrollTo({ top: targetTop, behavior: 'smooth' })
     view.focus()
   }, [cancelEditorFollower, cancelEditorHeadingJump])
 

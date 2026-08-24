@@ -22,6 +22,7 @@ import {
   previewHighlightRegistry,
 } from '@/services/previewHighlight'
 import { eventMarker } from '@/services/eventMarker'
+import { startHeadingScroll } from '@/services/headingScroll'
 import type {
   MarkdownPreviewHandle,
   MarkdownPreviewProps,
@@ -97,20 +98,6 @@ interface PreviewDragSelection {
   clientX: number
   clientY: number
 }
-
-interface ProgrammaticScrollIntent {
-  line: number
-  rafId: number
-  lastTime: number
-  stableFrames: number
-  blockedFrames: number
-  initialDistance: number
-  settleStartedAt: number | null
-  settleStartTop: number
-  cancelNativeScroll: (() => void) | null
-}
-
-const PROGRAMMATIC_SCROLL_SETTLE_MS = 180
 
 function countLineBreaks(text: string): number {
   let n = 0
@@ -278,7 +265,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   // Virtual scrolling state
   const scrollContainerRef = useRef<HTMLElement | null>(null)
   const measuredHeightsRef = useRef<Map<string, number>>(new Map())
-  const programmaticScrollRef = useRef<ProgrammaticScrollIntent | null>(null)
+  const headingScrollCancelRef = useRef<(() => void) | null>(null)
   /** 未挂载搜索目标的精确定位校正任务：目标 Range 挂载后执行一次即清空 */
   const pendingSearchCorrectionRef = useRef<{ from: number; to: number; blockId: string; appliedTop?: number } | null>(null)
   const blockRefs = useRef<Map<number, HTMLDivElement | null>>(new Map())
@@ -296,12 +283,9 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const overscanBlocks = 5
 
   const cancelProgrammaticScroll = useCallback(() => {
-    const intent = programmaticScrollRef.current
-    if (!intent) return
-    intent.cancelNativeScroll?.()
-    intent.cancelNativeScroll = null
-    if (intent.rafId) cancelAnimationFrame(intent.rafId)
-    programmaticScrollRef.current = null
+    const cancel = headingScrollCancelRef.current
+    headingScrollCancelRef.current = null
+    cancel?.()
   }, [])
 
   scrollStateRef.current = scrollState
@@ -610,7 +594,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
           estimateForObserver,
           0,
         )
-        if (!programmaticScrollRef.current) {
+        if (!headingScrollCancelRef.current) {
           const anchorDelta = (after.blockTops[anchorIndex] ?? anchorTopBefore) - anchorTopBefore
           if (anchorDelta !== 0) el.scrollTop += anchorDelta
         }
@@ -697,124 +681,33 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     [fontSize, lineHeight],
   )
 
-  // 主阶段统一使用与编辑模式相同的原生 smooth 控速；目标挂载后用固定时长缓出精确收尾。
-  // 若首次全文模型估算仍未让目标进入挂载窗口，再启用逐帧追踪兜底，保证单击可达。
+  // 编辑与预览共用同一套目录滚动：短距离平滑滚动，长距离渐隐后瞬移并在渐显前校正。
+  // 未挂载标题始终由全文模型提供位置，挂载后自动切换为真实 DOM 几何。
   const scrollToLineInternal = useCallback((line: number): boolean => {
     const container = scrollContainerRef.current
     if (!container) return false
-    const target = rootRef.current?.querySelector<HTMLElement>(`[data-md-line="${line}"]`)
     cancelProgrammaticScroll()
-    if (target) {
-      const top = target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
-      if (typeof top !== 'number') return false
-      container.scrollTo({ top: Math.max(0, top - 24), behavior: 'smooth' })
-      return true
+    const getTargetTop = () => {
+      if (!mountedRef.current || scrollContainerRef.current !== container) return undefined
+      const target = rootRef.current?.querySelector<HTMLElement>(`[data-md-line="${line}"]`)
+      const top = target
+        ? target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+        : getEstimatedPreviewTopForLine(model, line, estimateBlockHeight, measuredHeightsRef.current)
+      return typeof top === 'number' ? top - 24 : undefined
     }
-
-    const estimatedTop = getEstimatedPreviewTopForLine(model, line, estimateBlockHeight, measuredHeightsRef.current)
-    const initialDistance = typeof estimatedTop === 'number'
-      ? Math.abs(Math.max(0, estimatedTop - 24) - container.scrollTop)
-      : 1
-    const intent: ProgrammaticScrollIntent = {
-      line,
-      rafId: 0,
-      lastTime: performance.now(),
-      stableFrames: 0,
-      blockedFrames: 0,
-      initialDistance: Math.max(1, initialDistance),
-      settleStartedAt: null,
-      settleStartTop: container.scrollTop,
-      cancelNativeScroll: null,
+    if (typeof getTargetTop() !== 'number') return false
+    let cleanup: (() => void) | null = null
+    cleanup = startHeadingScroll({
+      container,
+      fadeElement: container,
+      getTargetTop,
+      onSettled: () => {
+        if (cleanup && headingScrollCancelRef.current === cleanup) headingScrollCancelRef.current = null
+      },
+    })
+    if (cleanup) {
+      headingScrollCancelRef.current = cleanup
     }
-    programmaticScrollRef.current = intent
-    const runFrame = (time: number) => {
-      if (programmaticScrollRef.current !== intent || !mountedRef.current) return
-      const currentContainer = scrollContainerRef.current
-      if (currentContainer !== container) {
-        cancelProgrammaticScroll()
-        return
-      }
-      const currentTarget = rootRef.current?.querySelector<HTMLElement>(`[data-md-line="${intent.line}"]`)
-      const top = currentTarget
-        ? currentTarget.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
-        : getEstimatedPreviewTopForLine(model, intent.line, estimateBlockHeight, measuredHeightsRef.current)
-      if (typeof top !== 'number') {
-        cancelProgrammaticScroll()
-        return
-      }
-      const current = container.scrollTop
-      let desired = Math.max(0, top - 24)
-      if (!currentTarget && Math.abs(desired - current) <= 1) {
-        const currentLine = getEstimatedPreviewLineForTop(
-          model,
-          current + container.clientHeight / 2,
-          estimateBlockHeight,
-          measuredHeightsRef.current,
-        )
-        const direction = typeof currentLine === 'number' && intent.line < currentLine ? -1 : 1
-        desired = Math.max(0, current + direction * Math.max(240, container.clientHeight * 0.75))
-      }
-      const error = desired - current
-      const deltaTime = Math.min(64, Math.max(1, time - intent.lastTime))
-      intent.lastTime = time
-      const distance = Math.abs(error)
-      let nextTop = current
-      if (currentTarget) {
-        // 目标真实 DOM 挂载后进入固定时长的三次缓出收尾：先明显减速，
-        // 到时直接写入最新实测目标，避免指数逼近造成长拖尾。
-        if (intent.settleStartedAt === null) {
-          intent.settleStartedAt = time
-          intent.settleStartTop = current
-        }
-        const completion = Math.min(1, (time - intent.settleStartedAt) / PROGRAMMATIC_SCROLL_SETTLE_MS)
-        const easedCompletion = 1 - Math.pow(1 - completion, 3)
-        nextTop = intent.settleStartTop + (desired - intent.settleStartTop) * easedCompletion
-      } else {
-        intent.settleStartedAt = null
-        intent.settleStartTop = current
-        // 未挂载阶段继续追踪动态估算位置；目标进入挂载窗口后再切换到固定时长缓停。
-        const progress = Math.max(0, Math.min(1, 1 - distance / intent.initialDistance))
-        const baseScale = 0.35 + 0.3 * progress
-        const curveScale = baseScale + (1 - baseScale) * Math.sin(Math.PI * progress)
-        const easedStep = distance * (1 - Math.exp(-deltaTime / 180)) * curveScale
-        const maxStep = Math.min(distance, Math.max(64, Math.min(1200, distance * 0.1)))
-        // scrollTop 在 Chromium 中按整数像素落地；误差较小时仍写入小数会被舍入回原值。
-        const step = distance > 1 ? Math.min(Math.max(1, easedStep), maxStep) : distance
-        nextTop = current + Math.sign(error) * step
-      }
-      if (Math.abs(nextTop - current) > 0.01) container.scrollTop = nextTop
-
-      if (Math.abs(container.scrollTop - current) < 0.5) intent.blockedFrames += 1
-      else intent.blockedFrames = 0
-      const remaining = Math.abs(desired - container.scrollTop)
-      if (currentTarget && remaining <= 1) intent.stableFrames += 1
-      else intent.stableFrames = 0
-      const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
-      if (intent.stableFrames >= 2 || (intent.blockedFrames >= 3 && container.scrollTop >= maxScrollTop - 1)) {
-        if (currentTarget && remaining > 0.01) container.scrollTop = desired
-        programmaticScrollRef.current = null
-        intent.rafId = 0
-        return
-      }
-      intent.rafId = requestAnimationFrame(runFrame)
-    }
-    let fallbackTimer: number | null = null
-    const startTracking = () => {
-      if (programmaticScrollRef.current !== intent) return
-      intent.cancelNativeScroll?.()
-      intent.cancelNativeScroll = null
-      intent.lastTime = performance.now()
-      intent.rafId = requestAnimationFrame(runFrame)
-    }
-    const cleanupNativeScroll = () => {
-      container.removeEventListener('scrollend', startTracking)
-      if (fallbackTimer !== null) window.clearTimeout(fallbackTimer)
-      fallbackTimer = null
-    }
-    intent.cancelNativeScroll = cleanupNativeScroll
-    container.addEventListener('scrollend', startTracking)
-    fallbackTimer = window.setTimeout(startTracking, 1000)
-    container.scrollTo({ top: Math.max(0, estimatedTop ?? container.scrollTop), behavior: 'smooth' })
     return true
   }, [cancelProgrammaticScroll, estimateBlockHeight, model])
 
