@@ -4,11 +4,11 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
-import { createContext, forwardRef, isValidElement, memo, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createContext, forwardRef, isValidElement, lazy, memo, Suspense, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '@/hooks/useTauri'
-import { createHeadingId, type TocItem } from '@/services/markdownToc'
+import { createHeadingId } from '@/services/markdownToc'
 import { remarkStandaloneDisplayMath } from '@/services/markdownMath'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { createMarkdownPreviewModel, computeVisibleRange, findAnchorTarget, findBlockIndexByOffset, getEstimatedPreviewLineForTop, getEstimatedPreviewTopForLine, getSourceOffsetForLine, searchVisibleText, type PreviewBlock } from '@/services/markdownPreviewModel'
@@ -20,15 +20,31 @@ import {
   findWordRangeAt,
   getTextForSourceRange,
   previewHighlightRegistry,
-  type DocumentRange,
 } from '@/services/previewHighlight'
 import { eventMarker } from '@/services/eventMarker'
-import { InlineMarkdownBlockEditor } from './InlineMarkdownBlockEditor'
+import { startHeadingScroll } from '@/services/headingScroll'
+import type {
+  MarkdownPreviewHandle,
+  MarkdownPreviewProps,
+  PreviewSearchState,
+} from './markdownPreviewTypes'
+export type {
+  MarkdownBlockCommitRequest,
+  MarkdownBlockCommitResult,
+  MarkdownPreviewHandle,
+  MarkdownPreviewProps,
+  PreviewSearchState,
+  PreviewSelectionSnapshot,
+} from './markdownPreviewTypes'
+
+const LazyInlineMarkdownBlockEditor = lazy(() => import('./InlineMarkdownBlockEditor').then(({ InlineMarkdownBlockEditor }) => ({ default: InlineMarkdownBlockEditor })))
+
+function InlineMarkdownEditorSuspenseFallback() {
+  return <div className="gm-inline-markdown-editor min-h-12" aria-hidden="true" />
+}
 
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath, remarkStandaloneDisplayMath]
 const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex, rehypeHighlight]
-const EMBEDDED_HTML_PATTERN = /<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?\s*\/?>/
-const HTML_VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'])
 type RehypePlugins = NonNullable<Options['rehypePlugins']>
 let markdownHtmlPluginsPromise: Promise<RehypePlugins> | null = null
 
@@ -43,84 +59,6 @@ function loadMarkdownHtmlPlugins(): Promise<RehypePlugins> {
   markdownHtmlPluginsPromise ??= import('@/services/markdownHtml')
     .then(({ MARKDOWN_HTML_REHYPE_PLUGINS }) => MARKDOWN_HTML_REHYPE_PLUGINS)
   return markdownHtmlPluginsPromise
-}
-
-function hasCrossBlockHtml(content: string): boolean {
-  return content.split(/\r?\n\s*\r?\n/).some((source) => {
-    const tokens = (source.match(/<[^>]+>/g) ?? []).filter((token) =>
-      /^<\/?[A-Za-z][A-Za-z0-9-]*(?:\s|\/?>)/.test(token)
-    )
-    const opening = tokens
-      .filter((token) => token[1] !== '/' && !/\/\s*>$/.test(token))
-      .filter((token) => {
-        const tag = token.replace(/^<\/?/, '').split(/[\s/>]/, 1)[0].toLowerCase()
-        return tag && !HTML_VOID_TAGS.has(tag)
-      })
-      .length
-    const closing = tokens.filter((token) => token[1] === '/').length
-    return opening !== closing
-  })
-}
-
-export interface MarkdownBlockCommitRequest {
-  block: PreviewBlock
-  draft: string
-  documentKey: string
-  documentVersion: number | string
-}
-
-export type MarkdownBlockCommitResult =
-  | { status: 'applied'; content?: string }
-  | { status: 'conflict'; currentSource: string }
-
-/** 预览全文搜索状态：SearchOverlay 通过模型驱动各实例的高亮与 active 项 */
-export interface PreviewSearchState {
-  query: string
-  /** 当前 active 匹配的全局源码 offset（起点） */
-  activeOffset?: number
-}
-
-/** 统一 Range 选区快照：供右键菜单、复制、AI 上下文等消费 */
-export interface PreviewSelectionSnapshot {
-  range: DocumentRange
-  from: number
-  to: number
-  text: string
-  startLine: number
-  endLine: number
-}
-
-export interface MarkdownPreviewHandle {
-  scrollToLine: (line: number) => void
-  scrollToOffset: (offset: number) => void
-  getTopForLine: (line: number) => number | undefined
-  getLineForTop: (top: number) => number | undefined
-  /** 当前视口顶部对应的源码 offset（供搜索锚点定位最近匹配）；无容器/未挂载时返回 undefined */
-  getViewportOffset: () => number | undefined
-  setSearchState: (state: PreviewSearchState | null) => void
-  /** 基于可见文本投影搜索全文，返回源码 offset 匹配（供 SearchOverlay 统一计数语义） */
-  searchVisible: (query: string) => Array<{ from: number; to: number }>
-  getSelection: () => PreviewSelectionSnapshot | null
-  selectAll: () => void
-  clearSelection: () => void
-}
-
-interface MarkdownPreviewProps {
-  content: string
-  filePath?: string | null
-  fontSize?: number
-  lineHeight?: number
-  fontFamily?: string
-  wordWrap?: boolean
-  skipHtml?: boolean
-  documentKey?: string
-  documentVersion?: number | string
-  inlineEditEnabled?: boolean
-  onBlockCommit?: (request: MarkdownBlockCommitRequest) => Promise<MarkdownBlockCommitResult> | MarkdownBlockCommitResult
-  onTaskToggle?: (line: number, checked: boolean) => void
-  onHeadingClick?: (line: number) => void
-  onDraftStateChange?: (hasDraft: boolean) => void
-  resource?: 'preview' | 'left-preview' | 'right-preview'
 }
 
 interface ActiveBlockEdit {
@@ -265,6 +203,9 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   onTaskToggle,
   onHeadingClick,
   onDraftStateChange,
+  isVisible = true,
+  onFirstVisible,
+  onRenderComplete,
   resource = 'preview',
 }: MarkdownPreviewProps, ref: React.ForwardedRef<MarkdownPreviewHandle>) {
   const rootRef = useRef<HTMLDivElement>(null)
@@ -281,6 +222,9 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const handledAltClickRef = useRef(false)
   const mountedRef = useRef(true)
   const onBlockCommitRef = useRef(onBlockCommit)
+  const onFirstVisibleRef = useRef(onFirstVisible)
+  const onRenderCompleteRef = useRef(onRenderComplete)
+  const firstVisibleRef = useRef(false)
   const lifecycleMetadataRef = useRef({ documentKey, resource })
   const scrollRestoreRef = useRef<{ scrollTop: number; container: HTMLElement } | null>(null)
   const displayedContent = activeEdit?.contentSnapshot ?? optimisticContent?.content ?? content
@@ -314,16 +258,16 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     if (!footnoteDefinitionSource || footnoteReferences.length === 0) return ''
     return `${footnoteReferences.map((reference) => reference.source).join(' ')}\n\n${footnoteDefinitionSource}`
   }, [footnoteDefinitionSource, footnoteReferences])
-  const hasEmbeddedHtml = useMemo(() => EMBEDDED_HTML_PATTERN.test(normalizedContent), [normalizedContent])
-  const requiresWholeDocumentRender = hasCrossBlockHtml(normalizedContent)
+  const { hasEmbeddedHtml, requiresWholeDocumentRender } = model
   const [htmlRehypePlugins, setHtmlRehypePlugins] = useState<RehypePlugins | null>(null)
   const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
   const themeId = useSettingsStore((state) => state.appearance.themeId)
   // Virtual scrolling state
   const scrollContainerRef = useRef<HTMLElement | null>(null)
   const measuredHeightsRef = useRef<Map<string, number>>(new Map())
-  /** 未挂载目标的行定位校正任务：目标块挂载测量后执行一次即清空（幂等，无反馈循环） */
-  const pendingLineCorrectionRef = useRef<{ line: number } | null>(null)
+  const headingScrollCancelRef = useRef<(() => void) | null>(null)
+  /** 未挂载搜索目标的精确定位校正任务：目标 Range 挂载后执行一次即清空 */
+  const pendingSearchCorrectionRef = useRef<{ from: number; to: number; blockId: string; appliedTop?: number } | null>(null)
   const blockRefs = useRef<Map<number, HTMLDivElement | null>>(new Map())
   const blockResizeObserverRef = useRef<ResizeObserver | null>(null)
   const measurementKeyRef = useRef<{
@@ -337,6 +281,12 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const [scrollState, setScrollState] = useState<{ scrollTop: number; viewportHeight: number; viewportWidth: number }>({ scrollTop: 0, viewportHeight: 800, viewportWidth: 0 })
   const scrollStateRef = useRef(scrollState)
   const overscanBlocks = 5
+
+  const cancelProgrammaticScroll = useCallback(() => {
+    const cancel = headingScrollCancelRef.current
+    headingScrollCancelRef.current = null
+    cancel?.()
+  }, [])
 
   scrollStateRef.current = scrollState
 
@@ -380,6 +330,19 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   optimisticContentRef.current = optimisticContent
   documentVersionRef.current = documentVersion
   onBlockCommitRef.current = onBlockCommit
+  onFirstVisibleRef.current = onFirstVisible
+  onRenderCompleteRef.current = onRenderComplete
+
+  useLayoutEffect(() => {
+    if (!isVisible || firstVisibleRef.current || !rootRef.current) return
+    firstVisibleRef.current = true
+    onFirstVisibleRef.current?.()
+  }, [documentKey, isVisible, resource])
+
+  useLayoutEffect(() => {
+    if (!isVisible || !rootRef.current) return
+    onRenderCompleteRef.current?.()
+  }, [displayedContent, documentKey, documentVersion, isVisible, resource])
 
   useEffect(() => {
     onDraftStateChange?.(activeEdit !== null)
@@ -406,6 +369,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     mountedRef.current = true
     eventMarker.mark('model-create', lifecycleMetadata)
     return () => {
+      cancelProgrammaticScroll()
       eventMarker.mark('model-dispose', lifecycleMetadata)
       previewHighlightRegistry.clearResource(lifecycleMetadata.resource)
       if (activePreviewRoot === root) activePreviewRoot = null
@@ -421,7 +385,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       }
       mountedRef.current = false
     }
-  }, [])
+  }, [cancelProgrammaticScroll])
 
   /* ---------------- 统一 Range：块级高亮同步（挂载/卸载时自动恢复） ---------------- */
 
@@ -432,6 +396,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   ) => {
     const block = modelRef.current.blocks[index]
     if (!block) return
+    const hasExplicitKinds = kinds.search !== undefined || kinds.selection !== undefined
+    if (!hasExplicitKinds && !searchStateRef.current && !selectionRangeRef.current) return
     const next: { search?: globalThis.Range[]; searchActive?: globalThis.Range[]; selection?: globalThis.Range[] } = {}
     if (kinds.search !== false) {
       const searchState = searchStateRef.current
@@ -514,7 +480,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
 
   // 文档内容变化：旧 offset 全部失效，清除搜索索引与选区状态
   useEffect(() => {
-    pendingLineCorrectionRef.current = null
+    cancelProgrammaticScroll()
+    pendingSearchCorrectionRef.current = null
     searchMatchesByBlockRef.current = null
     const hadSearch = searchStateRef.current !== null
     const hadSelection = selectionRangeRef.current !== null
@@ -523,7 +490,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     selectionAnchorRef.current = null
     if (hadSearch) syncAllMountedBlocks({ search: true, selection: false })
     if (hadSelection) syncAllMountedBlocks({ search: false, selection: true })
-  }, [displayedContent, syncAllMountedBlocks])
+  }, [cancelProgrammaticScroll, displayedContent, syncAllMountedBlocks])
 
   useEffect(() => {
     if (!optimisticContent) return
@@ -561,6 +528,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       const nextState = { scrollTop: el.scrollTop, viewportHeight: el.clientHeight, viewportWidth: el.clientWidth }
       const currentWidth = scrollStateRef.current.viewportWidth
       if (currentWidth !== 0 && currentWidth !== el.clientWidth) {
+        cancelProgrammaticScroll()
         const estimateForResize = (block: PreviewBlock) => estimatePreviewBlockHeight(block, fontSize, lineHeight)
         const before = computeVisibleRange(
           model,
@@ -626,8 +594,10 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
           estimateForObserver,
           0,
         )
-        const anchorDelta = (after.blockTops[anchorIndex] ?? anchorTopBefore) - anchorTopBefore
-        if (anchorDelta !== 0) el.scrollTop += anchorDelta
+        if (!headingScrollCancelRef.current) {
+          const anchorDelta = (after.blockTops[anchorIndex] ?? anchorTopBefore) - anchorTopBefore
+          if (anchorDelta !== 0) el.scrollTop += anchorDelta
+        }
         setScrollState({ scrollTop: el.scrollTop, viewportHeight: el.clientHeight, viewportWidth: el.clientWidth })
       }
     })
@@ -637,13 +607,20 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     }
     ro.observe(el)
     el.addEventListener('scroll', update, { passive: true })
+    el.addEventListener('wheel', cancelProgrammaticScroll, { passive: true })
+    el.addEventListener('pointerdown', cancelProgrammaticScroll)
+    el.addEventListener('touchstart', cancelProgrammaticScroll, { passive: true })
     return () => {
+      cancelProgrammaticScroll()
       ro.disconnect()
       blockRo.disconnect()
       blockResizeObserverRef.current = null
       el.removeEventListener('scroll', update)
+      el.removeEventListener('wheel', cancelProgrammaticScroll)
+      el.removeEventListener('pointerdown', cancelProgrammaticScroll)
+      el.removeEventListener('touchstart', cancelProgrammaticScroll)
     }
-  }, [fontSize, lineHeight, model, remeasureMountedBlocks])
+  }, [cancelProgrammaticScroll, fontSize, lineHeight, model, remeasureMountedBlocks])
 
   /** 虚拟块（重新）挂载时恢复 details 展开/折叠等受支持交互 HTML 的用户瞬时状态 */
   const restoreInteractiveHtmlState = useCallback((element: HTMLElement) => {
@@ -704,25 +681,35 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     [fontSize, lineHeight],
   )
 
-  // 模型驱动行定位：目标已挂载按实测位置平滑滚动；目标未挂载（虚拟窗口外）先按
-  // 全文模型估算即时定位，目标进入虚拟窗口并完成测量后由下方 layout effect 执行
-  // 最多一次幂等校正。目录点击与页内锚点共享该路径，不建立第二套滚动状态。
+  // 编辑与预览共用同一套目录滚动：短距离平滑滚动，长距离渐隐后瞬移并在渐显前校正。
+  // 未挂载标题始终由全文模型提供位置，挂载后自动切换为真实 DOM 几何。
   const scrollToLineInternal = useCallback((line: number): boolean => {
     const container = scrollContainerRef.current
     if (!container) return false
-    const target = rootRef.current?.querySelector<HTMLElement>(`[data-md-line="${line}"]`)
-    if (target) {
-      const top = target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
-      pendingLineCorrectionRef.current = null
-      container.scrollTo({ top: Math.max(0, top - 24), behavior: 'smooth' })
-      return true
+    cancelProgrammaticScroll()
+    const getTargetTop = () => {
+      if (!mountedRef.current || scrollContainerRef.current !== container) return undefined
+      const target = rootRef.current?.querySelector<HTMLElement>(`[data-md-line="${line}"]`)
+      const top = target
+        ? target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+        : getEstimatedPreviewTopForLine(model, line, estimateBlockHeight, measuredHeightsRef.current)
+      return typeof top === 'number' ? top - 24 : undefined
     }
-    const top = getEstimatedPreviewTopForLine(model, line, estimateBlockHeight, measuredHeightsRef.current)
-    if (typeof top !== 'number') return false
-    pendingLineCorrectionRef.current = { line }
-    container.scrollTo({ top: Math.max(0, top - 24) })
+    if (typeof getTargetTop() !== 'number') return false
+    let cleanup: (() => void) | null = null
+    cleanup = startHeadingScroll({
+      container,
+      fadeElement: container,
+      getTargetTop,
+      onSettled: () => {
+        if (cleanup && headingScrollCancelRef.current === cleanup) headingScrollCancelRef.current = null
+      },
+    })
+    if (cleanup) {
+      headingScrollCancelRef.current = cleanup
+    }
     return true
-  }, [model, estimateBlockHeight])
+  }, [cancelProgrammaticScroll, estimateBlockHeight, model])
 
   // Expose scrollToLine for EditorArea to use with TOC jumps
   useImperativeHandle(ref, () => ({
@@ -761,13 +748,33 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       scrollToLineInternal(line)
     },
     scrollToOffset(offset: number) {
+      cancelProgrammaticScroll()
       const index = findBlockIndexByOffset(model, offset)
       const block = index >= 0 ? model.blocks[index] : undefined
       if (!block) return
-      const localSource = model.rawContent.slice(block.startOffset, Math.max(block.startOffset, offset))
-      const line = block.startLine + (localSource.match(/\r\n|\r|\n/g)?.length ?? 0)
       const container = scrollContainerRef.current
       if (!container) return
+      const match = searchMatchesByBlockRef.current?.get(block.blockId)?.find((item) => item.from === offset)
+      const to = match?.to ?? Math.min(block.endOffset, offset + 1)
+      const element = blockRefs.current.get(index)
+      const rangeElement = element ?? (requiresWholeDocumentRender ? rootRef.current : null)
+      const exactTop = rangeElement
+        ? getMountedSourceRangeTop(rangeElement, container, offset, to)
+        : undefined
+      if (typeof exactTop === 'number') {
+        pendingSearchCorrectionRef.current = null
+        container.scrollTo({ top: Math.max(0, exactTop - 24) })
+        return
+      }
+      if (element) {
+        pendingSearchCorrectionRef.current = null
+        const blockTop = element.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+        container.scrollTo({ top: Math.max(0, blockTop - 24) })
+        return
+      }
+      const localSource = model.rawContent.slice(block.startOffset, Math.max(block.startOffset, offset))
+      const line = block.startLine + (localSource.match(/\r\n|\r|\n/g)?.length ?? 0)
+      pendingSearchCorrectionRef.current = { from: offset, to, blockId: block.blockId }
       const top = getEstimatedPreviewTopForLine(model, line, estimateBlockHeight, measuredHeightsRef.current)
       if (typeof top === 'number') container.scrollTo({ top: Math.max(0, top - 24) })
     },
@@ -802,7 +809,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       selectionAnchorRef.current = null
       applySelection(null)
     },
-  }), [model, estimateBlockHeight, scrollToLineInternal, setSearchStateImpl, applySelection])
+  }), [cancelProgrammaticScroll, model, estimateBlockHeight, requiresWholeDocumentRender, scrollToLineInternal, setSearchStateImpl, applySelection])
 
   // Visible range
   const visible = useMemo(
@@ -817,17 +824,6 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
 
   // Measure real heights of mounted blocks
   useLayoutEffect(() => {
-    const container = scrollContainerRef.current
-    const fallback = scrollStateRef.current
-    const scrollTop = container ? container.scrollTop : fallback.scrollTop
-    const viewportHeight = container ? container.clientHeight : fallback.viewportHeight
-    // 锚点：视口顶部首个可见块（overscan 0），与块 ResizeObserver 补偿路径语义一致
-    const anchorBefore = computeVisibleRange(
-      model, scrollTop, scrollTop + viewportHeight,
-      measuredHeightsRef.current, estimateBlockHeight, 0,
-    )
-    const anchorIndex = anchorBefore.startIndex
-    const anchorTopBefore = anchorBefore.blockTops[anchorIndex] ?? 0
     let changed = false
     for (let i = visible.startIndex; i < visible.endIndex; i += 1) {
       const el = blockRefs.current.get(i)
@@ -839,42 +835,35 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
         changed = true
       }
     }
-    if (!changed) return
-    if (!container) {
-      setScrollState((s) => ({ ...s }))
-      return
-    }
-    // 向上滚动时，视口上方新挂载块"估计→实测"的高度修正会整体平移视口内容；
-    // 以锚点块 top 位移补偿 scrollTop，消除视觉跳动（与块 ResizeObserver 补偿路径一致）
-    const anchorAfter = computeVisibleRange(
-      model, scrollTop, scrollTop + viewportHeight,
-      measuredHeightsRef.current, estimateBlockHeight, 0,
-    )
-    const anchorDelta = (anchorAfter.blockTops[anchorIndex] ?? anchorTopBefore) - anchorTopBefore
-    if (anchorDelta !== 0) container.scrollTop += anchorDelta
-    setScrollState({
-      scrollTop: container.scrollTop,
-      viewportHeight: container.clientHeight,
-      viewportWidth: container.clientWidth,
-    })
-  }, [visible.startIndex, visible.endIndex, model, estimateBlockHeight])
+    if (changed) setScrollState((state) => ({ ...state }))
+  }, [visible.startIndex, visible.endIndex, model.blocks, scrollState.viewportWidth])
 
-  // 未挂载目标的单次幂等校正：目标块挂载并完成测量（上方 measure effect 已执行）后，
-  // 按实测位置精确对齐一次；pending 读取即清空，后续渲染直接返回，不形成滚动反馈循环。
+  // 未挂载搜索目标的单次幂等校正：目标块进入虚拟窗口后，优先按真实 DOM Range
+  // 对齐关键词；无精确标注时退回块顶部，不重新计算全文估算位置。
   useLayoutEffect(() => {
-    const pending = pendingLineCorrectionRef.current
+    const pending = pendingSearchCorrectionRef.current
     if (!pending) return
     const container = scrollContainerRef.current
     if (!container) return
-    const target = rootRef.current?.querySelector<HTMLElement>(`[data-md-line="${pending.line}"]`)
-    if (!target) return
-    pendingLineCorrectionRef.current = null
-    const top = target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
-    const desired = Math.max(0, top - 24)
-    if (Math.abs(container.scrollTop - desired) >= 1) {
-      container.scrollTop = desired
+    const index = model.blocks.findIndex((block) => block.blockId === pending.blockId)
+    const element = index >= 0 ? blockRefs.current.get(index) : undefined
+    if (!element) return
+    const exactTop = getMountedSourceRangeTop(element, container, pending.from, pending.to)
+    const targetTop = typeof exactTop === 'number'
+      ? exactTop
+      : element.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+    if (pending.appliedTop !== undefined && Math.abs(pending.appliedTop - targetTop) < 1) {
+      pendingSearchCorrectionRef.current = null
+      return
     }
-  })
+    const appliedPending = { ...pending, appliedTop: targetTop }
+    pendingSearchCorrectionRef.current = appliedPending
+    const desired = Math.max(0, targetTop - 24)
+    if (Math.abs(container.scrollTop - desired) >= 1) container.scrollTop = desired
+    requestAnimationFrame(() => {
+      if (pendingSearchCorrectionRef.current === appliedPending) pendingSearchCorrectionRef.current = null
+    })
+  }, [model, scrollState.scrollTop, visible.blockTops, visible.startIndex, visible.endIndex])
 
   const overlayRectRef = useRef<{ top: number; left: number; width: number } | null>(null)
 
@@ -1060,6 +1049,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   }, [model.blocks, content, displayedContent, documentKey, inlineEditEnabled, onBlockCommit, submitActiveEdit])
 
   const handlePointerDownCapture = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    cancelProgrammaticScroll()
     if (!event.altKey || !inlineEditEnabled || activeEditRef.current && (event.target as Element).closest('.gm-inline-markdown-editor')) return
     const target = event.target
     if (!(target instanceof Element)) return
@@ -1075,7 +1065,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       target,
       moved: false,
     }
-  }, [inlineEditEnabled])
+  }, [cancelProgrammaticScroll, inlineEditEnabled])
 
   const handlePointerMoveCapture = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const intent = altPointerRef.current
@@ -1271,6 +1261,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     const handleAnchorClick = (href?: string, isFootnoteBackref?: boolean) => (event: React.MouseEvent<HTMLAnchorElement>) => {
       if (!href?.startsWith('#')) return
       event.preventDefault()
+      cancelProgrammaticScroll()
       const id = href.slice(1)
       // 仅在预览实例自身范围内查找已挂载目标；不回退 document.getElementById，
       // 避免双栏预览等实例间同 id（如 heading-N）造成的跨实例滚动串扰
@@ -1567,7 +1558,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
             )
           },
         }
-  }, [estimateBlockHeight, filePath, fontSize, footnoteReferences, model, onHeadingClick, onTaskToggle, scrollToLineInternal])
+  }, [cancelProgrammaticScroll, estimateBlockHeight, filePath, fontSize, footnoteReferences, model, onHeadingClick, onTaskToggle, scrollToLineInternal])
 
   return (
     <div
@@ -1579,6 +1570,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       onPointerMoveCapture={handlePointerMoveCapture}
       onPointerUpCapture={handlePointerUpCapture}
       onClickCapture={handleClickCapture}
+      onWheelCapture={cancelProgrammaticScroll}
     >
       {requiresWholeDocumentRender ? (
         <StableMarkdownContent
@@ -1640,21 +1632,23 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
             zIndex: 10,
           }}
         >
-          <InlineMarkdownBlockEditor
-            block={activeEdit.block}
-            initialCursor={activeEdit.initialCursor}
-            fontSize={fontSize}
-            lineHeight={lineHeight}
-            fontFamily={fontFamily}
-            wordWrap={wordWrap}
-            conflict={activeEdit.conflict}
-            onDraftChange={(draft) => { draftRef.current = draft }}
-            onSubmit={(draft) => {
-              draftRef.current = draft
-              void submitActiveEdit()
-            }}
-            onCopyDraft={(draft) => void navigator.clipboard.writeText(draft)}
-          />
+          <Suspense fallback={<InlineMarkdownEditorSuspenseFallback />}>
+            <LazyInlineMarkdownBlockEditor
+              block={activeEdit.block}
+              initialCursor={activeEdit.initialCursor}
+              fontSize={fontSize}
+              lineHeight={lineHeight}
+              fontFamily={fontFamily}
+              wordWrap={wordWrap}
+              conflict={activeEdit.conflict}
+              onDraftChange={(draft) => { draftRef.current = draft }}
+              onSubmit={(draft) => {
+                draftRef.current = draft
+                void submitActiveEdit()
+              }}
+              onCopyDraft={(draft) => void navigator.clipboard.writeText(draft)}
+            />
+          </Suspense>
         </div>
       )}
       {zoomImage && (
@@ -1755,6 +1749,27 @@ function getMountedPreviewLineForTop(
     if (block.endLine <= block.startLine) return block.startLine
     const progress = Math.max(0, Math.min(1, (targetViewportTop - rect.top) / rect.height))
     return Math.round(block.startLine + (block.endLine - block.startLine) * progress)
+  }
+  return undefined
+}
+
+function getMountedSourceRangeTop(
+  element: HTMLElement,
+  container: HTMLElement,
+  from: number,
+  to: number,
+): number | undefined {
+  const ranges = buildDomRangesForSourceRange(element, from, to)
+  for (const range of ranges) {
+    const rangeWithGeometry = range as globalThis.Range & {
+      getClientRects?: () => DOMRectList
+      getBoundingClientRect?: () => DOMRect
+    }
+    const rects = rangeWithGeometry.getClientRects?.() ?? []
+    const rect = rects.length > 0 ? rects[0] : rangeWithGeometry.getBoundingClientRect?.()
+    if (!rect) continue
+    if (rect.width <= 0 && rect.height <= 0) continue
+    return rect.top - container.getBoundingClientRect().top + container.scrollTop
   }
   return undefined
 }
@@ -2012,110 +2027,5 @@ function MermaidBlock({ code, startLine, endLine }: { code: string; startLine?: 
         <div className="text-caption text-gm-text-tertiary">正在渲染 Mermaid...</div>
       )}
     </div>
-  )
-}
-
-interface MarkdownTocSection {
-  key: string
-  title: string
-  toc: TocItem[]
-  onHeadingClick: (item: TocItem) => void
-  emptyText?: string
-  activeHeading?: string | null
-}
-
-export function MarkdownToc({
-  toc = [],
-  collapsed,
-  onToggle,
-  onHeadingClick,
-  sections,
-  activeHeading,
-}: {
-  toc?: TocItem[]
-  collapsed: boolean
-  onToggle: () => void
-  onHeadingClick?: (item: TocItem) => void
-  sections?: MarkdownTocSection[]
-  activeHeading?: string | null
-}) {
-  const explicitSections = sections && sections.length > 0
-    ? sections.slice(0, 2)
-    : null
-  const visibleSections = explicitSections
-    ? explicitSections
-    : toc.length > 1
-      ? [{ key: 'toc', title: '目录', toc, onHeadingClick: onHeadingClick ?? (() => {}) }]
-      : []
-  const dualColumn = visibleSections.length > 1
-
-  if (visibleSections.length === 0) return null
-
-  return (
-    <aside
-      className={`gm-markdown-toc relative h-full flex-shrink-0 ${dualColumn ? 'gm-markdown-toc--dual' : ''} ${
-        collapsed ? 'w-0' : 'gm-markdown-toc--expanded border-l border-gm-border-subtle bg-gm-surface'
-      }`}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-label={collapsed ? '展开目录' : '收起目录'}
-        aria-expanded={!collapsed}
-        className="absolute left-0 top-1/2 z-10 flex h-12 w-5 -translate-x-full -translate-y-1/2 items-center justify-center rounded-l-2xl border border-r-0 border-gm-border bg-gm-surface text-gm-text-tertiary shadow-sm hover:border-gm-primary/40 hover:bg-gm-surface-hover hover:text-gm-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gm-primary/40"
-        title={collapsed ? '展开目录' : '收起目录'}
-      >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d={collapsed ? 'M15 18l-6-6 6-6' : 'M9 18l6-6-6-6'} />
-        </svg>
-      </button>
-      {!collapsed && (
-        <nav aria-label="文档目录" className="h-full pl-4 pr-0 py-3 text-micro text-gm-text-tertiary">
-          <div className={dualColumn ? 'flex h-full gap-3 overflow-hidden' : 'max-h-full space-y-4 overflow-y-auto'}>
-            {visibleSections.map((section) => (
-              <section key={section.key} className={dualColumn ? 'flex min-h-0 min-w-0 flex-1 flex-col' : 'pr-4'}>
-                <div className="mb-2 truncate font-bold text-gm-text-secondary" title={section.title}>
-                  {section.title}
-                </div>
-                <div className={dualColumn ? 'min-h-0 flex-1 space-y-1 overflow-y-auto' : 'space-y-1'}>
-                  {section.toc.length > 1 ? (
-                    section.toc.map((item) => {
-                      const currentActive = section.activeHeading !== undefined ? section.activeHeading : activeHeading
-                      const isActive = currentActive === item.id
-                      return (
-                        <button
-                          key={`${section.key}-${item.id}-${item.line}`}
-                          type="button"
-                          onClick={() => section.onHeadingClick(item)}
-                          className={`block w-full truncate rounded-md py-1 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gm-primary/30 ${
-                            isActive
-                              ? 'font-bold'
-                              : 'hover:bg-gm-surface-hover hover:text-gm-primary'
-                          }`}
-                          style={{
-                            paddingLeft: 6 + Math.max(0, item.level - 1) * 10,
-                            ...(isActive ? {
-                              backgroundColor: 'color-mix(in srgb, var(--gm-active-indicator) 10%, transparent)',
-                              color: 'var(--gm-active-indicator)',
-                            } : {}),
-                          }}
-                          title={`${item.text}（第 ${item.line} 行）`}
-                        >
-                          {item.text}
-                        </button>
-                      )
-                    })
-                  ) : (
-                    <div className="rounded-md border border-dashed border-gm-border-subtle px-3 py-2 text-gm-text-muted">
-                      {section.emptyText ?? '无目录'}
-                    </div>
-                  )}
-                </div>
-              </section>
-            ))}
-          </div>
-        </nav>
-      )}
-    </aside>
   )
 }

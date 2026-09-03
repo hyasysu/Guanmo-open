@@ -1,6 +1,8 @@
-import { render } from '@testing-library/react'
+import { act, render } from '@testing-library/react'
+import { createRef } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MarkdownPreview } from '@/components/editor/MarkdownPreview'
+import type { MarkdownPreviewHandle } from '@/components/editor/markdownPreviewTypes'
 
 const MINIMAL_FRONT_MATTER_DOCUMENT = [
   '---',
@@ -43,15 +45,15 @@ class TestResizeObserver {
 
 const OriginalResizeObserver = globalThis.ResizeObserver
 
-function rect(width: number, height: number): DOMRect {
+function rect(width: number, height: number, top = 0): DOMRect {
   return {
     x: 0,
-    y: 0,
+    y: top,
     width,
     height,
-    top: 0,
+    top,
     right: width,
-    bottom: height,
+    bottom: top + height,
     left: 0,
     toJSON: () => ({}),
   }
@@ -63,6 +65,10 @@ function createPreviewHost(getWidth: () => number) {
     clientHeight: { configurable: true, get: () => 800 },
     clientWidth: { configurable: true, get: getWidth },
     scrollTop: { configurable: true, value: 0, writable: true },
+    scrollTo: {
+      configurable: true,
+      value: ({ top }: { top: number }) => { host.scrollTop = top },
+    },
   })
   return host
 }
@@ -167,5 +173,57 @@ describe('MarkdownPreview Front Matter 布局', () => {
 
     expect(heading?.style.top).toBe('96px')
     expect(host.scrollTop).toBe(104)
+  })
+
+  it('搜索跳转到未挂载块后按真实关键词 Range 单次校正', async () => {
+    const targetText = '搜索目标'
+    const content = Array.from({ length: 60 }, (_, index) => (
+      index === 45 ? `第 ${index} 段 ${targetText}` : `第 ${index} 段普通内容`
+    )).join('\n\n')
+    const previewRef = createRef<MarkdownPreviewHandle>()
+    const host = createPreviewHost(() => 600)
+    const hostTop = 100
+    const targetRangeOffset = 80
+
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this === host) return rect(600, 800, hostTop)
+      const blockIndex = this.dataset.mdBlockIndex
+      if (blockIndex !== undefined) {
+        const top = hostTop + Number.parseFloat(this.style.top || '0') - host.scrollTop
+        return rect(600, 100, top)
+      }
+      return rect(600, 0, hostTop)
+    })
+
+    const originalRangeRects = Range.prototype.getClientRects
+    Object.defineProperty(Range.prototype, 'getClientRects', {
+      configurable: true,
+      value(this: Range) {
+        const block = (this.startContainer.parentElement ?? undefined)?.closest<HTMLElement>('[data-md-block-index]')
+        const blockRect = block?.getBoundingClientRect()
+        return blockRect
+          ? [rect(120, 20, blockRect.top + targetRangeOffset)] as unknown as DOMRectList
+          : []
+      },
+    })
+
+    try {
+      render(<MarkdownPreview ref={previewRef} content={content} />, { container: host })
+      const offset = content.indexOf(targetText)
+
+      await act(async () => {
+        previewRef.current?.setSearchState({ query: targetText, activeOffset: offset })
+        previewRef.current?.scrollToOffset(offset)
+        host.dispatchEvent(new Event('scroll'))
+      })
+
+      const targetBlock = Array.from(host.querySelectorAll<HTMLElement>('[data-md-block-index]'))
+        .find((element) => element.textContent?.includes(targetText))
+      expect(targetBlock).toBeDefined()
+      expect(host.scrollTop).toBeCloseTo(Number.parseFloat(targetBlock?.style.top ?? '0') + targetRangeOffset - 24)
+    } finally {
+      if (originalRangeRects) Object.defineProperty(Range.prototype, 'getClientRects', { configurable: true, value: originalRangeRects })
+      else delete (Range.prototype as Range & { getClientRects?: () => DOMRectList }).getClientRects
+    }
   })
 })

@@ -6,8 +6,8 @@ import { MarkdownPreview } from '@/components/editor/MarkdownPreview'
  * 页内锚点跳转（阶段 2：模型驱动锚点定位）
  *
  * 覆盖：
- * - 目标位于虚拟窗口外（下方远端）：先按全文模型估算定位，目标挂载测量后
- *   由 pending 校正 effect 完成一次幂等精对齐，且不形成滚动反馈循环；
+ * - 目标位于虚拟窗口外（下方远端）：按全文模型估算启动追踪滚动，
+ *   实测高度变化后仍持续推进到目标，不需要重复点击；
  * - 锚点不存在：安全 no-op（不改滚动、不改 URL hash）；
  * - 目标已挂载：标题 slug 走平滑滚动；heading-{line} 内部 id 走 scrollIntoView。
  */
@@ -49,6 +49,7 @@ function createScrollHost() {
       set: (value: number) => {
         currentScrollTop = value
         scrollTopWrites.push(value)
+        host.dispatchEvent(new Event('scroll'))
       },
     },
     scrollTo: {
@@ -59,6 +60,7 @@ function createScrollHost() {
         if (options && typeof options.top === 'number') {
           host.scrollTop = options.top
           host.dispatchEvent(new Event('scroll'))
+          host.dispatchEvent(new Event('scrollend'))
         }
       },
     },
@@ -91,6 +93,10 @@ function installScrollIntoViewStub() {
 
 const flushFrame = () => act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
 
+const flushFrames = async (count: number) => {
+  for (let i = 0; i < count; i += 1) await flushFrame()
+}
+
 beforeEach(() => {
   window.history.replaceState(null, '', '/')
 })
@@ -100,14 +106,14 @@ afterEach(() => {
 })
 
 describe('MarkdownPreview 页内锚点（模型驱动定位）', () => {
-  it('目标位于虚拟窗口外时按模型估算跳转，挂载测量后完成一次校正并稳定', async () => {
+  it('远距离目标渐隐后直接定位并在渐显前完成校正', async () => {
     const { host, scrollToCalls, scrollTopWrites } = createScrollHost()
     installRectMock(host)
     installScrollIntoViewStub()
 
     const content = [
       '[跳转远端](#far-target-section)',
-      ...Array.from({ length: 40 }, (_, index) => `\n\n远端测试段落 ${index + 1} 的匿名填充内容。`),
+      ...Array.from({ length: 140 }, (_, index) => `\n\n远端测试段落 ${index + 1} 的匿名填充内容。`),
       '\n\n## Far Target Section',
     ].join('')
     const view = render(<MarkdownPreview content={content} />, { container: host })
@@ -120,27 +126,39 @@ describe('MarkdownPreview 页内锚点（模型驱动定位）', () => {
       fireEvent.click(view.getByRole('link', { name: '跳转远端' }))
     })
 
-    // 模型估算定位：一次即时 scrollTo（不带 smooth），目标位置在文档远端
-    expect(scrollToCalls).toHaveLength(1)
-    expect(scrollToCalls[0]?.top).toBeGreaterThan(2000)
-    expect(scrollToCalls[0]?.behavior).toBeUndefined()
+    // 远距离跳转不滚过全文：正文渐隐后直接定位，目标挂载并校正后再渐显。
+    expect(host.style.opacity).toBe('0')
+    let heading = host.querySelector<HTMLElement>('[data-md-block-type="heading"]')
+    let elapsedFrames = 0
+    while (!heading && elapsedFrames < 45) {
+      await flushFrame()
+      elapsedFrames += 1
+      heading = host.querySelector<HTMLElement>('[data-md-block-type="heading"]')
+    }
+    while (elapsedFrames < 45) {
+      await flushFrame()
+      elapsedFrames += 1
+    }
+    expect(scrollToCalls).toHaveLength(0)
+    expect(scrollTopWrites.length).toBeGreaterThan(0)
 
     // 目标块已挂载
-    const heading = host.querySelector<HTMLElement>('[data-md-block-type="heading"]')
     expect(heading).not.toBeNull()
     expect(heading).toHaveTextContent('Far Target Section')
 
     // URL hash 已同步
     expect(window.location.hash).toBe('#far-target-section')
 
-    // 估算与实测不一致触发了锚点补偿/单次校正的 scrollTop 写入
-    expect(scrollTopWrites.length).toBeGreaterThan(1)
+    // 最终真实标题对齐到预览顶部留白
+    expect(host.scrollTop).toBeCloseTo(Number.parseFloat(heading?.style.top ?? '0') - 24, 0)
+    expect(host.style.opacity).toBe('')
+    expect(scrollTopWrites.length).toBeLessThanOrEqual(4)
 
     // 稳定后不再产生滚动写入：无滚动反馈循环
     const writesAfterStabilization = scrollTopWrites.length
-    await flushFrame()
-    await flushFrame()
+    await flushFrames(10)
     expect(scrollTopWrites.length).toBe(writesAfterStabilization)
+    expect(scrollToCalls).toHaveLength(0)
   })
 
   it('锚点不存在时保持安全 no-op：不滚动、不更新 hash', async () => {

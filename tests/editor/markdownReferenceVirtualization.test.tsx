@@ -52,6 +52,23 @@ describe('Markdown reference virtualization', () => {
     expect(view.container.querySelectorAll('[data-md-block-index]').length).toBeLessThan(40)
   })
 
+  it('does not treat generic syntax in code as cross-block HTML', () => {
+    const content = [
+      '```ts',
+      'const request = (input: Request<TResponse, TPayload>) => input',
+      'SingletonPromiseManager.init<T>()',
+      '```',
+      '',
+      '行内代码 `request<T>()` 不应触发整篇渲染。',
+      '',
+      '    const result: Result<T> = createResult()',
+      ...Array.from({ length: 300 }, (_, index) => `\n\n段落 ${index} 的匿名填充内容。`),
+    ].join('\n')
+    const view = render(<MarkdownPreview content={content} />)
+    expect(view.container.querySelector('.gm-markdown-preview')).toHaveAttribute('data-md-render-mode', 'virtual')
+    expect(view.container.querySelectorAll('[data-md-block-index]').length).toBeLessThan(40)
+  })
+
   it('virtualizes self-contained HTML but keeps cross-block HTML compatible', async () => {
     const selfContained = ['<span data-safe="true">安全 HTML</span>', ...Array.from({ length: 300 }, (_, index) => `\n\n段落 ${index}。`)].join('\n')
     const virtualized = render(<MarkdownPreview content={selfContained} />)

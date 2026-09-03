@@ -63,6 +63,12 @@
   --gm-code-error: #ff9a91;
   --gm-code-info: #a8c7e6;
 
+  /* Settings and nested modal surfaces */
+  --gm-settings-mask-bg: rgba(7, 6, 5, 0.72);
+  --gm-settings-modal-bg: #1d1a15;
+  --gm-settings-modal-border: rgba(238, 228, 210, 0.16);
+  --gm-settings-modal-shadow: 0 18px 50px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+
   /* Scrollbar */
   --gm-scrollbar-track: transparent;
   --gm-scrollbar-thumb: #514532;

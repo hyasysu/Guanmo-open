@@ -19,12 +19,14 @@ export type ActiveHeadingResolver = (geometry: ActiveHeadingGeometry) => string 
  * @param resolveActiveHeading - 滚动几何 → 活跃标题 ID 的模型驱动计算
  * @param trigger - 额外的触发依赖，当容器/内容可能变化时传入（如 viewMode、文档版本）
  * @param enabled - 容器不可见时禁用
+ * @param topOffset - 活跃标题检测线相对视口顶部的下移距离
  */
 export function useActiveHeading(
   containerRef: React.RefObject<HTMLElement | null>,
   resolveActiveHeading: ActiveHeadingResolver | null,
   trigger?: unknown,
-  enabled: boolean = true
+  enabled: boolean = true,
+  topOffset: number = 0,
 ): string | null {
   const [activeId, setActiveId] = useState<string | null>(null)
   const rafRef = useRef<number | null>(null)
@@ -41,7 +43,7 @@ export function useActiveHeading(
       const container = containerRef.current
       if (!container) return
       const next = resolveActiveHeading({
-        scrollTop: container.scrollTop,
+        scrollTop: container.scrollTop + topOffset,
         viewportHeight: container.clientHeight,
       })
       setActiveId((current) => (current === next ? current : next))
@@ -89,7 +91,7 @@ export function useActiveHeading(
       }
       removeListeners?.()
     }
-  }, [containerRef, resolveActiveHeading, trigger, enabled])
+  }, [containerRef, resolveActiveHeading, trigger, enabled, topOffset])
 
   return activeId
 }

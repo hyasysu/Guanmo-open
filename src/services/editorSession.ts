@@ -175,8 +175,9 @@ export function getNextPrewarmTarget({
 }): PrewarmTargetMode | null {
   const extraCount = level === 'smart' ? 1 : 2
   const targets: PrewarmTargetMode[] = []
-  // turbo always includes preview; smart only includes preview for small docs
-  if (level === 'turbo' || contentLength < MODE_PREWARM_HUGE_DOC_LENGTH) {
+  // 超大文档无论策略都不创建隐藏预览：同步全文模型会长时间占用主线程，
+  // “极速”只应预热能改善切换且不会破坏当前交互的资源。
+  if (contentLength < MODE_PREWARM_HUGE_DOC_LENGTH) {
     targets.push('preview')
   }
   // extra modes (edit-preview, dual-preview, diff-preview) only for small docs

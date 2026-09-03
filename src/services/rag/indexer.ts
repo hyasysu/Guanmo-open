@@ -9,6 +9,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 
 const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown', 'mdx'])
 const DEFAULT_INDEX_DELAY = 1200
+const AUTO_INDEX_MAX_CONTENT_LENGTH = 100_000
 const pendingIndexTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 export interface WorkspaceIndexResult {
@@ -93,6 +94,17 @@ export function scheduleMarkdownDocumentIndex(
   delay = DEFAULT_INDEX_DELAY
 ): boolean {
   if (!filePath || !isMarkdownPath(filePath)) return false
+
+  // 自动索引仍在 WebView 主线程同步解析 Markdown。超长文档打开/保存后若继续调度，
+  // 会在延迟到期时造成数秒无响应；显式知识库索引走 Async API，不受此保护影响。
+  if (content.length >= AUTO_INDEX_MAX_CONTENT_LENGTH) {
+    const existingTimer = pendingIndexTimers.get(filePath)
+    if (existingTimer) {
+      clearTimeout(existingTimer)
+      pendingIndexTimers.delete(filePath)
+    }
+    return false
+  }
 
   const settings = useSettingsStore.getState()
   if (!settings.knowledge.autoIndexEnabled) return false

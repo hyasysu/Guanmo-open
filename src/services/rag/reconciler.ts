@@ -64,12 +64,15 @@ export async function reconcileDocumentChunks(
   let added = 0
   let reembedded = 0
 
-  const nextInputHashes = await Promise.all(parsedChunks.map((chunk) => (
-    createEmbeddingInputHash(chunk, nextDocument.title)
-  )))
+  // 未配置 Embedding 时不会复用或生成向量，无需为每个块启动一次 SHA-256。
+  // 超长文档可能包含数千块，这批无效摘要会在文件打开后的自动索引中阻塞 WebView。
+  const nextInputHashes = embeddingModel === null
+    ? parsedChunks.map(() => undefined)
+    : await Promise.all(parsedChunks.map((chunk) => (
+        createEmbeddingInputHash(chunk, nextDocument.title)
+      )))
   for (let index = 0; index < parsedChunks.length; index += 1) {
     const parsedChunk = parsedChunks[index]
-    const embeddingInputHash = nextInputHashes[index]
     const candidates = oldChunks.filter((candidate) => (
       !usedOldIds.has(candidate.id) && candidate.content === parsedChunk.content
     ))
@@ -82,6 +85,9 @@ export async function reconcileDocumentChunks(
       return affinity(right) - affinity(left)
     })[0]
     if (oldChunk) usedOldIds.add(oldChunk.id)
+    const embeddingInputHash = embeddingModel === null
+      ? oldChunk?.embeddingInputHash
+      : nextInputHashes[index]
 
     const canReuseEmbedding = Boolean(
       oldChunk?.embedding && (

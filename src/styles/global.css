@@ -180,6 +180,13 @@ body {
   box-shadow: 0 1px 3px rgba(63, 119, 113, 0.05);
 }
 
+.gm-ai-avatar--sprite {
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
 .gm-ai-empty-icon-shell {
   background: linear-gradient(180deg, #F8FBFA 0%, #F1F6F5 100%);
 }
@@ -768,6 +775,13 @@ body {
   background: linear-gradient(180deg, rgba(95, 159, 152, 0.14), rgba(95, 159, 152, 0.08));
 }
 
+[data-theme='dark'] .gm-ai-avatar--sprite {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+
 [data-theme='dark'] .gm-ai-avatar--mascot {
   background: linear-gradient(180deg, rgba(255, 147, 77, 0.14), rgba(95, 159, 152, 0.08));
   border-color: rgba(255, 174, 112, 0.2);
@@ -1029,6 +1043,20 @@ body {
   animation: gmReleaseModalDialogOut 160ms ease-in forwards;
 }
 
+.gm-ai-sprite-preview-scrim {
+  background: var(--gm-settings-mask-bg);
+  backdrop-filter: blur(2px);
+  animation: gmReleaseModalScrimIn 180ms ease-out;
+}
+
+.gm-ai-sprite-preview-dialog {
+  max-height: calc(100vh - 32px);
+  border-color: var(--gm-settings-modal-border);
+  background: var(--gm-settings-modal-bg);
+  box-shadow: var(--gm-settings-modal-shadow);
+  animation: gmReleaseModalDialogIn 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 /* Knowledge base manager modal */
 .gm-kb-modal-scrim {
   animation: gmReleaseModalScrimIn 180ms ease-out;
@@ -1055,6 +1083,8 @@ body {
   .gm-release-modal-dialog,
   .gm-legacy-modal-scrim,
   .gm-legacy-modal-dialog,
+  .gm-ai-sprite-preview-scrim,
+  .gm-ai-sprite-preview-dialog,
   .gm-kb-modal-scrim,
   .gm-kb-modal-dialog {
     animation: none;
