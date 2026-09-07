@@ -5,7 +5,7 @@ import { OpenAICompatibleProvider } from './providers/openaiCompatible'
 import { OpenAIResponsesProvider } from './providers/openaiResponses'
 import { normalizeRequestTimeoutMs } from '@/services/requestTimeout'
 import { getSearchConfig } from '../webSearch'
-import { externalFetch, UnsupportedCapabilityError } from '../externalHttp'
+import { externalFetch, UnsupportedCapabilityError } from '@/services/externalHttp'
 
 let currentProvider: AiProvider | null = null
 let currentConfig: AiConfig | null = null

@@ -4,7 +4,6 @@ import { isSameFilePath, normalizeFilePath } from '@/services/pathIdentity'
 import { mergeBackgroundRestoredTab } from '@/services/sessionRestorePolicy'
 import { eventMarker } from '@/services/eventMarker'
 import type { ReadingPosition } from '@/services/editorSession'
-import { useSettingsStore } from '@/stores/settingsStore'
 import {
   applyBootSnapshot,
   createBootSnapshot,
@@ -12,6 +11,7 @@ import {
   readBootSnapshot,
   scheduleBootSnapshotWrite,
 } from '@/services/bootSnapshot'
+import { isWebRuntime } from '@/services/runtimeCapabilities'
 
 export interface Tab {
   id: string
@@ -33,6 +33,7 @@ export interface RecentFile {
 }
 
 export type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
+export type RevealSurface = 'editor' | 'preview'
 type PrewarmableViewMode = Exclude<ViewMode, 'edit'>
 
 export interface ViewModeUsageStat {
@@ -64,7 +65,7 @@ interface EditorState {
   recentFiles: RecentFile[]
   favorites: string[]
   readingPositions: Record<string, ReadingPosition>
-  pendingReveal: { tabId: string; startLine: number; endLine?: number } | null
+  pendingReveal: { tabId: string; startLine: number; endLine?: number; surface: RevealSurface } | null
   previewSwitchingTabId: string | null
 
   openTab: (tab: Tab) => void
@@ -72,11 +73,20 @@ interface EditorState {
   closeTab: (id: string) => void
   setActiveTab: (id: string) => void
   clearPreviewSwitching: (tabId?: string) => void
+  restoreProductTourState: (state: {
+    viewMode: ViewMode
+    previewVisible: boolean
+    rightPaneTabId: string | null
+    rightPaneUserSelected: boolean
+    activeTabId: string | null
+    previewSwitchingTabId: string | null
+  }) => void
   updateTabContent: (id: string, content: string) => void
   markTabSaved: (id: string, content: string) => void
   replaceTabContentWithSaved: (id: string, content: string) => void
   reloadTabFromDisk: (id: string, content: string) => void
-  resetTabsForExternalOpen: () => void
+  resetTabsForExternalOpen: (defaultOpenMode?: 'edit' | 'preview') => void
+  resetTabsForWebSession: (defaultOpenMode?: 'edit' | 'preview') => void
   restoreTabs: (tabs: Tab[], activeTabId: string | null, rightPaneTabId: string | null) => void
   mergeRestoredTab: (originalTab: Tab, restoredTab: Tab) => void
   togglePreview: () => void
@@ -91,7 +101,7 @@ interface EditorState {
   togglePinTab: (id: string) => void
   renameFilePath: (oldPath: string, newPath: string, newName: string) => void
   saveTabAs: (id: string, filePath: string, title: string, content: string) => void
-  requestReveal: (tabId: string, startLine: number, endLine?: number) => void
+  requestReveal: (tabId: string, startLine: number, endLine?: number, surface?: RevealSurface) => void
   clearPendingReveal: () => void
   flushReadingPositions: (positions: Record<string, ReadingPosition>) => void
 }
@@ -147,6 +157,13 @@ function compactPersistedTab(tab: Tab): Tab {
 }
 
 function createDeferredEditorStorage(delayMs: number): PersistStorage<PersistedEditorState> {
+  if (isWebRuntime()) {
+    return {
+      getItem: () => null,
+      setItem: () => undefined,
+      removeItem: () => undefined,
+    }
+  }
   let timer: ReturnType<typeof setTimeout> | null = null
   let pending: { name: string; value: StorageValue<PersistedEditorState> } | null = null
 
@@ -350,6 +367,8 @@ export const useEditorStore = create<EditorState>()(
           : s
       )),
 
+      restoreProductTourState: (state) => set(state),
+
       updateTabContent: (id, content) => {
         set((s) => ({
           tabs: s.tabs.map((t) =>
@@ -382,8 +401,7 @@ export const useEditorStore = create<EditorState>()(
         )),
       })),
 
-      resetTabsForExternalOpen: () => {
-        const defaultOpenMode = useSettingsStore.getState().editor.defaultOpenMode
+      resetTabsForExternalOpen: (defaultOpenMode = 'preview') => {
         set({
           tabs: [],
           activeTabId: null,
@@ -392,6 +410,20 @@ export const useEditorStore = create<EditorState>()(
           previewVisible: defaultOpenMode === 'preview',
         })
       },
+      resetTabsForWebSession: (defaultOpenMode = 'preview') => set({
+        tabs: [],
+        activeTabId: null,
+        recentFiles: [],
+        favorites: [],
+        readingPositions: {},
+        pendingReveal: null,
+        previewSwitchingTabId: null,
+        rightPaneTabId: null,
+        rightPaneUserSelected: false,
+        previewVisible: defaultOpenMode === 'preview',
+        viewMode: defaultOpenMode,
+        viewModeUsage: {},
+      }),
 
       restoreTabs: (tabs, activeTabId, rightPaneTabId) => set({
         tabs,
@@ -563,8 +595,8 @@ export const useEditorStore = create<EditorState>()(
         get().addRecentFile(filePath, title)
       },
 
-      requestReveal: (tabId, startLine, endLine) => set({
-        pendingReveal: { tabId, startLine, endLine },
+      requestReveal: (tabId, startLine, endLine, surface = 'editor') => set({
+        pendingReveal: { tabId, startLine, endLine, surface },
       }),
 
       clearPendingReveal: () => set({ pendingReveal: null }),

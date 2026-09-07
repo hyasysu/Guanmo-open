@@ -47,7 +47,7 @@ const capturedViews = vi.hoisted(() => {
 const replaceMarkdownBlockMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@/hooks/useActiveHeading', () => ({ useActiveHeading: () => null }))
-vi.mock('@/hooks/useTauri', () => ({ isTauri: false, openFileDialog: vi.fn(), openUrl: vi.fn() }))
+vi.mock('@/hooks/useTauri', () => ({ isTauri: vi.fn(() => false), openFileDialog: vi.fn(), openUrl: vi.fn() }))
 vi.mock('@/services/fileSystem', () => ({ saveFile: vi.fn(), saveFileAs: vi.fn() }))
 vi.mock('@/services/rag/indexer', () => ({ scheduleMarkdownDocumentIndex: vi.fn() }))
 vi.mock('@/services/toast', () => ({
@@ -92,7 +92,11 @@ vi.mock('@/services/markdownBlocks', async (importOriginal) => {
 import { EditorArea } from '@/components/editor/EditorArea'
 import { useEditorStore, type Tab, type ViewMode } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { BALANCED_LARGE_DOC_TTL_MS, BALANCED_SMALL_DOC_TTL_MS } from '@/services/editorSession'
+import {
+  BALANCED_LARGE_DOC_TTL_MS,
+  BALANCED_SMALL_DOC_TTL_MS,
+  MODE_PREWARM_ACTIVITY_PAUSE,
+} from '@/services/editorSession'
 
 function anonymousTab(id: string, content: string): Tab {
   return {
@@ -728,6 +732,23 @@ describe('Prewarm candidate lifecycle', () => {
       scheduleId: scheduled?.metadata?.scheduleId,
       target: scheduled?.metadata?.target,
     })
+  })
+
+  it('unmount cancels a pending prewarm before it creates a hidden resource', async () => {
+    setup([anonymousTab('doc-a', '# A')], 'doc-a', 'edit', { modePerformancePolicy: 'balanced' })
+    const result = render(<EditorArea />)
+    await settleLazyEditorModules()
+
+    expect(countResourceEvent('model-create', 'left-preview', 'doc-a')).toBe(0)
+
+    act(() => vi.advanceTimersByTime(MODE_PREWARM_ACTIVITY_PAUSE - 1))
+    result.unmount()
+    act(() => vi.runAllTimers())
+
+    expect(countResourceEvent('model-create', 'left-preview', 'doc-a')).toBe(0)
+    expect(scheduledCallbacks.idle.size).toBe(0)
+    expect(scheduledCallbacks.raf.size).toBe(0)
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('leaving diff releases diff instance', async () => {

@@ -113,7 +113,7 @@ export function TitleBar() {
     setThemeMenuOpen(false)
   }, [])
 
-  const activeThemeLabel = THEME_OPTIONS.find((option) => option.key === themeId)?.label ?? themeId
+  const activeThemeLabel = THEME_OPTIONS.find((option) => option.id === themeId)?.label ?? themeId
 
   return (
     <div className="h-[38px] flex items-center bg-gm-surface border-b border-gm-border-subtle select-none flex-shrink-0">
@@ -122,7 +122,7 @@ export function TitleBar() {
         <span className="text-caption font-bold text-gm-text tracking-wide">观墨</span>
         {!isTauri() && (
           <span className="text-micro text-gm-text-disabled bg-gm-surface-elevated px-1.5 py-0.5 rounded">
-            浏览器模式，多项功能和样式会有问题，推荐下载桌面版
+            Web 版
           </span>
         )}
       </div>
@@ -216,14 +216,14 @@ export function TitleBar() {
               className="absolute right-0 top-full z-[60] mt-1 w-[220px] rounded-xl border border-gm-border bg-gm-surface-elevated py-1.5 shadow-lg"
             >
               {THEME_OPTIONS.map((option) => {
-                const selected = option.key === themeId
+                const selected = option.id === themeId
                 return (
                   <button
-                    key={option.key}
+                    key={option.id}
                     type="button"
                     role="menuitemradio"
                     aria-checked={selected}
-                    onClick={() => applyTheme(option.key)}
+                    onClick={() => applyTheme(option.id)}
                     className={`flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors ${
                       selected
                         ? 'bg-gm-primary-subtle text-gm-text'
@@ -273,7 +273,8 @@ export function TitleBar() {
         {/* Window controls */}
         <button
           onClick={handleMinimize}
-          className="h-full w-12 flex items-center justify-center text-gm-text-secondary hover:bg-gm-surface-hover transition-colors"
+          disabled={!isTauri()}
+          className="h-full w-12 flex items-center justify-center text-gm-text-secondary hover:bg-gm-surface-hover transition-colors disabled:cursor-not-allowed disabled:opacity-35"
           title="最小化"
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -282,7 +283,8 @@ export function TitleBar() {
         </button>
         <button
           onClick={handleToggleMaximize}
-          className="h-full w-12 flex items-center justify-center text-gm-text-secondary hover:bg-gm-surface-hover transition-colors"
+          disabled={!isTauri()}
+          className="h-full w-12 flex items-center justify-center text-gm-text-secondary hover:bg-gm-surface-hover transition-colors disabled:cursor-not-allowed disabled:opacity-35"
           title={maximized ? '还原' : '最大化'}
         >
           {maximized ? (
@@ -298,7 +300,8 @@ export function TitleBar() {
         </button>
         <button
           onClick={handleClose}
-          className="h-full w-12 flex items-center justify-center text-gm-text-secondary hover:bg-red-500 hover:text-white transition-colors"
+          disabled={!isTauri()}
+          className="h-full w-12 flex items-center justify-center text-gm-text-secondary hover:bg-red-500 hover:text-white transition-colors disabled:cursor-not-allowed disabled:opacity-35"
           title="关闭"
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

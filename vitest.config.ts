@@ -7,6 +7,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      '@settings-entry': path.resolve(__dirname, './src/web/WebSettingsPage.tsx'),
       '@scripts': path.resolve(__dirname, './scripts'),
       'animal-island-ui': path.resolve(__dirname, './src/vendor/animal-island-ui/index.ts'),
     },
@@ -19,5 +20,6 @@ export default defineConfig({
     clearMocks: true,
     // 多个设置/预览测试依赖共享的 jsdom 与模块重置；并发 worker 会造成间歇性超时。
     maxWorkers: 1,
+    fileParallelism: false,
   },
 })

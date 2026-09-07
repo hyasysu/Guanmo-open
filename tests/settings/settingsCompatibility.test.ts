@@ -32,8 +32,16 @@ describe('设置兼容', () => {
       autoSave: true,
       modePerformancePolicy: 'balanced',
       inlinePreviewEdit: true,
+      autoSendAiShortcut: true,
+      defaultOpenMode: 'preview',
     })
-    expect(state.appearance).toMatchObject({ themeId: 'warm', lastLightThemeId: 'warm' })
+    expect(state.appearance).toMatchObject({
+      version: 1,
+      themeId: 'warm',
+      lastLightThemeId: 'warm',
+      assistantVisualId: 'sprite',
+      motionPreference: 'system',
+    })
     expect(state.webSearch).toMatchObject({ provider: 'duckduckgo', maxResults: 5, timeout: 60000 })
     expect(state.ai.timeout).toBe(60000)
     expect(state.ai.maxContextLength).toBe(8192)
@@ -63,8 +71,15 @@ describe('设置兼容', () => {
       previewFontFamily: 'var(--gm-font-family)',
       fullscreenContentPadding: 88,
       inlinePreviewEdit: true,
+      autoSendAiShortcut: true,
+      defaultOpenMode: 'preview',
     })
     expect(state.appearance).toMatchObject({ themeId: 'dark', lastLightThemeId: 'warm', aiAvatarStyle: 'sprite' })
+  })
+
+  it('保留用户显式关闭快捷 AI 自动发送的设置', async () => {
+    const store = await loadSettingsStore({ editor: { autoSendAiShortcut: false } })
+    expect(store.getState().editor.autoSendAiShortcut).toBe(false)
   })
 
   it('将旧主题组合迁移为统一主题 ID', async () => {
@@ -84,6 +99,23 @@ describe('设置兼容', () => {
 
     const fallbackStore = await loadSettingsStore({ appearance: { themeId: 'unknown' } })
     expect(fallbackStore.getState().appearance).toMatchObject({ themeId: 'warm', lastLightThemeId: 'warm' })
+  })
+
+  it('非法外观扩展字段回退为版本 1 默认值', async () => {
+    const store = await loadSettingsStore({
+      appearance: {
+        version: 99,
+        themeId: 'removed-theme',
+        assistantVisualId: 'user-code',
+        motionPreference: 'invalid',
+      },
+    })
+    expect(store.getState().appearance).toMatchObject({
+      version: 1,
+      themeId: 'warm',
+      assistantVisualId: 'sprite',
+      motionPreference: 'system',
+    })
   })
 
   it('切换主题时立即同步文档属性并记住非深色主题', async () => {
