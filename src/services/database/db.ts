@@ -151,6 +151,33 @@ export function subscribeDatabaseRuntimeState(
 }
 
 /**
+ * Database consumers can mount before the parent startup effect begins
+ * initialization. Wait through both idle and initializing states so an
+ * ordinary startup race is not surfaced as a user-facing database error.
+ */
+export async function waitForDatabaseReady(): Promise<void> {
+  if (isDatabaseReady()) return
+
+  await new Promise<void>((resolve, reject) => {
+    let unsubscribe: () => void = () => undefined
+    const handleState = (state: DatabaseRuntimeState) => {
+      if (state.status === 'ready' && isDatabaseReady()) {
+        unsubscribe()
+        resolve()
+        return
+      }
+      if (state.status === 'error') {
+        unsubscribe()
+        reject(new Error(state.error || '数据库初始化失败'))
+      }
+    }
+
+    unsubscribe = subscribeDatabaseRuntimeState(handleState)
+    handleState(getDatabaseRuntimeState())
+  })
+}
+
+/**
  * Get database adapter for maintenance tasks (legacy detection etc.).
  * Returns the adapter if initialized, otherwise throws.
  */
@@ -194,6 +221,7 @@ export async function closeDatabase(): Promise<void> {
     await db.close()
     db = null
   }
+  setRuntimeState({ status: 'idle' })
 }
 
 /**

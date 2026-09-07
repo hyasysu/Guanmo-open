@@ -69,11 +69,11 @@ export interface ReadingMarkRangeIndex {
 
 async function invokeDatabase<T>(command: string, payload?: unknown): Promise<T> {
   if (isWebRuntime()) throw new UnsupportedCapabilityError('数据库相关能力')
-  const [{ invoke }, { isDatabaseReady }] = await Promise.all([
+  const [{ invoke }, { waitForDatabaseReady }] = await Promise.all([
     import('@tauri-apps/api/core'),
     import('@/services/database/db'),
   ])
-  if (!isDatabaseReady()) throw new Error('数据库尚未就绪')
+  await waitForDatabaseReady()
   return payload == null ? invoke<T>(command) : invoke<T>(command, payload as Record<string, unknown>)
 }
 
