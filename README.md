@@ -232,9 +232,13 @@ cp .env.example .env
 ### 开发 · Development
 
 ```bash
-# 推荐：Tauri 开发模式（直接在 WebView 中运行，资源路径问题立即暴露）
-# Recommended: Tauri dev mode (runs in WebView, path issues surface immediately)
-npm run tauri dev
+# 推荐：以 Release profile 启动 Tauri（保留前端热更新，并复用后续打包产物）
+# Recommended: run Tauri with the Release profile (keeps frontend HMR and reuses build artifacts)
+npm run desktop
+
+# 仅在需要 Rust 调试信息、debug assertions 或排查 Debug/Release 差异时使用
+# Use only for Rust debugging, debug assertions, or Debug/Release-specific issues
+npm run desktop:debug
 
 # 仅前端 Vite 开发服务器 · Frontend-only Vite dev server
 npm run dev
@@ -246,8 +250,12 @@ npm run dev
 # TypeScript 检查 + Vite 构建 · TypeScript check + Vite build
 npm run build
 
-# 完整 Tauri 构建（生成 .exe）· Full Tauri build (produces .exe)
-npm run tauri build
+# 完整 Tauri Release 构建（生成 .exe）· Full Tauri Release build (produces .exe)
+npm run desktop:build
+
+# 清理体积较大的 Debug 产物，不影响 Release 产物
+# Remove large Debug artifacts without touching Release artifacts
+npm run clean:debug
 ```
 
 ### 测试 · Testing

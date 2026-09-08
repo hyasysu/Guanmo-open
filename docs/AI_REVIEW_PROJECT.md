@@ -73,6 +73,8 @@ MEDIUM / HIGH 任务应提供以下简短提示词：
 
 ## Verification Commands
 
+桌面版运行默认使用 `npm run desktop`，即 `tauri dev --release`。该模式保留前端开发服务器与热更新，同时复用 `src-tauri/target/release` 供后续打包增量构建。只有在需要 Rust 调试信息、debug assertions，或专门排查 Debug/Release 行为差异时，才运行 `npm run desktop:debug`。Debug 产物不再需要时使用 `npm run clean:debug` 定向清理，禁止为清理 Debug 而删除整个 `src-tauri/target`，以免丢失可复用的 Release 产物。
+
 | Area | Command | When required |
 |---|---|---|
 | TypeScript typecheck | `npm run typecheck` | 任何 `src/`、`tests/`、Vite 或 TypeScript 配置修改 |
@@ -95,7 +97,9 @@ MEDIUM / HIGH 任务应提供以下简短提示词：
 | Rust tests | `cargo test --manifest-path src-tauri/Cargo.toml --all-targets --all-features --jobs 1` | Rust 行为或跨前后端契约修改 |
 | Rust check | `cargo check --manifest-path src-tauri/Cargo.toml --all-targets --all-features --jobs 1` | Rust 行为或 Cargo 配置修改 |
 | Release quality gate | `npm run check:release` | 发布前、共享基础设施或明确要求完整门禁时 |
-| Tauri installer | `npm run tauri build` | 安装包、Tauri bundle、版本或发布产物修改 |
+| Tauri desktop run | `npm run desktop` | 默认桌面运行与常规 UI / 功能调试；使用 Release profile |
+| Tauri Debug run | `npm run desktop:debug` | 仅 Rust 调试信息、debug assertions 或 Debug/Release 差异排查 |
+| Tauri installer | `npm run desktop:build` | 安装包、Tauri bundle、版本或发布产物修改；复用 Release 增量产物 |
 | Push safety | `node scripts/pre-push-check.mjs` | 仅在用户明确要求推送时，作为推送前安全校验 |
 | Release safety | `node scripts/pre-push-check.mjs --release` | 仅在用户明确要求发布/tag 时，作为发布前安全校验 |
 

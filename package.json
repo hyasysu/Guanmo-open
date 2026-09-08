@@ -26,6 +26,10 @@
     "scripts": {
         "dev": "vite --mode web",
         "dev:desktop": "vite --mode desktop",
+        "desktop": "tauri dev --release",
+        "desktop:debug": "tauri dev",
+        "desktop:build": "tauri build",
+        "clean:debug": "cargo clean --manifest-path src-tauri/Cargo.toml --profile dev",
         "lint": "eslint src tests vite.config.ts vitest.config.ts",
         "typecheck": "tsc -b --pretty false",
         "test": "vitest run",
