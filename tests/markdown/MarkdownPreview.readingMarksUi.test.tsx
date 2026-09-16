@@ -1,7 +1,9 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { MutableRefObject } from 'react'
+import { useState, type MutableRefObject } from 'react'
+import { flushSync } from 'react-dom'
 import { MarkdownPreview } from '@/components/editor/MarkdownPreview'
+import { SearchOverlay } from '@/components/editor/SearchOverlay'
 import { AnnotationHoverOverlay, type AnnotationHoverOverlayHandle } from '@/components/editor/AnnotationHoverOverlay'
 import { createMarkdownPreviewModel } from '@/services/markdownPreviewModel'
 import { createReadingMarkAnchor, readingDocumentId, type ReadingMark, type UpdateReadingMarkPatch } from '@/services/readingMarks'
@@ -71,6 +73,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
   vi.restoreAllMocks()
   if (host) host.remove()
   ;(document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }).caretRangeFromPoint = originalCaretRangeFromPoint
@@ -268,6 +271,72 @@ describe('MarkdownPreview 批注浮层', () => {
     expect(toolbar!.querySelector('.gm-reading-mark-toolbar-actions')?.className).not.toContain('is-expanded')
   })
 
+  it('行尾落在空白且该点无法映射时，仍以最后可映射位置完成批注选区', async () => {
+    const caretRangeFromPoint = (document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null })
+    caretRangeFromPoint.caretRangeFromPoint = (x, _y) => {
+      const textNode = host?.querySelector('[data-md-block-index]')?.querySelector('p span')?.firstChild
+      if (!textNode || x > 100) return null
+      const range = document.createRange()
+      range.setStart(textNode, x < 50 ? 0 : (textNode.textContent?.length ?? 0))
+      range.setEnd(textNode, x < 50 ? 0 : (textNode.textContent?.length ?? 0))
+      return range
+    }
+    const previewRef = { current: null } as MutableRefObject<MarkdownPreviewHandle | null>
+    render(<MarkdownPreview ref={previewRef} content={content} documentKey="doc-line-end" documentVersion={1} filePath={documentPath} onCreateReadingMark={async () => ({ status: 'created' as const, mark: makeMark('created-line-end', '第一段批注目标', '新批注') })} />, { container: host! })
+    const block = host!.querySelector<HTMLElement>('[data-md-block-index]')
+    expect(block).not.toBeNull()
+
+    fireEvent.mouseDown(block!, { button: 0, clientX: 4, clientY: 110 })
+    fireEvent.mouseUp(document, { clientX: 120, clientY: 110 })
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '添加批注' })).toBeInTheDocument())
+    expect(previewRef.current?.getSelection()?.text).toBe('第一段批注目标。第二段批注目标。')
+  })
+
+  it('搜索框保持焦点时，Ctrl+C 复制预览拖选而非搜索框内容', async () => {
+    const caretRangeFromPoint = (document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null })
+    caretRangeFromPoint.caretRangeFromPoint = (x) => {
+      const textNode = host?.querySelector('[data-md-block-index]')?.querySelector('p span')?.firstChild
+      if (!textNode) return null
+      const range = document.createRange()
+      const offset = x < 50 ? 0 : (textNode.textContent?.length ?? 0)
+      range.setStart(textNode, offset)
+      range.setEnd(textNode, offset)
+      return range
+    }
+    const previewRef = { current: null } as MutableRefObject<MarkdownPreviewHandle | null>
+    const paneRef = { current: null } as MutableRefObject<HTMLDivElement | null>
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    render(
+      <div ref={paneRef}>
+        <MarkdownPreview ref={previewRef} content={content} documentKey="doc-copy-search" documentVersion={1} filePath={documentPath} />
+        <SearchOverlay
+          onClose={vi.fn()}
+          previewSources={[{ content, paneRef, previewRef }]}
+        />
+      </div>,
+      { container: host! },
+    )
+    const searchInput = screen.getByPlaceholderText('搜索...') as HTMLInputElement
+    expect(document.activeElement).toBe(searchInput)
+    const block = host!.querySelector<HTMLElement>('[data-md-block-index]')
+    expect(block).not.toBeNull()
+
+    fireEvent.mouseDown(block!, { button: 0, clientX: 4, clientY: 110 })
+    fireEvent.mouseUp(document, { button: 0, clientX: 120, clientY: 110 })
+    await waitFor(() => expect(previewRef.current?.getSelection()?.text).toBe(content))
+
+    fireEvent.keyDown(searchInput, { key: 'c', code: 'KeyC', ctrlKey: true })
+
+    expect(writeText).toHaveBeenCalledWith(content)
+
+    searchInput.value = '搜索框选中内容'
+    searchInput.setSelectionRange(0, 3)
+    fireEvent.keyDown(searchInput, { key: 'c', code: 'KeyC', ctrlKey: true })
+    expect(writeText).toHaveBeenCalledTimes(1)
+  })
+
   it('外部点击关闭批注入口时清除临时选区且不创建持久化标记', async () => {
     const caretRangeFromPoint = (document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null })
     caretRangeFromPoint.caretRangeFromPoint = (x) => {
@@ -296,6 +365,44 @@ describe('MarkdownPreview 批注浮层', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: '添加批注' })).not.toBeInTheDocument())
     expect(previewRef.current?.getSelection()).toBeNull()
     expect(onCreateReadingMark).not.toHaveBeenCalled()
+  })
+
+  it('没有批注入口时，外部左键也清除预览内的原生选区', () => {
+    const caretRangeFromPoint = (document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null })
+    caretRangeFromPoint.caretRangeFromPoint = () => null
+    render(<MarkdownPreview content={content} documentKey="doc-native-outside" documentVersion={1} filePath={documentPath} onCreateReadingMark={vi.fn()} />, { container: host! })
+    const textNode = host!.querySelector('[data-md-block-index] p span')?.firstChild
+    expect(textNode).not.toBeNull()
+    const nativeRange = document.createRange()
+    nativeRange.selectNodeContents(textNode!)
+    window.getSelection()?.removeAllRanges()
+    window.getSelection()?.addRange(nativeRange)
+    expect(window.getSelection()?.rangeCount).toBe(1)
+
+    fireEvent.mouseDown(document.body, { button: 0 })
+
+    expect(window.getSelection()?.rangeCount).toBe(0)
+  })
+
+  it('首字符左侧空白起拖时，回收原生选区并创建批注入口', async () => {
+    const caretRangeFromPoint = (document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null })
+    caretRangeFromPoint.caretRangeFromPoint = () => null
+    const previewRef = { current: null } as MutableRefObject<MarkdownPreviewHandle | null>
+    render(<MarkdownPreview ref={previewRef} content={content} documentKey="doc-native-recovery" documentVersion={1} filePath={documentPath} onCreateReadingMark={vi.fn()} />, { container: host! })
+    const block = host!.querySelector<HTMLElement>('[data-md-block-index]')
+    const paragraph = block?.querySelector('p')
+    expect(paragraph).not.toBeNull()
+
+    fireEvent.mouseDown(block!, { button: 0, clientX: 0, clientY: 110 })
+    const nativeRange = document.createRange()
+    nativeRange.selectNodeContents(paragraph!)
+    window.getSelection()?.removeAllRanges()
+    window.getSelection()?.addRange(nativeRange)
+    fireEvent.mouseUp(document, { button: 0, clientX: 120, clientY: 110 })
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '添加批注' })).toBeInTheDocument())
+    expect(previewRef.current?.getSelection()?.text).toBe('第一段批注目标。第二段批注目标。')
+    expect(window.getSelection()?.rangeCount).toBe(0)
   })
 
   it.each([
@@ -368,6 +475,58 @@ describe('MarkdownPreview 批注浮层', () => {
     expect(screen.queryByRole('button', { name: '删除标记' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '创建黄色高亮' }))
     await waitFor(() => expect(onCreateReadingMark).toHaveBeenCalledTimes(1))
+  })
+
+  it('创建成功后清除临时选区不会覆盖刚回流的 ReadingMark 高亮', async () => {
+    const highlights = new Map<string, { ranges: Set<globalThis.Range>; add: (range: globalThis.Range) => void; delete: (range: globalThis.Range) => void }>()
+    class FakeHighlight {
+      readonly ranges = new Set<globalThis.Range>()
+      add(range: globalThis.Range): void { this.ranges.add(range) }
+      delete(range: globalThis.Range): void { this.ranges.delete(range) }
+    }
+    vi.stubGlobal('CSS', { highlights })
+    vi.stubGlobal('Highlight', FakeHighlight)
+
+    const created = makeMark('created-immediate-highlight', '第一段批注目标', '')
+    const onCreateReadingMark = vi.fn(async () => ({ status: 'created' as const, mark: created }))
+    const caretRangeFromPoint = document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
+    caretRangeFromPoint.caretRangeFromPoint = (x) => {
+      const textNode = host?.querySelector('[data-md-block-index]')?.querySelector('p span')?.firstChild
+      if (!textNode) return null
+      const range = document.createRange()
+      const offset = x < 50 ? 0 : (textNode.textContent?.length ?? 0)
+      range.setStart(textNode, offset)
+      range.setEnd(textNode, offset)
+      return range
+    }
+
+    function Harness() {
+      const [marks, setMarks] = useState<ReadingMark[]>([])
+      return (
+        <MarkdownPreview
+          content={content}
+          documentKey="doc-immediate-highlight"
+          documentVersion={1}
+          filePath={documentPath}
+          readingMarks={marks}
+          onCreateReadingMark={async (...args) => {
+            const result = await onCreateReadingMark(...args)
+            flushSync(() => setMarks([result.mark]))
+            return result
+          }}
+        />
+      )
+    }
+
+    render(<Harness />, { container: host! })
+    const block = host!.querySelector<HTMLElement>('[data-md-block-index]')!
+    fireEvent.mouseDown(block, { button: 0, clientX: 4, clientY: 110 })
+    fireEvent.mouseUp(document, { clientX: 120, clientY: 110 })
+    fireEvent.mouseEnter(await screen.findByRole('button', { name: '添加批注' }).then((button) => button.closest('.gm-reading-mark-toolbar')!))
+    fireEvent.click(screen.getByRole('button', { name: '创建黄色高亮' }))
+
+    await waitFor(() => expect(onCreateReadingMark).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(highlights.get('reading-mark-yellow')?.ranges.size).toBeGreaterThan(0))
   })
 
   it('添加文字批注在同一胶囊内形变、聚焦并提交后关闭', async () => {

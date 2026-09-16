@@ -36,10 +36,12 @@ describe('设置兼容', () => {
       defaultOpenMode: 'preview',
     })
     expect(state.appearance).toMatchObject({
-      version: 1,
+      version: 2,
       themeId: 'warm',
       lastLightThemeId: 'warm',
       assistantVisualId: 'sprite',
+      aiAssistantFontSize: 14,
+      fullscreenTransitionEnabled: true,
       motionPreference: 'system',
     })
     expect(state.webSearch).toMatchObject({ provider: 'duckduckgo', maxResults: 5, timeout: 60000 })
@@ -74,7 +76,42 @@ describe('设置兼容', () => {
       autoSendAiShortcut: true,
       defaultOpenMode: 'preview',
     })
-    expect(state.appearance).toMatchObject({ themeId: 'dark', lastLightThemeId: 'warm', aiAvatarStyle: 'sprite' })
+    expect(state.appearance).toMatchObject({
+      themeId: 'dark',
+      lastLightThemeId: 'warm',
+      aiAvatarStyle: 'sprite',
+      aiAssistantFontSize: 14,
+      fullscreenTransitionEnabled: true,
+    })
+  })
+
+  it('保留全屏过渡动画开关并对非法值回退开启', async () => {
+    const disabledStore = await loadSettingsStore({ appearance: { fullscreenTransitionEnabled: false } })
+    expect(disabledStore.getState().appearance.fullscreenTransitionEnabled).toBe(false)
+
+    disabledStore.getState().updateAppearanceSettings({ fullscreenTransitionEnabled: true })
+    const persisted = JSON.parse(localStorage.getItem('guanmo-settings') || '{}') as { state?: { appearance?: { fullscreenTransitionEnabled?: boolean } } }
+    expect(persisted.state?.appearance?.fullscreenTransitionEnabled).toBe(true)
+
+    const invalidStore = await loadSettingsStore({ appearance: { fullscreenTransitionEnabled: 'false' } })
+    expect(invalidStore.getState().appearance.fullscreenTransitionEnabled).toBe(true)
+  })
+
+  it.each([12, 14, 16, 18] as const)('保留合法 AI 助手字号 %ipx', async (fontSize) => {
+    const store = await loadSettingsStore({ appearance: { aiAssistantFontSize: fontSize } })
+    expect(store.getState().appearance.aiAssistantFontSize).toBe(fontSize)
+  })
+
+  it('非法 AI 助手字号回退为 14px', async () => {
+    const store = await loadSettingsStore({ appearance: { aiAssistantFontSize: 20 } })
+    expect(store.getState().appearance.aiAssistantFontSize).toBe(14)
+  })
+
+  it('AI 助手字号更新后写入持久配置', async () => {
+    const store = await loadSettingsStore()
+    store.getState().updateAppearanceSettings({ aiAssistantFontSize: 18 })
+    const persisted = JSON.parse(localStorage.getItem('guanmo-settings') || '{}') as { state?: { appearance?: { aiAssistantFontSize?: number } } }
+    expect(persisted.state?.appearance?.aiAssistantFontSize).toBe(18)
   })
 
   it('保留用户显式关闭快捷 AI 自动发送的设置', async () => {
@@ -101,7 +138,7 @@ describe('设置兼容', () => {
     expect(fallbackStore.getState().appearance).toMatchObject({ themeId: 'warm', lastLightThemeId: 'warm' })
   })
 
-  it('非法外观扩展字段回退为版本 1 默认值', async () => {
+  it('非法外观扩展字段回退为版本 2 默认值', async () => {
     const store = await loadSettingsStore({
       appearance: {
         version: 99,
@@ -111,7 +148,7 @@ describe('设置兼容', () => {
       },
     })
     expect(store.getState().appearance).toMatchObject({
-      version: 1,
+      version: 2,
       themeId: 'warm',
       assistantVisualId: 'sprite',
       motionPreference: 'system',
@@ -131,6 +168,52 @@ describe('设置兼容', () => {
     expect(store.getState().appearance.lastLightThemeId).toBe('github-light')
     expect(document.documentElement.dataset.theme).toBe('dark')
     expect(document.documentElement.style.colorScheme).toBe('dark')
+  })
+
+  it('管理自定义主题槽位并在删除后安全回退', async () => {
+    const store = await loadSettingsStore()
+    expect(store.getState().removeTheme('warm')).toBe(false)
+    expect(store.getState().removeTheme('paper')).toBe(true)
+
+    const added = store.getState().addCustomTheme({
+      id: 'custom-sea',
+      label: '海盐蓝',
+      description: '清爽蓝色',
+      colorScheme: 'light',
+      startupCanvas: '#F5F8FC',
+      palette: {
+        canvas: '#F5F8FC', surface: '#FFFFFF', elevated: '#EEF4FA', text: '#1F2937', mutedText: '#64748B',
+        border: '#CBD5E1', primary: '#2563EB', onPrimary: '#FFFFFF', accent: '#0F766E', editorBackground: '#FFFFFF',
+        heading: '#172554', link: '#1D4ED8', codeBackground: '#EFF6FF', codeText: '#1E3A8A', selection: '#93C5FD',
+        success: '#16A34A', warning: '#D97706', error: '#DC2626',
+      },
+    })
+    expect(added).toBe(true)
+    expect(store.getState().appearance.themeId).toBe('custom-sea')
+    expect(document.documentElement.dataset.themeKind).toBe('custom')
+    expect(document.documentElement.style.getPropertyValue('--gm-primary')).toBe('#2563EB')
+
+    expect(store.getState().removeTheme('custom-sea')).toBe(true)
+    expect(store.getState().appearance.themeId).toBe('warm')
+    expect(store.getState().appearance.themeSlots[0]).toBeNull()
+    store.getState().restoreDefaultThemes()
+    expect(store.getState().appearance.themeSlots).toEqual([
+      { kind: 'builtin', themeId: 'paper' },
+      { kind: 'builtin', themeId: 'github-light' },
+    ])
+  })
+
+  it('重启恢复时保留已删除主题的空槽位', async () => {
+    const store = await loadSettingsStore()
+    expect(store.getState().removeTheme('paper')).toBe(true)
+    const persisted = JSON.parse(localStorage.getItem('guanmo-settings') || '{}') as { state?: unknown }
+
+    const reloadedStore = await loadSettingsStore(persisted.state)
+
+    expect(reloadedStore.getState().appearance.themeSlots).toEqual([
+      null,
+      { kind: 'builtin', themeId: 'github-light' },
+    ])
   })
 
   it('旧模型和搜索配置缺少超时时补默认值，越界值会被限制', async () => {

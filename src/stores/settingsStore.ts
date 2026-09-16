@@ -26,8 +26,9 @@ import {
   resolveThemeId,
   THEME_IDS,
 } from '@/services/appearance/appearanceSchema'
-import type { AppearanceConfigV1, NonDarkThemeId, ThemeId } from '@/services/appearance/appearanceSchema'
-import { syncDocumentTheme as applyDocumentTheme } from '@/services/appearance/appearanceDom'
+import type { AppearanceConfigV1, CustomThemeDefinition, NonDarkThemeId, ThemeId, ThemeSlot } from '@/services/appearance/appearanceSchema'
+import { createAppearanceRegistry } from '@/services/appearance/appearanceRegistry'
+import { setAppearanceRegistry, syncDocumentTheme as applyDocumentTheme } from '@/services/appearance/appearanceDom'
 
 export { THEME_IDS, resolveLastLightThemeId, resolveThemeId }
 export type { NonDarkThemeId, ThemeId }
@@ -51,6 +52,9 @@ interface EditorSettings {
   defaultOpenMode: 'edit' | 'preview'
 }
 
+export const AI_ASSISTANT_FONT_SIZES = [12, 14, 16, 18] as const
+export type AiAssistantFontSize = typeof AI_ASSISTANT_FONT_SIZES[number]
+
 // 保留字段名与持久化结构，避免旧版本配置读取失败；运行时唯一头像方案为小球。
 export const AI_AVATAR_STYLES = ['sprite'] as const
 export type AiAvatarStyle = typeof AI_AVATAR_STYLES[number]
@@ -58,6 +62,8 @@ export type AiAvatarStyle = typeof AI_AVATAR_STYLES[number]
 interface AppearanceSettings extends AppearanceConfigV1 {
   customCursorEnabled: boolean
   aiAvatarStyle: AiAvatarStyle
+  aiAssistantFontSize: AiAssistantFontSize
+  fullscreenTransitionEnabled: boolean
   lastLightThemeId: NonDarkThemeId
 }
 
@@ -99,11 +105,14 @@ interface SettingsState {
   removeCustomChatPreset: (id: string) => void
   addCustomEmbeddingPreset: (preset: CustomPreset) => void
   removeCustomEmbeddingPreset: (id: string) => void
+  addCustomTheme: (theme: CustomThemeDefinition) => boolean
+  removeTheme: (themeId: ThemeId) => boolean
+  restoreDefaultThemes: () => void
 }
 
 export const FULLSCREEN_CONTENT_PADDING = {
   min: 16,
-  max: 256,
+  max: 480,
   step: 8,
   default: 88,
 } as const
@@ -131,7 +140,15 @@ const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   ...DEFAULT_APPEARANCE_CONFIG_V1,
   customCursorEnabled: false,
   aiAvatarStyle: 'sprite',
+  aiAssistantFontSize: 14,
+  fullscreenTransitionEnabled: true,
   lastLightThemeId: 'warm',
+}
+
+function resolveAiAssistantFontSize(value: unknown): AiAssistantFontSize {
+  return typeof value === 'number' && AI_ASSISTANT_FONT_SIZES.includes(value as AiAssistantFontSize)
+    ? value as AiAssistantFontSize
+    : DEFAULT_APPEARANCE_SETTINGS.aiAssistantFontSize
 }
 
 const DEFAULT_WEB_SEARCH: WebSearchConfig = {
@@ -247,7 +264,9 @@ export const useSettingsStore = create<SettingsState>()(
             ...settings,
             version: DEFAULT_APPEARANCE_CONFIG_V1.version,
           }
-          if (settings.themeId && settings.themeId !== 'dark') {
+          const registry = createAppearanceRegistry(appearance.themeSlots)
+          setAppearanceRegistry(registry)
+          if (settings.themeId && registry.getTheme(settings.themeId).colorScheme !== 'dark') {
             appearance.lastLightThemeId = settings.themeId
           }
           if ('themeId' in settings) applyDocumentTheme(appearance.themeId)
@@ -296,6 +315,88 @@ export const useSettingsStore = create<SettingsState>()(
 
       removeCustomEmbeddingPreset: (id) =>
         set((s) => ({ customEmbeddingPresets: s.customEmbeddingPresets.filter((p) => p.id !== id) })),
+
+      addCustomTheme: (theme) => {
+        let added = false
+        set((s) => {
+          const slots = [...s.appearance.themeSlots] as [ThemeSlot, ThemeSlot]
+          const emptyIndex = slots.findIndex((slot) => slot === null)
+          if (emptyIndex < 0) return s
+          const registry = createAppearanceRegistry(slots)
+          const duplicate = registry.themes.some((entry) => (
+            entry.label.trim().toLocaleLowerCase() === theme.label.trim().toLocaleLowerCase()
+          ))
+          if (duplicate) return s
+          slots[emptyIndex] = { kind: 'custom', theme }
+          const nextRegistry = createAppearanceRegistry(slots)
+          setAppearanceRegistry(nextRegistry)
+          const appearance: AppearanceSettings = {
+            ...s.appearance,
+            themeId: theme.id,
+            lastLightThemeId: theme.colorScheme === 'dark' ? s.appearance.lastLightThemeId : theme.id,
+            themeSlots: slots,
+            version: DEFAULT_APPEARANCE_CONFIG_V1.version,
+          }
+          applyDocumentTheme(appearance.themeId)
+          added = true
+          return { appearance }
+        })
+        return added
+      },
+
+      removeTheme: (themeId) => {
+        let removed = false
+        set((s) => {
+          if (themeId === 'warm' || themeId === 'light' || themeId === 'dark') return s
+          const slots = [...s.appearance.themeSlots] as [ThemeSlot, ThemeSlot]
+          const slotIndex = slots.findIndex((slot) => (
+            slot?.kind === 'builtin'
+              ? slot.themeId === themeId
+              : slot?.kind === 'custom' && slot.theme.id === themeId
+          ))
+          if (slotIndex < 0) return s
+          slots[slotIndex] = null
+          const registry = createAppearanceRegistry(slots)
+          setAppearanceRegistry(registry)
+          const themeExists = registry.themes.some((theme) => theme.id === s.appearance.themeId)
+          const lightExists = registry.themes.some((theme) => (
+            theme.id === s.appearance.lastLightThemeId && theme.colorScheme === 'light'
+          ))
+          const appearance: AppearanceSettings = {
+            ...s.appearance,
+            themeId: themeExists ? s.appearance.themeId : 'warm',
+            lastLightThemeId: lightExists ? s.appearance.lastLightThemeId : 'warm',
+            themeSlots: slots,
+            version: DEFAULT_APPEARANCE_CONFIG_V1.version,
+          }
+          applyDocumentTheme(appearance.themeId)
+          removed = true
+          return { appearance }
+        })
+        return removed
+      },
+
+      restoreDefaultThemes: () => set((s) => {
+        const themeSlots = DEFAULT_APPEARANCE_CONFIG_V1.themeSlots
+        const registry = createAppearanceRegistry(themeSlots)
+        setAppearanceRegistry(registry)
+        const themeId = registry.themes.some((theme) => theme.id === s.appearance.themeId)
+          ? s.appearance.themeId
+          : 'warm'
+        const lastLightThemeId = registry.themes.some((theme) => (
+          theme.id === s.appearance.lastLightThemeId && theme.colorScheme === 'light'
+        )) ? s.appearance.lastLightThemeId : 'warm'
+        applyDocumentTheme(themeId)
+        return {
+          appearance: {
+            ...s.appearance,
+            themeId,
+            lastLightThemeId,
+            themeSlots,
+            version: DEFAULT_APPEARANCE_CONFIG_V1.version,
+          },
+        }
+      }),
     }),
     {
       name: 'guanmo-settings',
@@ -397,13 +498,27 @@ export const useSettingsStore = create<SettingsState>()(
           appearance: (() => {
             const savedAppearance = (saved.appearance ?? {}) as unknown as Record<string, unknown>
             const resolved = resolveAppearanceConfig(savedAppearance)
+            const registry = createAppearanceRegistry(resolved.themeSlots)
+            setAppearanceRegistry(registry)
+            const themeId = registry.themes.some((theme) => theme.id === resolved.themeId)
+              ? resolved.themeId
+              : DEFAULT_APPEARANCE_CONFIG_V1.themeId
+            const requestedLastLightThemeId = resolveLastLightThemeId(savedAppearance)
+            const lastLightThemeId = registry.themes.some((theme) => (
+              theme.id === requestedLastLightThemeId && theme.colorScheme === 'light'
+            )) ? requestedLastLightThemeId : DEFAULT_APPEARANCE_CONFIG_V1.themeId
             return {
               customCursorEnabled: typeof savedAppearance.customCursorEnabled === 'boolean'
                 ? savedAppearance.customCursorEnabled
                 : current.appearance.customCursorEnabled,
               aiAvatarStyle: resolveAiAvatarStyle(savedAppearance, current),
+              aiAssistantFontSize: resolveAiAssistantFontSize(savedAppearance.aiAssistantFontSize),
+              fullscreenTransitionEnabled: typeof savedAppearance.fullscreenTransitionEnabled === 'boolean'
+                ? savedAppearance.fullscreenTransitionEnabled
+                : current.appearance.fullscreenTransitionEnabled,
               ...resolved,
-              lastLightThemeId: resolveLastLightThemeId(savedAppearance),
+              themeId,
+              lastLightThemeId,
             }
           })(),
           webSearch: patchedWebSearch,

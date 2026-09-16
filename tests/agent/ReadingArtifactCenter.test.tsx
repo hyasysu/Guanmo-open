@@ -135,12 +135,35 @@ describe('ReadingArtifactCenter', () => {
 
     expect(await screen.findByText('独立问题集')).toBeInTheDocument()
     expect(screen.getByText('AI · AI 解读')).toBeInTheDocument()
+    const cards = screen.getAllByRole('article')
+    expect(cards.findIndex((card) => card.textContent?.includes('AI · AI 解读')))
+      .toBeLessThan(cards.findIndex((card) => card.textContent?.includes('人工批注')))
     fireEvent.click(screen.getByRole('tab', { name: '按文档' }))
 
     expect(await screen.findByText('A.md')).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: /B\.md/ })).toBeInTheDocument()
     expect(screen.getByText('独立成果')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByText('来源文档不可用')).toBeInTheDocument())
+  })
+
+  it('keeps page controls outside the inner result scroller and restores its position', async () => {
+    render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
+
+    const contentRegion = screen.getByRole('region', { name: '阅读成果内容' })
+    expect(contentRegion).toHaveClass('overflow-y-auto')
+    expect(screen.getByRole('tablist', { name: '阅读成果视图' })).not.toContainElement(contentRegion)
+
+    contentRegion.scrollTop = 120
+    fireEvent.click(screen.getByRole('tab', { name: '按文档' }))
+    await screen.findByRole('button', { name: /A\.md/ })
+    fireEvent.click(screen.getByRole('tab', { name: '最近' }))
+
+    await waitFor(() => expect(contentRegion.scrollTop).toBe(120))
+
+    fireEvent.click(screen.getByRole('tab', { name: '按文档' }))
+    fireEvent.click(await screen.findByRole('button', { name: /A\.md/ }))
+    expect(screen.getByRole('tablist', { name: '成果分类' })).not.toContainElement(contentRegion)
+    await waitFor(() => expect(contentRegion.scrollTop).toBe(0))
   })
 
   it('opens document detail with four filters and routes manual source navigation', async () => {
@@ -170,7 +193,7 @@ describe('ReadingArtifactCenter', () => {
     fireEvent.click(sortButton)
     fireEvent.pointerDown(document.body)
     expect(screen.queryByRole('menu', { name: '排序方式' })).not.toBeInTheDocument()
-    const manualCard = screen.getByText('人工批注').closest('article')
+    const manualCard = screen.getAllByText('人工批注')[0].closest('article')
     fireEvent.click(within(manualCard!).getByRole('button', { name: 'A.md · 查看原文' }))
     expect(mocks.navigateToReadingMark).toHaveBeenCalledWith('mark-1')
   })
@@ -194,6 +217,90 @@ describe('ReadingArtifactCenter', () => {
     expect(mocks.navigateToReadingMark).toHaveBeenCalledWith('mark-2')
     fireEvent.click(buttons[1])
     expect(mocks.navigateToReadingMark).toHaveBeenCalledWith('mark-1')
+  })
+
+  it('keeps short manual content directly readable without an expand control', async () => {
+    mocks.loadReadingArtifactsPage.mockReset().mockResolvedValue({ artifacts: [], total: 0 })
+    render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
+
+    const card = (await screen.findByText('人工批注')).closest('article')
+    expect(card).toBeInTheDocument()
+    expect(card).toHaveTextContent('“匿名原文”')
+    expect(within(card!).getByText('人工批注')).toBeInTheDocument()
+    expect(within(card!).queryByRole('button', { name: '展开全文' })).not.toBeInTheDocument()
+  })
+
+  it('uses theme-safe annotation surfaces in dark mode', async () => {
+    const root = document.documentElement
+    root.dataset.theme = 'dark'
+    try {
+      mocks.loadReadingArtifactsPage.mockReset().mockResolvedValue({ artifacts: [], total: 0 })
+      render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
+
+      const card = (await screen.findByText('人工批注')).closest('article')
+      const noteSection = within(card!).getByText('我的批注').closest('section')
+      expect(noteSection).toBeInTheDocument()
+      expect(noteSection).toHaveAttribute('style', expect.stringContaining('background-color: color-mix'))
+      expect(noteSection).not.toHaveClass('bg-pink-50/65')
+    } finally {
+      delete root.dataset.theme
+    }
+  })
+
+  it('clamps long highlight and annotation content while keeping source and actions visible', async () => {
+    const longHighlight: ReadingMark = {
+      ...readingMark,
+      id: 'mark-long-highlight',
+      type: 'highlight',
+      note: undefined,
+      anchor: { ...readingMark.anchor, quote: Array.from({ length: 8 }, (_, index) => `高亮原文第${index + 1}行`).join('\n') },
+    }
+    const longAnnotation: ReadingMark = {
+      ...readingMark,
+      id: 'mark-long-annotation',
+      anchor: { ...readingMark.anchor, quote: Array.from({ length: 5 }, (_, index) => `批注原文第${index + 1}行`).join('\n') },
+      note: Array.from({ length: 7 }, (_, index) => `我的批注第${index + 1}行`).join('\n'),
+    }
+    mocks.loadReadingMarksPage.mockReset().mockResolvedValueOnce([longHighlight, longAnnotation])
+    mocks.loadReadingArtifactsPage.mockReset().mockResolvedValue({ artifacts: [], total: 0 })
+    render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
+
+    await screen.findAllByRole('button', { name: '展开全文' })
+    const cards = screen.getAllByRole('article')
+    const highlightCard = cards.find((card) => card.textContent?.includes('高亮原文第1行'))
+    const annotationCard = cards.find((card) => card.textContent?.includes('批注原文第1行'))
+    expect(highlightCard).toBeDefined()
+    expect(annotationCard).toBeDefined()
+    const annotationExpand = within(annotationCard!).getByRole('button', { name: '展开全文' })
+    expect(highlightCard).toHaveTextContent('高亮原文第8行')
+    expect(within(highlightCard!).getByRole('button', { name: 'A.md · 查看原文' })).toBeInTheDocument()
+    expect(within(highlightCard!).getByRole('button', { name: '删除' })).toBeInTheDocument()
+
+    fireEvent.click(annotationExpand)
+    expect(screen.getAllByRole('button', { name: '收起' })).toHaveLength(1)
+    expect(annotationCard).toHaveTextContent('我的批注第7行')
+    expect(within(annotationCard!).getByText('我的批注')).toBeInTheDocument()
+    expect(within(annotationCard!).getByRole('button', { name: '编辑批注' })).toBeInTheDocument()
+  })
+
+  it('cleans up content resize observers when a manual card unmounts', async () => {
+    const originalResizeObserver = globalThis.ResizeObserver
+    const disconnect = vi.fn()
+    class TrackingResizeObserver {
+      constructor(_callback: ResizeObserverCallback) {}
+      observe = vi.fn()
+      disconnect = disconnect
+    }
+    globalThis.ResizeObserver = TrackingResizeObserver as unknown as typeof ResizeObserver
+    try {
+      mocks.loadReadingArtifactsPage.mockReset().mockResolvedValue({ artifacts: [], total: 0 })
+      const view = render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
+      await screen.findByText('人工批注')
+      view.unmount()
+      expect(disconnect).toHaveBeenCalled()
+    } finally {
+      globalThis.ResizeObserver = originalResizeObserver
+    }
   })
 
   it('keeps each multi-document AI source as an independent source action', async () => {

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { EditorView } from '@codemirror/view'
 import { useAppStore } from '@/stores/appStore'
-import { useEditorStore } from '@/stores/editorStore'
+import { useEditorStore, type ViewMode } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { AiShortcutMenuItems } from './AiShortcutMenuItems'
 import { useFileOperations } from '@/hooks/useFileOperations'
@@ -26,7 +26,8 @@ import type { PreviewSelectionSnapshot } from './markdownPreviewTypes'
 import { readingDocumentId, type ReadingMark, type ReadingMarkColor } from '@/services/readingMarks'
 import { useReadingMarksStore } from '@/stores/readingMarksStore'
 import { CodeMirrorEditor } from './CodeMirrorEditor'
-import { SearchOverlay } from './SearchOverlay'
+import type { MarkdownDiffViewHandle } from './MarkdownDiffView'
+import { SearchOverlay, type SearchRequest } from './SearchOverlay'
 import { TabBar } from './TabBar'
 import { useScheduledPreviewContent } from './useScheduledPreviewContent'
 import { useEditorResourceLifecycle } from './useEditorResourceLifecycle'
@@ -79,6 +80,23 @@ interface PreviewScrollFollowerState {
   stableFrames: number
 }
 
+interface FontZoomLineAnchor {
+  line: number
+  offset: number
+}
+
+interface FontZoomAnchorSnapshot {
+  generation: number
+  targetFontSize: number
+  viewMode: ViewMode
+  activeTabId: string | null
+  rightTabId: string | null
+  editor?: FontZoomLineAnchor
+  leftPreview?: FontZoomLineAnchor
+  rightPreview?: FontZoomLineAnchor
+  diff?: { row: number; offset: number }
+}
+
 const DROP_IMAGES_EVENT = 'guanmo:drop-image-paths'
 const SCROLL_SYNC_TOP_OFFSET = 32
 const SCROLL_SYNC_INPUT_PAUSE_MS = 700
@@ -99,7 +117,12 @@ const SCROLL_SYNC_EXTERNAL_DRIFT_PX = 1
 const PREVIEW_SWITCH_MARK_PREFIX = 'guanmo:preview-switch'
 const EMPTY_READING_MARKS: ReadingMark[] = []
 
-export function EditorArea() {
+interface EditorAreaProps {
+  /** Standalone editor tests mount this component without the application bootstrap. */
+  databaseReady?: boolean
+}
+
+export function EditorArea({ databaseReady = true }: EditorAreaProps) {
   const tabs = useEditorStore((s) => s.tabs)
   const activeTabId = useEditorStore((s) => s.activeTabId)
   const updateTabContent = useEditorStore((s) => s.updateTabContent)
@@ -134,6 +157,7 @@ export function EditorArea() {
   const rightPreviewRef = useRef<HTMLDivElement>(null)
   const leftMarkdownPreviewRef = useRef<MarkdownPreviewHandle>(null)
   const rightMarkdownPreviewRef = useRef<MarkdownPreviewHandle>(null)
+  const diffViewRef = useRef<MarkdownDiffViewHandle>(null)
   const annotationOverlayRef = useRef<AnnotationHoverOverlayHandle>(null)
   const restoredPreviewKeysRef = useRef<{ left: string | null; right: string | null }>({ left: null, right: null })
 
@@ -141,6 +165,10 @@ export function EditorArea() {
   const editorScrollFrameRef = useRef<number | null>(null)
   const editorHeadingJumpCancelRef = useRef<(() => void) | null>(null)
   const previewScrollFrameRef = useRef<number | null>(null)
+  const fontZoomGenerationRef = useRef(0)
+  const fontZoomAnchorRef = useRef<FontZoomAnchorSnapshot | null>(null)
+  const fontZoomRestoreFramesRef = useRef<number[]>([])
+  const fontZoomRestoringRef = useRef(false)
   const lastEditorInputAtRef = useRef(0)
   /** 预览 pane 上最近一次用户滚动手势（wheel / pointerdown）时间戳 */
   const previewGestureAtRef = useRef(0)
@@ -171,7 +199,9 @@ export function EditorArea() {
     stableFrames: 0,
   })
   const [, setPreviewRestoreTick] = useState(0)
-  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchRequest, setSearchRequest] = useState<SearchRequest | null>(null)
+  const searchRequestIdRef = useRef(0)
+  const searchOpen = searchRequest !== null
   const [rightPaneDragOver, setRightPaneDragOver] = useState(false)
   const [tocCollapsed, setTocCollapsed] = useState(false)
   const [activeEditorHeading, setActiveEditorHeading] = useState<string | null>(null)
@@ -214,14 +244,14 @@ export function EditorArea() {
   ))
 
   useEffect(() => {
-    if (!readingMarksEnabled || !leftPreviewVisible || !activeTab?.filePath) return
+    if (!databaseReady || !readingMarksEnabled || !leftPreviewVisible || !activeTab?.filePath) return
     void loadReadingMarksForDocument(activeTab.filePath)
-  }, [activeTab?.filePath, leftPreviewVisible, loadReadingMarksForDocument, readingMarksEnabled])
+  }, [activeTab?.filePath, databaseReady, leftPreviewVisible, loadReadingMarksForDocument, readingMarksEnabled])
 
   useEffect(() => {
-    if (!readingMarksEnabled || viewMode !== 'dual-preview' || !rightTab?.filePath) return
+    if (!databaseReady || !readingMarksEnabled || viewMode !== 'dual-preview' || !rightTab?.filePath) return
     void loadReadingMarksForDocument(rightTab.filePath)
-  }, [loadReadingMarksForDocument, readingMarksEnabled, rightTab?.filePath, viewMode])
+  }, [databaseReady, loadReadingMarksForDocument, readingMarksEnabled, rightTab?.filePath, viewMode])
 
   const handleCreateReadingMark = useCallback(async (selection: PreviewSelectionSnapshot, color: ReadingMarkColor, note: string | undefined, model: import('@/services/markdownPreviewModel').MarkdownPreviewModel) => {
     if (!activeTab?.filePath) throw new Error('批注仅支持已保存的 Markdown 文件')
@@ -501,6 +531,7 @@ export function EditorArea() {
     readingPositionsRef,
     isRestoringScrollRef,
     getStoredPreviewTop,
+    getStoredPreviewPosition,
     getStoredEditorTop,
     saveEditorPositionForTab,
     savePreviewReadingPosition,
@@ -508,6 +539,8 @@ export function EditorArea() {
     restoreEditorReadingPosition,
     restorePreviewReadingPosition,
   } = readingPositionBridge
+  const leftInitialPreviewPosition = getStoredPreviewPosition(activeTab?.id, 'left')
+  const rightInitialPreviewPosition = getStoredPreviewPosition(rightTab?.id, 'right')
   const previewSelectionBridge = usePreviewSelectionBridge({
     activeTab,
     rightTab,
@@ -532,7 +565,10 @@ export function EditorArea() {
       previewSwitchingTabId === activeTab.id
       || (
         restoredPreviewKeysRef.current.left !== activeTab.id
-        && getStoredPreviewTop(activeTab.id) > 0
+        && (
+          getStoredPreviewTop(activeTab.id) > 0
+          || (leftInitialPreviewPosition?.topLine ?? 1) > 1
+        )
       )
     )
   )
@@ -540,7 +576,10 @@ export function EditorArea() {
   const rightPreviewMasked = Boolean(
     rightTab?.id
     && restoredPreviewKeysRef.current.right !== rightTab.id
-    && getStoredPreviewTop(rightTab.id, 'right') > 0
+    && (
+      getStoredPreviewTop(rightTab.id, 'right') > 0
+      || (rightInitialPreviewPosition?.topLine ?? 1) > 1
+    )
   )
 
   // 预览内容更新（版本变化）只恢复预览自身位置，保证右侧渲染稳定；
@@ -575,36 +614,55 @@ export function EditorArea() {
     restoreEditorReadingPosition(activeTab.id)
   }, [activeTab?.id, restoreEditorReadingPosition, viewMode])
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && !e.altKey) {
-        setSearchOpen(true)
-      }
+  const captureFontZoomAnchors = useCallback((targetFontSize: number) => {
+    for (const frameId of fontZoomRestoreFramesRef.current) {
+      window.cancelAnimationFrame(frameId)
     }
-    const openSearch = () => setSearchOpen(true)
-    window.addEventListener('keydown', handler, true)
-    window.addEventListener(OPEN_EDITOR_SEARCH_EVENT, openSearch)
-    return () => {
-      window.removeEventListener('keydown', handler, true)
-      window.removeEventListener(OPEN_EDITOR_SEARCH_EVENT, openSearch)
+    fontZoomRestoreFramesRef.current = []
+    fontZoomRestoringRef.current = false
+
+    const generation = ++fontZoomGenerationRef.current
+    const snapshot: FontZoomAnchorSnapshot = {
+      generation,
+      targetFontSize,
+      viewMode,
+      activeTabId: activeTab?.id ?? null,
+      rightTabId: rightTab?.id ?? null,
     }
-  }, [])
+
+    if (editorVisible && editorViewRef.current) {
+      snapshot.editor = getEditorFontZoomAnchor(editorViewRef.current)
+    }
+    if (leftPreviewVisible) {
+      snapshot.leftPreview = getPreviewFontZoomAnchor(leftPreviewRef.current, leftMarkdownPreviewRef.current)
+    }
+    if (viewMode === 'dual-preview') {
+      snapshot.rightPreview = getPreviewFontZoomAnchor(rightPreviewRef.current, rightMarkdownPreviewRef.current)
+    }
+    if (viewMode === 'diff-preview') {
+      snapshot.diff = diffViewRef.current?.getTopRowAnchor(SCROLL_SYNC_TOP_OFFSET)
+    }
+
+    fontZoomAnchorRef.current = snapshot
+  }, [activeTab?.id, editorVisible, leftPreviewVisible, rightTab?.id, viewMode])
 
   // Ctrl + 滚轮快捷调节字号
   useEffect(() => {
     const handler = (e: WheelEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return
       e.preventDefault()
+      e.stopPropagation()
       const delta = e.deltaY < 0 ? 1 : -1
       const current = useSettingsStore.getState().editor.fontSize
       const next = Math.max(10, Math.min(24, current + delta))
       if (next !== current) {
+        captureFontZoomAnchors(next)
         useSettingsStore.getState().updateEditorSettings({ fontSize: next })
       }
     }
     window.addEventListener('wheel', handler, { passive: false, capture: true })
     return () => window.removeEventListener('wheel', handler, { capture: true })
-  }, [])
+  }, [captureFontZoomAnchors])
 
   /** 取消正在写编辑器 scrollTop 的 follower（预览滚动驱动方向） */
   const cancelEditorFollower = useCallback(() => {
@@ -632,6 +690,115 @@ export function EditorArea() {
     f.stableFrames = 0
   }, [])
 
+  useLayoutEffect(() => {
+    const snapshot = fontZoomAnchorRef.current
+    if (!snapshot || snapshot.targetFontSize !== editorFontSize) return
+    const generation = snapshot.generation
+
+    const isCurrentSnapshot = () => {
+      const state = useEditorStore.getState()
+      if (fontZoomGenerationRef.current !== generation
+        || state.viewMode !== snapshot.viewMode
+        || (state.activeTabId ?? null) !== snapshot.activeTabId) return false
+      if (snapshot.viewMode === 'dual-preview') {
+        const currentRightTabId = state.rightPaneUserSelected ? state.rightPaneTabId : state.activeTabId
+        if ((currentRightTabId ?? null) !== snapshot.rightTabId) return false
+      }
+      return true
+    }
+
+    const finishRestore = () => {
+      if (fontZoomGenerationRef.current !== generation) return
+      fontZoomRestoringRef.current = false
+      fontZoomAnchorRef.current = null
+      fontZoomRestoreFramesRef.current = []
+    }
+
+    const restoreAnchors = (persist: boolean) => {
+      if (!isCurrentSnapshot()) return false
+      fontZoomRestoringRef.current = true
+      cancelEditorFollower()
+      cancelPreviewFollower()
+
+      if (snapshot.editor && snapshot.activeTabId) {
+        const view = editorViewRef.current
+        if (view && snapshot.editor.line <= view.state.doc.lines) {
+          const pos = view.state.doc.line(snapshot.editor.line).from
+          const block = view.lineBlockAt(pos)
+          view.scrollDOM.scrollTop = Math.max(
+            0,
+            block.top + Math.min(snapshot.editor.offset, Math.max(0, block.height - 1)) - SCROLL_SYNC_TOP_OFFSET,
+          )
+          if (persist) saveEditorPositionForTab(snapshot.activeTabId, view)
+        }
+      }
+
+      const restorePreview = (
+        anchor: FontZoomLineAnchor | undefined,
+        tabId: string | null,
+        container: HTMLElement | null,
+        preview: MarkdownPreviewHandle | null,
+        pane: 'left' | 'right',
+      ) => {
+        if (!anchor || !tabId || !container || !preview) return
+        const lineTop = preview.getTopForLine(anchor.line)
+        if (typeof lineTop !== 'number') return
+        container.scrollTop = Math.max(0, lineTop + anchor.offset - SCROLL_SYNC_TOP_OFFSET)
+        if (persist) savePreviewReadingPosition(tabId, container, preview, pane)
+      }
+
+      restorePreview(
+        snapshot.leftPreview,
+        snapshot.activeTabId,
+        leftPreviewRef.current,
+        leftMarkdownPreviewRef.current,
+        'left',
+      )
+      restorePreview(
+        snapshot.rightPreview,
+        snapshot.rightTabId,
+        rightPreviewRef.current,
+        rightMarkdownPreviewRef.current,
+        'right',
+      )
+      if (snapshot.diff) {
+        diffViewRef.current?.restoreTopRowAnchor(snapshot.diff, SCROLL_SYNC_TOP_OFFSET)
+      }
+      if (persist) scheduleFlush()
+      return true
+    }
+
+    const firstFrame = window.requestAnimationFrame(() => {
+      if (!restoreAnchors(false)) {
+        finishRestore()
+        return
+      }
+      const secondFrame = window.requestAnimationFrame(() => {
+        restoreAnchors(true)
+        finishRestore()
+      })
+      fontZoomRestoreFramesRef.current = [secondFrame]
+    })
+    fontZoomRestoreFramesRef.current = [firstFrame]
+
+    return () => {
+      for (const frameId of fontZoomRestoreFramesRef.current) {
+        window.cancelAnimationFrame(frameId)
+      }
+      fontZoomRestoreFramesRef.current = []
+      if (fontZoomGenerationRef.current === generation) {
+        fontZoomRestoringRef.current = false
+      }
+    }
+  }, [
+    cancelEditorFollower,
+    cancelPreviewFollower,
+    editorFontSize,
+    saveEditorPositionForTab,
+    savePreviewReadingPosition,
+    scheduleFlush,
+  ])
+
   const cancelEditorHeadingJump = useCallback(() => {
     const cancel = editorHeadingJumpCancelRef.current
     editorHeadingJumpCancelRef.current = null
@@ -640,6 +807,13 @@ export function EditorArea() {
 
   useEffect(() => () => {
     scrollSyncSessionRef.current.dispose()
+    fontZoomGenerationRef.current += 1
+    for (const frameId of fontZoomRestoreFramesRef.current) {
+      window.cancelAnimationFrame(frameId)
+    }
+    fontZoomRestoreFramesRef.current = []
+    fontZoomAnchorRef.current = null
+    fontZoomRestoringRef.current = false
     cancelEditorFollower()
     cancelPreviewFollower()
     cancelEditorHeadingJump()
@@ -854,6 +1028,7 @@ export function EditorArea() {
     previewFollowerRef.current.generation = generation
 
     const handleEditorScroll = () => {
+      if (fontZoomRestoringRef.current) return
       if (scrollSyncSessionRef.current.source === 'preview') return
       if (editorScrollFrameRef.current !== null) return
       editorScrollFrameRef.current = window.requestAnimationFrame(() => {
@@ -866,6 +1041,7 @@ export function EditorArea() {
     }
 
     const handlePreviewScroll = () => {
+      if (fontZoomRestoringRef.current) return
       if (isRestoringScrollRef.current) return
       // 反向同步只接受用户主动滚动预览（滚轮 / 按住拖拽滚动条 / 触控）产生的
       // scroll 事件；渲染补偿（内容更新锚点补偿、scrollTop 夹取、预览位置恢复、
@@ -1250,8 +1426,67 @@ export function EditorArea() {
     }
   }, [setRightPaneTabId, viewMode, setViewMode])
 
-  const getSearchProps = () => {
-    if (viewMode === 'edit' || viewMode === 'edit-preview') return { editorViewRef }
+  const normalizeSearchQuery = (text: string) => text.trim().replace(/\s*\r?\n\s*/g, ' ')
+
+  const createSearchRequest = useCallback((includeSelection: boolean): SearchRequest => {
+    const requestId = ++searchRequestIdRef.current
+    const defaultTarget: SearchRequest['target'] = viewMode === 'edit' || viewMode === 'edit-preview' ? 'editor' : 'preview'
+    if (!includeSelection) return { requestId, target: defaultTarget, initialQuery: '' }
+
+    const getEditorSelection = (): SearchRequest | null => {
+      const view = editorViewRef.current
+      if (!view) return null
+      const selection = view.state.selection.main
+      if (selection.from === selection.to) return null
+      const initialQuery = normalizeSearchQuery(view.state.sliceDoc(selection.from, selection.to))
+      return initialQuery ? { requestId, target: 'editor', initialQuery, anchor: { offset: selection.from } } : null
+    }
+
+    const previewRefs = []
+    if (leftPreviewVisible) previewRefs.push(leftMarkdownPreviewRef)
+    if (viewMode === 'dual-preview') previewRefs.push(rightMarkdownPreviewRef)
+    if (defaultTarget === 'preview' || viewMode === 'edit-preview') {
+      for (let sourceIndex = 0; sourceIndex < previewRefs.length; sourceIndex += 1) {
+        const selection = previewRefs[sourceIndex].current?.getSelection() ?? null
+        if (!selection) continue
+        const initialQuery = normalizeSearchQuery(selection.text)
+        if (initialQuery) {
+          return { requestId, target: 'preview', initialQuery, anchor: { offset: selection.from, sourceIndex } }
+        }
+      }
+    }
+    if (defaultTarget === 'editor') {
+      return getEditorSelection() ?? { requestId, target: defaultTarget, initialQuery: '' }
+    }
+    return { requestId, target: defaultTarget, initialQuery: '' }
+  }, [editorViewRef, leftPreviewVisible, leftMarkdownPreviewRef, rightMarkdownPreviewRef, viewMode])
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && !e.altKey) {
+        e.preventDefault()
+        setSearchRequest(createSearchRequest(true))
+      }
+    }
+    const openSearch = () => setSearchRequest((current) => current ?? createSearchRequest(false))
+    window.addEventListener('keydown', handler, true)
+    window.addEventListener(OPEN_EDITOR_SEARCH_EVENT, openSearch)
+    return () => {
+      window.removeEventListener('keydown', handler, true)
+      window.removeEventListener(OPEN_EDITOR_SEARCH_EVENT, openSearch)
+    }
+  }, [createSearchRequest])
+
+  const getSearchProps = (request: SearchRequest | null) => {
+    const canUseEditor = viewMode === 'edit' || viewMode === 'edit-preview'
+    const canUsePreview = leftPreviewVisible
+    const defaultTarget: SearchRequest['target'] = canUseEditor ? 'editor' : 'preview'
+    const target = request?.target === 'editor' && canUseEditor
+      ? 'editor'
+      : request?.target === 'preview' && canUsePreview
+        ? 'preview'
+        : defaultTarget
+    if (target === 'editor') return { editorViewRef, searchRequest: request ?? undefined }
     const previewSources = []
     if (leftPreviewVisible && leftPreviewRef.current) {
       previewSources.push({
@@ -1267,7 +1502,7 @@ export function EditorArea() {
         previewRef: rightMarkdownPreviewRef,
       })
     }
-    return { previewSources }
+    return { previewSources, searchRequest: request ?? undefined }
   }
 
   const handlePreviewFirstVisible = useCallback((documentId: string | null) => {
@@ -1362,6 +1597,7 @@ export function EditorArea() {
               <div className={viewMode === 'diff-preview' ? 'flex min-w-0 flex-1' : 'hidden'}>
                 <Suspense fallback={<PreviewSuspenseFallback />}>
                   <LazyMarkdownDiffView
+                    ref={diffViewRef}
                     original={activeTab?.originalContent || ''}
                     current={activeTab?.content || ''}
                     fontSize={editorFontSize}
@@ -1442,6 +1678,8 @@ export function EditorArea() {
                     onHeadingClick={handleLeftPreviewHeadingClick}
                     onTaskToggle={activeTab ? handleActiveTaskToggle : undefined}
                     onDraftStateChange={handleLeftDraftStateChange}
+                    initialScrollTop={leftInitialPreviewPosition?.previewScrollTop}
+                    initialTopLine={leftInitialPreviewPosition?.topLine}
                     isVisible={leftPreviewVisible && previewContentReady}
                     onFirstVisible={() => handlePreviewFirstVisible(activeTab?.id ?? null)}
                     onRenderComplete={handlePreviewRenderComplete}
@@ -1497,6 +1735,8 @@ export function EditorArea() {
                     onBlockCommit={handlePreviewBlockCommit}
                     onTaskToggle={handleRightTaskToggle}
                     onDraftStateChange={handleRightDraftStateChange}
+                    initialScrollTop={rightInitialPreviewPosition?.previewScrollTop}
+                    initialTopLine={rightInitialPreviewPosition?.topLine}
                     isVisible={viewMode === 'dual-preview'}
                     resource="right-preview"
                     readingMarks={rightReadingMarks}
@@ -1537,7 +1777,7 @@ export function EditorArea() {
         )}
 
         {searchOpen && tabs.length > 0 && (
-          <SearchOverlay onClose={() => setSearchOpen(false)} {...getSearchProps()} />
+          <SearchOverlay key={`${searchRequest?.requestId ?? 0}:${searchRequest?.target ?? ''}`} onClose={() => setSearchRequest(null)} {...getSearchProps(searchRequest)} />
         )}
         {previewMenu && (
           <ContextMenu position={previewMenu} onClose={closePreviewMenu} minWidth={176} maxWidth={176}>
@@ -1563,6 +1803,31 @@ export function EditorArea() {
       </div>
     </div>
   )
+}
+
+function getEditorFontZoomAnchor(view: EditorView): FontZoomLineAnchor | undefined {
+  const anchorTop = view.scrollDOM.scrollTop + SCROLL_SYNC_TOP_OFFSET
+  const block = view.lineBlockAtHeight(anchorTop)
+  if (!block) return undefined
+  return {
+    line: view.state.doc.lineAt(block.from).number,
+    offset: anchorTop - block.top,
+  }
+}
+
+function getPreviewFontZoomAnchor(
+  container: HTMLElement | null,
+  preview: MarkdownPreviewHandle | null,
+): FontZoomLineAnchor | undefined {
+  if (!container || !preview) return undefined
+  const anchorTop = container.scrollTop + SCROLL_SYNC_TOP_OFFSET
+  const line = preview.getLineForTop(anchorTop)
+  if (typeof line !== 'number') return undefined
+  const lineTop = preview.getTopForLine(line)
+  return {
+    line,
+    offset: typeof lineTop === 'number' ? anchorTop - lineTop : 0,
+  }
 }
 
 function getEditorTopLine(view: EditorView): number | undefined {

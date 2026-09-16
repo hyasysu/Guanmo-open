@@ -1,5 +1,5 @@
 import type { AgentConfig, AgentProgressStage, AgentStep, AgentResult, AgentRunRequest, RoutingDecision } from './types'
-import type { ChatMessage, ChatMessageSource } from '@/services/ai/types'
+import type { ChatMessage, ChatMessageSource, ReadingArtifactMessageReference } from '@/services/ai/types'
 import { getAiClient, isAiReady } from '@/services/ai/aiClient'
 import { getAllTools, getTool, getToolDescriptions, getToolsForLLM } from './toolRegistry'
 import { registerBuiltinTools } from './tools'
@@ -40,6 +40,7 @@ import {
   WEB_COMPARISON_ANSWER_PROMPT,
 } from './answerInstructions'
 import { dropOldestCompleteTurns, isModelContextOverflowError } from '@/services/ai/contextBudget'
+import { extractReadingArtifactReferences, mergeReadingArtifactReferences } from './readingArtifactReferences'
 
 let toolsRegistered = false
 
@@ -199,10 +200,69 @@ function truncateKnowledgeResult(text: string, maxLen: number): string {
   }
 }
 
+function truncateWebSearchResult(text: string, maxLen: number): string {
+  try {
+    const parsed = JSON.parse(text)
+    if (!isPlainObject(parsed) || !Array.isArray(parsed.results)) return truncate(text, maxLen)
+
+    const totalResultCount = parsed.results.length
+    const serialize = (results: unknown[]) => JSON.stringify({
+      ...parsed,
+      status: results.length > 0 ? parsed.status : 'truncated',
+      resultCount: results.length,
+      totalResultCount,
+      omittedResultCount: totalResultCount - results.length,
+      results,
+    }, null, 2)
+    const fitsAfterReferenceAnnotation = (results: unknown[]) => serialize(
+      results.map((result) => isPlainObject(result)
+        ? { ...result, referenceId: '[S999999999]' }
+        : result),
+    ).length <= maxLen
+
+    if (fitsAfterReferenceAnnotation(parsed.results)) return text
+
+    const included: unknown[] = []
+    for (const result of parsed.results) {
+      if (fitsAfterReferenceAnnotation([...included, result])) {
+        included.push(result)
+        continue
+      }
+
+      if (!isPlainObject(result) || typeof result.snippet !== 'string') break
+      const { snippet, ...sourceMetadata } = result
+      if (!fitsAfterReferenceAnnotation([...included, sourceMetadata])) break
+
+      let low = 0
+      let high = snippet.length
+      let compactResult: Record<string, unknown> = sourceMetadata
+      while (low <= high) {
+        const length = Math.floor((low + high) / 2)
+        const candidate = {
+          ...sourceMetadata,
+          snippet: length < snippet.length ? `${snippet.slice(0, length)}…` : snippet,
+        }
+        if (fitsAfterReferenceAnnotation([...included, candidate])) {
+          compactResult = candidate
+          low = length + 1
+        } else {
+          high = length - 1
+        }
+      }
+      included.push(compactResult)
+      break
+    }
+
+    return serialize(included)
+  } catch {
+    return truncate(text, maxLen)
+  }
+}
+
 function truncateToolResultForModel(toolName: string, text: string, maxLen: number): string {
-  return toolName === 'search_knowledge'
-    ? truncateKnowledgeResult(text, maxLen)
-    : truncate(text, maxLen)
+  if (toolName === 'search_knowledge') return truncateKnowledgeResult(text, maxLen)
+  if (toolName === 'web_search') return truncateWebSearchResult(text, maxLen)
+  return truncate(text, maxLen)
 }
 
 function resolveToolResultMaxChars(toolName: string): number {
@@ -863,6 +923,7 @@ async function runAgentInternal({
   let toolCalls = 0
   let editToolCalls = 0
   let sourceRegistry = createSourceReferenceRegistry()
+  let artifactReferences: ReadingArtifactMessageReference[] = []
   const calledToolNames: string[] = []
   const selectionContextReadLevels = new Map<string, 1 | 2>()
   const readResultCache = new Map<string, Promise<ToolExecutionResult>>()
@@ -870,7 +931,12 @@ async function runAgentInternal({
   const sourceMetadata = () => ({
     sources: sourceRegistry.entries.map((entry) => entry.source),
     sourceRegistry,
+    ...(artifactReferences.length ? { artifactReferences } : {}),
   })
+  const rememberArtifactReferences = (name: string, result: string) => {
+    const next = extractReadingArtifactReferences(name, result)
+    if (next.length) artifactReferences = mergeReadingArtifactReferences(artifactReferences, next)
+  }
   const prepareVisibleToolResult = (name: string, result: string): string => {
     const prepared = prepareAgentToolResultForModel(sourceRegistry, name, result)
     sourceRegistry = prepared.registry
@@ -1022,6 +1088,7 @@ async function runAgentInternal({
     )
 
     for (const { name, result, rawResult, executed } of repairResults) {
+      rememberArtifactReferences(name, rawResult || result)
       if (executed !== false) {
         calledToolNames.push(name)
         toolCalls++
@@ -1262,6 +1329,7 @@ async function runAgentInternal({
 
     // 添加工具结果到消息
     for (const { name, result, rawResult, executed, reused } of toolResults) {
+      rememberArtifactReferences(name, rawResult || result)
       pushStep({
         type: 'observation',
         content: result,

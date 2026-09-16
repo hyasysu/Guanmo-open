@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import { EditorView } from '@codemirror/view'
 import { useEditorStore, type ViewMode } from '@/stores/editorStore'
 import {
@@ -66,12 +66,21 @@ export function useReadingPositionBridge({
   const editorTocFrameRef = useRef<number | null>(null)
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const previousActiveTabIdRef = useRef<string | null>(activeTabId ?? null)
+  const previousViewModeRef = useRef<ViewMode>(viewMode)
+  const rightPaneUserSelected = useEditorStore((state) => state.rightPaneUserSelected)
   const getStoredPreviewTop = useCallback((tabId: string | null | undefined, pane: 'left' | 'right' = 'left') => {
     if (!tabId || !readingPositionsRef.current) return 0
     const position = useEditorStore.getState().viewMode === 'dual-preview'
       ? readingPositionsRef.current.getForPane(tabId, pane)
       : readingPositionsRef.current.get(tabId)
     return position?.previewScrollTop ?? 0
+  }, [])
+
+  const getStoredPreviewPosition = useCallback((tabId: string | null | undefined, pane: 'left' | 'right' = 'left') => {
+    if (!tabId || !readingPositionsRef.current) return undefined
+    return useEditorStore.getState().viewMode === 'dual-preview'
+      ? readingPositionsRef.current.getForPane(tabId, pane)
+      : readingPositionsRef.current.get(tabId)
   }, [])
 
   const getStoredEditorTop = useCallback((tabId: string | null | undefined) => {
@@ -154,6 +163,19 @@ export function useReadingPositionBridge({
     setPreviewRestoreTick((tick) => tick + 1)
   }, [clearPreviewSwitching, setPreviewRestoreTick])
 
+  useLayoutEffect(() => {
+    const previousViewMode = previousViewModeRef.current
+    previousViewModeRef.current = viewMode
+    if (viewMode !== 'dual-preview' || previousViewMode === 'dual-preview' || !activeTabId || !readingPositionsRef.current) return
+
+    readingPositionsRef.current.seedPaneFromSharedPosition(activeTabId, 'left')
+    if (!rightPaneUserSelected) {
+      readingPositionsRef.current.seedPaneFromSharedPosition(activeTabId, 'right')
+    }
+    const positions = collectPositions(activeTabId)
+    if (Object.keys(positions).length > 0) flushReadingPositions(positions)
+  }, [activeTabId, collectPositions, flushReadingPositions, rightPaneUserSelected, viewMode])
+
   const restoreEditorReadingPosition = useCallback((tabId: string) => {
     const view = editorViewRef.current
     const position = readingPositionsRef.current?.get(tabId)
@@ -165,7 +187,11 @@ export function useReadingPositionBridge({
     editorRestoreFrameRef.current = window.requestAnimationFrame(() => {
       editorRestoreFrameRef.current = null
       const currentMode = useEditorStore.getState().viewMode
-      if (editorViewRef.current !== view || (currentMode !== 'edit' && currentMode !== 'edit-preview')) return
+      if (
+        editorViewRef.current !== view
+        || useEditorStore.getState().activeTabId !== tabId
+        || (currentMode !== 'edit' && currentMode !== 'edit-preview')
+      ) return
       if (typeof position.editorScrollTop === 'number') {
         view.scrollDOM.scrollTop = position.editorScrollTop
       } else if (typeof position.topLine === 'number' && position.topLine <= view.state.doc.lines) {
@@ -286,6 +312,7 @@ export function useReadingPositionBridge({
     readingPositionsRef: readingPositionsRef as MutableRefObject<ReadingPositionSession>,
     isRestoringScrollRef,
     getStoredPreviewTop,
+    getStoredPreviewPosition,
     getStoredEditorTop,
     saveEditorPositionForTab,
     savePreviewReadingPosition,

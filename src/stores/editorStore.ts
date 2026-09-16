@@ -8,6 +8,7 @@ import {
   applyBootSnapshot,
   createBootSnapshot,
   flushBootSnapshotWrite,
+  mergeBootSnapshotReadingPosition,
   readBootSnapshot,
   scheduleBootSnapshotWrite,
 } from '@/services/bootSnapshot'
@@ -70,6 +71,7 @@ interface EditorState {
 
   openTab: (tab: Tab) => void
   addTab: (filePath?: string, title?: string, content?: string) => void
+  createNewDocument: () => void
   closeTab: (id: string) => void
   setActiveTab: (id: string) => void
   clearPreviewSwitching: (tabId?: string) => void
@@ -311,6 +313,11 @@ export const useEditorStore = create<EditorState>()(
         if (filePath && title) {
           get().addRecentFile(filePath, title)
         }
+      },
+
+      createNewDocument: () => {
+        get().setViewMode('edit')
+        get().addTab(undefined, '未命名.md')
       },
 
       closeTab: (id) => {
@@ -648,11 +655,12 @@ export const useEditorStore = create<EditorState>()(
           rightPaneUserSelected,
           viewMode: snapshotMatchesActiveTab ? bootSnapshot!.viewMode : (saved.viewMode ?? current.viewMode),
           viewModeUsage: saved.viewModeUsage ?? current.viewModeUsage,
-          readingPositions: snapshotMatchesActiveTab && bootSnapshot?.readingPosition && activeTabId
-            ? {
-                ...(saved.readingPositions ?? current.readingPositions),
-                [activeTabId]: bootSnapshot.readingPosition,
-              }
+          readingPositions: snapshotMatchesActiveTab && bootSnapshot && activeTabId
+            ? mergeBootSnapshotReadingPosition(
+                saved.readingPositions ?? current.readingPositions,
+                activeTabId,
+                bootSnapshot,
+              )
             : (saved.readingPositions ?? current.readingPositions),
           recentFiles: dedupeRecentFiles(saved.recentFiles ?? current.recentFiles),
           pendingReveal: null,

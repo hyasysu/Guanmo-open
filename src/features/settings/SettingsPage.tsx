@@ -4,7 +4,7 @@ import appIcon from '@/assets/icon-settings.png'
 
 import { isTauri } from '@/hooks/useTauri'
 import { SegmentedTabs } from '@/components/common/SegmentedTabs'
-import { useSettingsStore } from '@/stores/settingsStore'
+import { AI_ASSISTANT_FONT_SIZES, useSettingsStore } from '@/stores/settingsStore'
 import type { WebSearchConfig } from '@/services/webSearch'
 import {
   CHAT_PROTOCOL_CAPABILITIES,
@@ -65,7 +65,7 @@ import { AiShortcutSettings } from '@/features/settings/AiShortcutSettings'
 import { UsageActivity } from '@/features/settings/UsageActivity'
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/services/requestTimeout'
 import { AdvancedTimeoutSettings } from '@/features/settings/AdvancedTimeoutSettings'
-import { ThemePicker } from '@/features/settings/ThemePicker'
+import { ThemeManager } from '@/features/settings/ThemeManager'
 import { requestProductTour } from '@/features/productTour/productTourEvents'
 import { AssistantVisual } from '@/components/ai/AssistantVisual'
 import type { AssistantState } from '@/services/assistantState'
@@ -1609,7 +1609,7 @@ function GeneralSettings() {
       modePerformancePolicy: 'balanced',
       defaultOpenMode: 'preview',
     })
-    updateAppearanceSettings({ customCursorEnabled: true, aiAvatarStyle: 'sprite', themeId: 'warm' })
+    updateAppearanceSettings({ customCursorEnabled: true, aiAvatarStyle: 'sprite', aiAssistantFontSize: 14, fullscreenTransitionEnabled: true, themeId: 'warm' })
     updateWebSearchConfig({ provider: 'duckduckgo', apiKey: '', maxResults: 5, customUrl: '', timeout: DEFAULT_REQUEST_TIMEOUT_MS })
     updateUsageTrackingSettings({ enabled: true })
     resetAiShortcutActions()
@@ -1755,7 +1755,7 @@ function GeneralSettings() {
           <span className="text-body text-gm-text">主题</span>
           <p className="mt-0.5 text-caption text-gm-text-tertiary">选择后立即应用到编辑器、预览和应用界面</p>
         </div>
-        <ThemePicker value={appearance.themeId} onChange={(themeId) => updateAppearanceSettings({ themeId })} />
+        <ThemeManager />
       </div>
       <SettingField label="定制光标" description="使用 animal-island-ui 的手作风光标">
         <Switch checked={appearance.customCursorEnabled} onChange={(v) => updateAppearanceSettings({ customCursorEnabled: v })} />
@@ -1764,6 +1764,29 @@ function GeneralSettings() {
         <Button type="default" size="small" onClick={() => setSpritePreviewOpen(true)}>
           预览小球样式
         </Button>
+      </SettingField>
+      <SettingField label="AI 助手内容字号" description="调整对话、阅读成果、阅读提醒和输入框文字大小（12 / 14 / 16 / 18px）">
+        <SegmentedTabs
+          ariaLabel="AI 助手内容字号"
+          className="w-[220px]"
+          items={[
+            { value: '12', label: '小' },
+            { value: '14', label: '默认' },
+            { value: '16', label: '大' },
+            { value: '18', label: '特大' },
+          ]}
+          value={String(appearance.aiAssistantFontSize)}
+          onChange={(value) => {
+            const size = Number(value)
+            if (AI_ASSISTANT_FONT_SIZES.includes(size as typeof AI_ASSISTANT_FONT_SIZES[number])) {
+              updateAppearanceSettings({ aiAssistantFontSize: size as typeof AI_ASSISTANT_FONT_SIZES[number] })
+            }
+          }}
+        />
+      </SettingField>
+      <SectionTitle>动效</SectionTitle>
+      <SettingField label="全屏过渡动画" description="用轻微失焦遮盖全屏尺寸切换；系统启用减少动态效果时会自动跳过">
+        <Switch checked={appearance.fullscreenTransitionEnabled} onChange={(v) => updateAppearanceSettings({ fullscreenTransitionEnabled: v })} />
       </SettingField>
       <Sep />
       <Button type="default" block onClick={handleRestoreDefaults}>恢复默认设置</Button>

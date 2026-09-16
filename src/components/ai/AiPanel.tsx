@@ -1,4 +1,4 @@
-import { memo, useState, useRef, useEffect, useCallback, useMemo, type PointerEventHandler } from 'react'
+import { memo, useState, useRef, useEffect, useCallback, useMemo, type CSSProperties, type PointerEventHandler } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -22,6 +22,7 @@ import type {
   ChatMessageSource,
   LocalChatMessageSource,
   ActionProposal,
+  ReadingArtifactMessageReference,
 } from '@/services/ai/types'
 import { resolveStoredSourceReferences, type SourceReferenceId } from '@/services/ai/sourceReferences'
 import { AI_SHORTCUT_SUBMIT_EVENT } from '@/services/aiContext'
@@ -31,6 +32,7 @@ import {
   OPEN_READING_ARTIFACTS_EVENT,
   TOGGLE_AI_CHAT_EVENT,
   TOGGLE_READING_ARTIFACTS_EVENT,
+  requestOpenReadingArtifact,
 } from '@/services/aiPanelNavigation'
 import { applyPendingEditCommand } from '@/services/pendingEditCommand'
 import { saveAssistantMessageAsMarkdown } from '@/services/assistantMessageExport'
@@ -91,6 +93,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const { messages, streaming, error, timeline, sendMessage, cancelStream } = useAiChat()
   const databaseEnabled = getRuntimeCapabilities().database
   const assistantVisualId = useSettingsStore((s) => s.appearance.assistantVisualId)
+  const assistantFontSize = useSettingsStore((s) => s.appearance.aiAssistantFontSize)
   const setDraftInput = useChatStore((s) => s.setDraftInput)
   const clearMessages = useChatStore((s) => s.clearMessages)
   const hasMoreHistory = useChatStore((s) => s.hasMoreHistory)
@@ -112,6 +115,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const [reasoningMode, setReasoningMode] = useState<'off' | 'on'>('off')
   const [resetManualToggle, setResetManualToggle] = useState(0)
   const [panelView, setPanelView] = useState<'chat' | 'artifacts' | 'reminders'>('chat')
+  const [artifactFocusKey, setArtifactFocusKey] = useState<string | null>(null)
   const [reminders, setReminders] = useState<ReadingReminder[]>([])
   const [remindersLoading, setRemindersLoading] = useState(false)
   const saveArtifactFromMessage = useReadingArtifactsStore((s) => s.saveArtifactFromMessage)
@@ -154,14 +158,16 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   }, [databaseEnabled, panelView])
 
   useEffect(() => {
-    const applyNavigation = (navigation: { mode: 'open' | 'toggle'; view: 'chat' | 'artifacts' }) => {
+    const applyNavigation = (navigation: { mode: 'open' | 'toggle'; view: 'chat' | 'artifacts'; artifactKey?: string }) => {
       if (navigation.view === 'artifacts' && !databaseEnabled) return
       if (navigation.mode === 'open') {
         setPanelView(navigation.view)
+        setArtifactFocusKey(navigation.view === 'artifacts' ? navigation.artifactKey ?? null : null)
       } else if (panelView === navigation.view) {
         useAppStore.getState().closeAiPanel()
       } else {
         setPanelView(navigation.view)
+        setArtifactFocusKey(navigation.view === 'artifacts' ? navigation.artifactKey ?? null : null)
       }
     }
     const handleNavigation = (fallback: { mode: 'open' | 'toggle'; view: 'chat' | 'artifacts' }) => {
@@ -464,6 +470,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     streamScrollInterruptedRef.current = false
     shouldScrollAfterReturnRef.current = true
     setPanelView('chat')
+    setArtifactFocusKey(null)
   }, [])
 
   const handleSaveAssistantAsMarkdown = useCallback(async (
@@ -561,7 +568,13 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   }, [databaseEnabled])
 
   return (
-    <div className="gm-instant-color h-full min-h-0 flex flex-col relative">
+    <div
+      className="gm-instant-color h-full min-h-0 flex flex-col relative"
+      style={{
+        '--gm-ai-chat-font-size': `${assistantFontSize}px`,
+        '--gm-ai-chat-meta-font-size': `calc(${assistantFontSize}px - 2px)`,
+      } as CSSProperties}
+    >
       {/* Header */}
       <div
         className={`flex items-center border-b border-gm-border-subtle bg-gm-surface relative z-10 ${
@@ -584,7 +597,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
             type={panelView === 'artifacts' ? 'default' : 'text'}
             size="small"
             disabled={!databaseEnabled}
-            onClick={() => { if (databaseEnabled) setPanelView('artifacts') }}
+            onClick={() => { if (databaseEnabled) { setArtifactFocusKey(null); setPanelView('artifacts') } }}
             title={databaseEnabled ? '阅读成果' : '阅读成果仅桌面版可用'}
             icon={<BookOpen size={15} strokeWidth={1.7} aria-hidden="true" />}
           />
@@ -642,10 +655,10 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
 
       {panelView === 'chat' && <AgentTimeline timeline={timeline} />}
 
-      {/* Chat Content - 可以滚动到控制栏下面 */}
-      <div ref={chatContainerRef} className={`flex-1 min-h-0 overflow-y-auto overflow-x-hidden min-w-0 bg-gm-surface ${panelView === 'chat' ? 'pb-32' : 'pb-0'}`}>
+      {/* Chat Content - 聊天保持外层滚动，阅读成果由页面内部接管滚动 */}
+      <div ref={chatContainerRef} className={`flex-1 min-h-0 ${panelView === 'artifacts' ? 'overflow-hidden' : 'overflow-y-auto'} overflow-x-hidden min-w-0 bg-gm-surface ${panelView === 'chat' ? 'pb-32' : 'pb-0'}`}>
         {panelView === 'artifacts' ? (
-          <ReadingArtifactCenter onOpenAiSource={handleOpenArtifactSource} />
+          <ReadingArtifactCenter onOpenAiSource={handleOpenArtifactSource} focusKey={artifactFocusKey} onCloseFocus={() => setArtifactFocusKey(null)} />
         ) : panelView === 'reminders' ? (
           READING_REMINDER_FEATURE_AVAILABLE ? (
             <ReadingRemindersPanel
@@ -723,6 +736,8 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
                   sources={msg.sources}
                   referencedSourceIds={msg.referencedSourceIds}
                   onOpenSource={handleOpenRagSource}
+                  artifactReferences={msg.artifactReferences}
+                  onOpenArtifact={(key) => requestOpenReadingArtifact(key)}
                   onSaveAsMarkdown={
                     msg.role === 'assistant'
                       && Boolean((msg.displayContent ?? msg.content).trim())
@@ -838,13 +853,13 @@ function ReadingRemindersPanel({
   const [editingTime, setEditingTime] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
   if (loading) {
-    return <div className="p-6 text-center text-caption text-gm-text-secondary">正在加载提醒…</div>
+    return <div className="p-6 text-center text-caption text-gm-text-secondary" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}>正在加载提醒…</div>
   }
   if (reminders.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center p-6 text-center">
-        <p className="mb-1 font-bold text-gm-text-secondary">还没有阅读提醒</p>
-        <p className="text-caption text-gm-text-tertiary">可在对话中让 AI 提出一次性提醒，确认后才会注册。</p>
+        <p className="mb-1 font-bold text-gm-text-secondary" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}>还没有阅读提醒</p>
+        <p className="text-caption text-gm-text-tertiary" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}>可在对话中让 AI 提出一次性提醒，确认后才会注册。</p>
       </div>
     )
   }
@@ -860,8 +875,8 @@ function ReadingRemindersPanel({
           <div key={reminder.id} className="rounded-xl border border-gm-border bg-gm-surface-elevated p-3">
             <div className="flex items-start gap-2">
               <div className="min-w-0 flex-1">
-                <p className="truncate text-body font-bold text-gm-text">{reminder.title}</p>
-                <p className="mt-1 text-caption text-gm-text-secondary">
+                <p className="truncate text-body font-bold text-gm-text" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}>{reminder.title}</p>
+                <p className="mt-1 text-caption text-gm-text-secondary" style={{ fontSize: 'var(--gm-ai-chat-meta-font-size)' }}>
                   {new Intl.DateTimeFormat('zh-CN', {
                     timeZone: reminder.createdTimezone,
                     year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short',
@@ -869,7 +884,7 @@ function ReadingRemindersPanel({
                   }).format(reminder.dueAtUtc)}
                 </p>
                 {reminder.description && (
-                  <p className="mt-1 whitespace-pre-wrap text-caption text-gm-text-tertiary">{reminder.description}</p>
+                  <p className="mt-1 whitespace-pre-wrap text-caption text-gm-text-tertiary" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}>{reminder.description}</p>
                 )}
                 <p className="mt-2 text-micro text-gm-text-tertiary">
                   {REMINDER_STATUS_LABELS[reminder.status]}
@@ -1457,6 +1472,8 @@ export const ChatBubble = memo(function ChatBubble({
   visualId,
   sources,
   referencedSourceIds,
+  artifactReferences,
+  onOpenArtifact,
   onOpenSource,
   onSaveAsMarkdown,
   onSaveAsArtifact,
@@ -1468,6 +1485,8 @@ export const ChatBubble = memo(function ChatBubble({
   visualId?: string | null
   sources?: ChatMessageSource[]
   referencedSourceIds?: SourceReferenceId[]
+  artifactReferences?: ReadingArtifactMessageReference[]
+  onOpenArtifact?: (key: string) => void
   onOpenSource?: (source: LocalChatMessageSource) => void
   onSaveAsMarkdown?: () => void
   onSaveAsArtifact?: (type: ReadingArtifactType) => void
@@ -1575,7 +1594,10 @@ export const ChatBubble = memo(function ChatBubble({
               ? 'rounded-br-md'
               : 'bg-gm-surface-elevated text-gm-text border border-gm-border rounded-bl-md'
           } ${isAssistantStreaming ? 'gm-streaming-bubble' : ''}`}
-          style={isUser ? { backgroundColor: 'var(--gm-user-bubble-bg)', color: 'var(--gm-user-bubble-text)' } : undefined}
+          style={{
+            fontSize: 'var(--gm-ai-chat-font-size)',
+            ...(isUser ? { backgroundColor: 'var(--gm-user-bubble-bg)', color: 'var(--gm-user-bubble-text)' } : {}),
+          }}
         >
           {isEmpty ? (
             <div className="gm-typing-loader" aria-label="正在生成">
@@ -1597,6 +1619,9 @@ export const ChatBubble = memo(function ChatBubble({
               hasValidReferences={displayedSources.hasValidReferences}
               onOpenSource={onOpenSource}
             />
+          )}
+          {!isUser && artifactReferences?.length && onOpenArtifact && (
+            <ReadingArtifactMessageCards references={artifactReferences} onOpen={onOpenArtifact} />
           )}
         </div>
         {canSave && (
@@ -1650,6 +1675,34 @@ export const ChatBubble = memo(function ChatBubble({
     </div>
   )
 })
+
+function ReadingArtifactMessageCards({
+  references,
+  onOpen,
+}: {
+  references: ReadingArtifactMessageReference[]
+  onOpen: (key: string) => void
+}) {
+  return (
+    <div className="mt-3 border-t border-gm-border-subtle pt-2" aria-label="相关阅读成果">
+      <div className="mb-1 text-micro font-semibold text-gm-text-secondary">相关阅读成果</div>
+      <div className="space-y-1">
+        {references.slice(0, 10).map((reference) => (
+          <button
+            key={reference.key}
+            type="button"
+            className="block w-full rounded-lg border border-gm-border-subtle bg-gm-surface px-2 py-1.5 text-left transition-colors hover:bg-gm-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-primary"
+            onClick={() => onOpen(reference.key)}
+          >
+            <div className="truncate text-caption font-medium text-gm-text">{reference.title}</div>
+            {reference.preview && <div className="mt-0.5 line-clamp-2 text-micro text-gm-text-tertiary">{reference.preview}</div>}
+            <div className="mt-1 text-micro text-gm-primary">打开成果详情</div>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 const ARTIFACT_TYPE_LABELS: Record<ReadingArtifactType, string> = {
   summary: '摘要',
@@ -1785,13 +1838,13 @@ const ASSISTANT_MARKDOWN_COMPONENTS: Components = {
             </div>
           )}
           <pre className="p-3 m-0 max-w-full overflow-x-auto">
-            <code className="text-[12px] font-mono leading-5 whitespace-pre-wrap">{children}</code>
+            <code className="font-mono leading-5 whitespace-pre-wrap">{children}</code>
           </pre>
         </div>
       )
     }
     return (
-      <code className="px-1.5 py-0.5 rounded bg-gm-canvas text-gm-accent text-[12px] font-mono whitespace-pre-wrap">
+      <code className="px-1.5 py-0.5 rounded bg-gm-canvas text-gm-accent font-mono whitespace-pre-wrap">
         {children}
       </code>
     )
@@ -1812,7 +1865,7 @@ const ASSISTANT_MARKDOWN_COMPONENTS: Components = {
   hr: () => <hr className="my-3 border-gm-border" />,
   table: ({ children }) => (
     <div className="my-2 overflow-x-auto rounded-lg border border-gm-border">
-      <table className="w-full border-collapse text-caption">{children}</table>
+      <table className="w-full border-collapse">{children}</table>
     </div>
   ),
   th: ({ children }) => (

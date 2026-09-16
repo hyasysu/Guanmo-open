@@ -149,6 +149,7 @@ export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeCha
             onKeyDown={handleKeyDown}
             placeholder="输入消息... (Enter 发送)"
             className={`w-full bg-transparent resize-none text-body text-gm-text placeholder-gm-text-disabled focus:outline-none min-h-[20px] max-h-[120px] ${streaming ? 'opacity-60' : ''}`}
+            style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}
             rows={1}
             disabled={streaming}
           />
@@ -178,9 +179,11 @@ export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeCha
               size="small"
               onClick={onSend}
               disabled={!draftInput.trim() && contextTags.length === 0}
-              className="!min-w-0 !w-9 !h-8 !p-0"
+              aria-label="发送"
+              title="发送"
+              className="!min-w-0 !w-10 !h-7 !rounded-full !p-0 !shadow-none"
               icon={
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
                 </svg>
               }

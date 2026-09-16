@@ -76,6 +76,7 @@ export function findNearestMatchIndex(matches: { from: number; to: number }[], a
 interface SearchOverlayProps {
   onClose: () => void
   editorViewRef?: React.MutableRefObject<EditorView | null>
+  searchRequest?: SearchRequest
   previewSources?: Array<{
     content: string
     paneRef: React.RefObject<HTMLDivElement | null>
@@ -90,15 +91,25 @@ interface SearchOverlayProps {
   }>
 }
 
+export interface SearchRequest {
+  requestId: number
+  target: 'editor' | 'preview'
+  initialQuery: string
+  anchor?: {
+    offset: number
+    sourceIndex?: number
+  }
+}
+
 interface PreviewMatch {
   sourceIndex: number
   from: number
   to: number
 }
 
-export function SearchOverlay({ onClose, editorViewRef, previewSources = [] }: SearchOverlayProps) {
+export function SearchOverlay({ onClose, editorViewRef, searchRequest, previewSources = [] }: SearchOverlayProps) {
   const isEditor = !!editorViewRef
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(searchRequest?.initialQuery ?? '')
   const [replaceText, setReplaceText] = useState('')
   const [matchCount, setMatchCount] = useState(0)
   const [currentMatch, setCurrentMatch] = useState(0)
@@ -106,6 +117,7 @@ export function SearchOverlay({ onClose, editorViewRef, previewSources = [] }: S
   const matchesRef = useRef<{ from: number; to: number }[]>([])
   const previewMatchesRef = useRef<PreviewMatch[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
+  const appliedSearchRequestIdRef = useRef<number | null>(null)
 
   // Ensure searchField is in editor's extensions
   useEffect(() => {
@@ -147,7 +159,7 @@ export function SearchOverlay({ onClose, editorViewRef, previewSources = [] }: S
   }, [])
 
   // --- Editor search ---
-  const doEditorSearch = useCallback((searchQuery: string) => {
+  const doEditorSearch = useCallback((searchQuery: string, anchorOffset?: number) => {
     const view = editorViewRef?.current
     if (!view || !view.state.field(searchField, false)) return
     if (!searchQuery) {
@@ -160,7 +172,7 @@ export function SearchOverlay({ onClose, editorViewRef, previewSources = [] }: S
     const matches = findMatches(doc, searchQuery, false)
     matchesRef.current = matches
     // 锚点取当前光标：优先跳离光标最近的匹配，而不是文档首个匹配
-    const nearest = findNearestMatchIndex(matches, view.state.selection.main.head)
+    const nearest = findNearestMatchIndex(matches, anchorOffset ?? view.state.selection.main.head)
     currentMatchRef.current = nearest
     setCurrentMatch(matches.length > 0 ? nearest : 0)
     setMatchCount(matches.length)
@@ -225,7 +237,7 @@ export function SearchOverlay({ onClose, editorViewRef, previewSources = [] }: S
     previewSources[match.sourceIndex]?.previewRef.current?.scrollToOffset(match.from)
   }, [previewSources, syncPreviewSearchState])
 
-  const searchPreview = useCallback((searchQuery: string) => {
+  const searchPreview = useCallback((searchQuery: string, initialAnchor?: SearchRequest['anchor']) => {
     const matches = previewSources.flatMap((source, sourceIndex) => {
       // 优先使用预览实例的可见文本投影搜索（与预览高亮、复制同一语义），
       // 避免命中链接 URL / Markdown 标记等不可见源码；实例未提供时回退原文扫描。
@@ -234,15 +246,24 @@ export function SearchOverlay({ onClose, editorViewRef, previewSources = [] }: S
       return findMatches(source.content, searchQuery, false).map((match) => ({ ...match, sourceIndex }))
     })
     previewMatchesRef.current = matches
-    // 锚点取活跃 pane 的视口顶部：优先 document.activeElement 所在 pane，否则第一个 source
-    let anchorSourceIndex = 0
-    const activeEl = document.activeElement
-    if (activeEl) {
-      const focusedIndex = previewSources.findIndex((source) => source.paneRef.current?.contains(activeEl))
-      if (focusedIndex >= 0) anchorSourceIndex = focusedIndex
+    // 初次由选区触发时优先定位到选区所在 pane/offset；普通输入继续按活动 pane 视口定位。
+    let nearest = 0
+    if (initialAnchor) {
+      const sourceMatches = typeof initialAnchor.sourceIndex === 'number'
+        ? matches.filter((match) => match.sourceIndex === initialAnchor.sourceIndex)
+        : matches
+      const selected = sourceMatches[findNearestMatchIndex(sourceMatches, initialAnchor.offset)]
+      if (selected) nearest = matches.indexOf(selected)
+    } else {
+      let anchorSourceIndex = 0
+      const activeEl = document.activeElement
+      if (activeEl) {
+        const focusedIndex = previewSources.findIndex((source) => source.paneRef.current?.contains(activeEl))
+        if (focusedIndex >= 0) anchorSourceIndex = focusedIndex
+      }
+      const anchor = previewSources[anchorSourceIndex]?.previewRef.current?.getViewportOffset?.()
+      nearest = findNearestMatchIndex(matches, anchor)
     }
-    const anchor = previewSources[anchorSourceIndex]?.previewRef.current?.getViewportOffset?.()
-    const nearest = findNearestMatchIndex(matches, anchor)
     currentMatchRef.current = nearest
     setCurrentMatch(matches.length > 0 ? nearest : 0)
     setMatchCount(matches.length)
@@ -267,10 +288,10 @@ export function SearchOverlay({ onClose, editorViewRef, previewSources = [] }: S
   }, [query, revealPreviewMatch])
 
   // --- Combined ---
-  const doSearch = useCallback((q: string) => {
+  const doSearch = useCallback((q: string, initialAnchor?: SearchRequest['anchor']) => {
     setQuery(q)
-    if (isEditor) doEditorSearch(q)
-    else searchPreview(q)
+    if (isEditor) doEditorSearch(q, initialAnchor?.offset)
+    else searchPreview(q, initialAnchor)
   }, [isEditor, doEditorSearch, searchPreview])
 
   const handleNext = useCallback(() => {
@@ -318,8 +339,18 @@ export function SearchOverlay({ onClose, editorViewRef, previewSources = [] }: S
 
   useEffect(() => { inputRef.current?.focus() }, [])
 
+  useEffect(() => {
+    if (!searchRequest?.initialQuery || appliedSearchRequestIdRef.current === searchRequest.requestId) return
+    appliedSearchRequestIdRef.current = searchRequest.requestId
+    doSearch(searchRequest.initialQuery, searchRequest.anchor)
+  }, [doSearch, searchRequest])
+
   return (
-    <div data-editor-search-overlay className="absolute top-2 right-2 z-50 bg-gm-surface border border-gm-border rounded-xl shadow-lg p-3 animate-slideInUp min-w-[300px]">
+    <div
+      data-editor-search-overlay
+      data-search-target={isEditor ? 'editor' : 'preview'}
+      className="absolute top-2 right-2 z-50 bg-gm-surface border border-gm-border rounded-xl shadow-lg p-3 animate-slideInUp min-w-[300px]"
+    >
       <div className="flex flex-col gap-2">
         {/* Search row */}
         <div className="flex items-center gap-2">
