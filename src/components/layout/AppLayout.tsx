@@ -1,5 +1,5 @@
-import { lazy, Suspense, useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react'
-import { useAppStore } from '@/stores/appStore'
+import { lazy, Suspense, useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
+import { useAppStore, type FullscreenAiPosition, type FullscreenAiSize } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboard'
 import { useFileOperations } from '@/hooks/useFileOperations'
@@ -17,6 +17,8 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { resolveThemeDefinition } from '@/services/appearance/appearanceDom'
 import { useFullscreen } from '@/hooks/useFullscreen'
 import { OPEN_SETTINGS_SECTION_EVENT } from '@/services/settingsNavigation'
+import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
+import { getAiPanelView, requestOpenAiChat, requestOpenReadingArtifacts, requestOpenReadingReminders, type AiPanelView } from '@/services/aiPanelNavigation'
 import {
   OPEN_FEATURE_INTRO_EVENT,
   type FeatureIntroEventDetail,
@@ -31,11 +33,30 @@ import {
 import {
   PRODUCT_TOUR_DEMO_CONTENT,
   PRODUCT_TOUR_DEMO_TAB_ID,
+  getProductTourSteps,
+  type ProductTourTopic,
 } from '@/features/productTour/productTourContent'
 import { markStartupPoint } from '@/services/startupPerformance'
 import { getBootSnapshotDisplayContent, hasBootSnapshotContent, readBootSnapshot } from '@/services/bootSnapshot'
 
-const AiPanel = lazy(() => import('@/components/ai/AiPanel').then((module) => ({ default: module.AiPanel })))
+type AiPanelModule = typeof import('@/components/ai/AiPanel')
+let aiPanelModulePromise: Promise<AiPanelModule> | null = null
+
+const loadAiPanelModule = (): Promise<AiPanelModule> => {
+  if (!aiPanelModulePromise) {
+    aiPanelModulePromise = import('@/components/ai/AiPanel').catch((error) => {
+      aiPanelModulePromise = null
+      throw error
+    })
+  }
+  return aiPanelModulePromise
+}
+const AiPanel = lazy(() => loadAiPanelModule().then((module) => ({ default: module.AiPanel })))
+
+/** 仅下载并解析 AI 面板模块，不挂载面板或触发其数据加载。 */
+export function preloadAiPanel(): Promise<AiPanelModule> {
+  return loadAiPanelModule()
+}
 const EditorArea = lazy(() => import('../editor/EditorArea').then((module) => ({ default: module.EditorArea })))
 const SettingsPage = lazy(() => import('@settings-entry').then((module) => ({ default: module.SettingsPage })))
 const FeatureIntroModal = lazy(() => import('@/features/featureIntro/FeatureIntroModal').then((module) => ({ default: module.FeatureIntroModal })))
@@ -71,6 +92,26 @@ interface AppLayoutProps {
   databaseReady: boolean
 }
 
+function AiPanelFallback() {
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-gm-surface" aria-label="正在加载 AI 侧边栏" role="status">
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-gm-border px-4">
+        <div className="h-4 w-24 animate-pulse rounded bg-gm-surface-hover" />
+        <div className="h-7 w-7 animate-pulse rounded-md bg-gm-surface-hover" />
+      </div>
+      <div className="flex-1 space-y-3 overflow-hidden px-4 py-5">
+        <div className="h-3 w-2/5 animate-pulse rounded bg-gm-surface-hover" />
+        <div className="h-16 w-full animate-pulse rounded-lg bg-gm-surface-hover" />
+        <div className="ml-auto h-12 w-4/5 animate-pulse rounded-lg bg-gm-surface-hover" />
+        <div className="h-20 w-full animate-pulse rounded-lg bg-gm-surface-hover" />
+      </div>
+      <div className="h-12 shrink-0 border-t border-gm-border px-4 py-3">
+        <div className="h-6 w-full animate-pulse rounded-md bg-gm-surface-hover" />
+      </div>
+    </div>
+  )
+}
+
 export function AppLayout({ databaseReady }: AppLayoutProps) {
   const [editorSurfaceEnabled, setEditorSurfaceEnabled] = useState(false)
 
@@ -91,6 +132,10 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
   const aiPanelOpen = useAppStore((s) => s.aiPanelOpen)
   const sidebarWidth = useAppStore((s) => s.sidebarWidth)
   const aiPanelWidth = useAppStore((s) => s.aiPanelWidth)
+  const storedFullscreenAiPosition = useAppStore((s) => s.fullscreenAiPosition)
+  const storedFullscreenAiSize = useAppStore((s) => s.fullscreenAiSize)
+  const persistFullscreenAiPosition = useAppStore((s) => s.setFullscreenAiPosition)
+  const persistFullscreenAiSize = useAppStore((s) => s.setFullscreenAiSize)
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
   const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
   const setSidebarWidth = useAppStore((s) => s.setSidebarWidth)
@@ -110,7 +155,9 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
   const [featureIntroVersion, setFeatureIntroVersion] = useState<string | undefined>()
   const [fullscreenFileDrawerOpen, setFullscreenFileDrawerOpen] = useState(false)
   const [productTourOpen, setProductTourOpen] = useState(false)
+  const [productTourTopic, setProductTourTopic] = useState<ProductTourTopic | 'topics'>('overview')
   const [productTourStep, setProductTourStep] = useState(0)
+  const productTourSteps = useMemo(() => productTourTopic === 'topics' ? [] : getProductTourSteps(productTourTopic, getRuntimeCapabilities().isWeb), [productTourTopic])
   const productTourSnapshotRef = useRef<{
     activeTabId: string | null
     viewMode: ReturnType<typeof useEditorStore.getState>['viewMode']
@@ -118,27 +165,59 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     rightPaneTabId: string | null
     rightPaneUserSelected: boolean
     createdDemoTab: boolean
+    sidebarCollapsed: boolean
+    aiPanelOpen: boolean
+    aiPanelView: AiPanelView
+    settingsOpen: boolean
+    settingsSection: string | null
   } | null>(null)
-  const [fullscreenAiPosition, setFullscreenAiPosition] = useState(() => getDefaultFullscreenAiPosition())
+  const [fullscreenAiPosition, setFullscreenAiPosition] = useState<FullscreenAiPosition>(() => (
+    storedFullscreenAiPosition
+      ? clampFullscreenAiPosition(storedFullscreenAiPosition.x, storedFullscreenAiPosition.y)
+      : getDefaultFullscreenAiPosition()
+  ))
+  const [fullscreenAiSize, setFullscreenAiSize] = useState<FullscreenAiSize>(() => (
+    storedFullscreenAiSize
+      ? clampFullscreenAiSize(storedFullscreenAiSize.width, storedFullscreenAiSize.height)
+      : getFullscreenAiSize()
+  ))
+  const fullscreenAiPositionRef = useRef(fullscreenAiPosition)
+  const fullscreenAiSizeRef = useRef(fullscreenAiSize)
   const fullscreenAiDragRef = useRef<{
     pointerId: number
     startX: number
     startY: number
     originX: number
     originY: number
+    latestPosition: FullscreenAiPosition
     dragged: boolean
+  } | null>(null)
+  const fullscreenAiResizeRef = useRef<{
+    pointerId: number
+    startX: number
+    startY: number
+    originSize: FullscreenAiSize
+    latestSize: FullscreenAiSize
+    latestPosition: FullscreenAiPosition
   } | null>(null)
   const fullscreenAiPanelRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (isFullscreen) {
       useAppStore.getState().closeAiPanel()
-      setFullscreenAiPosition(getDefaultFullscreenAiPosition())
+      const size = clampFullscreenAiSize(fullscreenAiSizeRef.current.width, fullscreenAiSizeRef.current.height)
+      const position = clampFullscreenAiPosition(fullscreenAiPositionRef.current.x, fullscreenAiPositionRef.current.y, size)
+      fullscreenAiSizeRef.current = size
+      setFullscreenAiSize(size)
+      persistFullscreenAiSize(size)
+      fullscreenAiPositionRef.current = position
+      setFullscreenAiPosition(position)
+      persistFullscreenAiPosition(position)
       setFullscreenFileDrawerOpen(false)
     } else {
       setFullscreenFileDrawerOpen(false)
     }
-  }, [isFullscreen])
+  }, [isFullscreen, persistFullscreenAiPosition, persistFullscreenAiSize])
 
   // Sidebar resize
   const isSidebarResizing = useRef(false)
@@ -152,6 +231,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
 
   const finishProductTour = useCallback(() => {
     const snapshot = productTourSnapshotRef.current
+    setProductTourOpen(false)
     if (snapshot) {
       const editor = useEditorStore.getState()
       if (snapshot.createdDemoTab && editor.tabs.some((tab) => tab.id === PRODUCT_TOUR_DEMO_TAB_ID)) {
@@ -167,9 +247,19 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
           : null,
         previewSwitchingTabId: null,
       })
+      const app = useAppStore.getState()
+      if (app.sidebarCollapsed !== snapshot.sidebarCollapsed) app.toggleSidebar()
+      if (app.aiPanelOpen !== snapshot.aiPanelOpen) app.toggleAiPanel()
+      if (snapshot.aiPanelOpen) {
+        if (snapshot.aiPanelView === 'artifacts') requestOpenReadingArtifacts()
+        else if (snapshot.aiPanelView === 'reminders') requestOpenReadingReminders()
+        else requestOpenAiChat()
+      }
+      setSettingsSection(snapshot.settingsSection)
+      setSettingsOpen(snapshot.settingsOpen)
     }
     productTourSnapshotRef.current = null
-    setProductTourOpen(false)
+    setProductTourTopic('overview')
     setProductTourStep(0)
   }, [])
 
@@ -184,6 +274,11 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
       rightPaneTabId: editor.rightPaneTabId,
       rightPaneUserSelected: editor.rightPaneUserSelected,
       createdDemoTab,
+      sidebarCollapsed: useAppStore.getState().sidebarCollapsed,
+      aiPanelOpen: useAppStore.getState().aiPanelOpen,
+      aiPanelView: getAiPanelView(),
+      settingsOpen,
+      settingsSection,
     }
     if (createdDemoTab) {
       editor.openTab({
@@ -198,12 +293,30 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
       })
     }
     editor.setViewMode('preview')
-    useAppStore.getState().closeAiPanel()
-    if (!useAppStore.getState().sidebarCollapsed) useAppStore.getState().toggleSidebar()
-    setSettingsOpen(false)
+    setProductTourTopic('overview')
     setProductTourStep(0)
     setProductTourOpen(true)
-  }, [productTourOpen])
+  }, [productTourOpen, settingsOpen, settingsSection])
+
+  const tourSurface = productTourSteps[productTourStep]?.surface
+  useEffect(() => {
+    if (!productTourOpen || !tourSurface) return
+    const app = useAppStore.getState()
+    const settings = tourSurface === 'settings-ai' || tourSurface === 'settings-general'
+    setSettingsOpen(settings)
+    if (settings) {
+      setSettingsSection(tourSurface === 'settings-ai' ? 'ai' : 'general')
+      if (app.aiPanelOpen) app.closeAiPanel()
+      return
+    }
+    const sidebar = tourSurface === 'sidebar'
+    if (app.sidebarCollapsed === sidebar) app.toggleSidebar()
+    const ai = tourSurface === 'ai-chat' || tourSurface === 'artifacts'
+    if (ai && !app.aiPanelOpen) app.toggleAiPanel()
+    if (!ai && app.aiPanelOpen) app.closeAiPanel()
+    if (tourSurface === 'ai-chat') requestOpenAiChat()
+    if (tourSurface === 'artifacts') requestOpenReadingArtifacts()
+  }, [productTourOpen, tourSurface])
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -266,11 +379,18 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
   useEffect(() => {
     if (!isFullscreen) return
     const handleResize = () => {
-      setFullscreenAiPosition((position) => clampFullscreenAiPosition(position.x, position.y))
+      const size = clampFullscreenAiSize(fullscreenAiSizeRef.current.width, fullscreenAiSizeRef.current.height)
+      const position = clampFullscreenAiPosition(fullscreenAiPositionRef.current.x, fullscreenAiPositionRef.current.y, size)
+      fullscreenAiSizeRef.current = size
+      setFullscreenAiSize(size)
+      persistFullscreenAiSize(size)
+      fullscreenAiPositionRef.current = position
+      setFullscreenAiPosition(position)
+      persistFullscreenAiPosition(position)
     }
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
-  }, [isFullscreen])
+  }, [isFullscreen, persistFullscreenAiPosition, persistFullscreenAiSize])
 
   const handleFullscreenAiDragStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -279,12 +399,13 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
       pointerId: e.pointerId,
       startX: e.clientX,
       startY: e.clientY,
-      originX: fullscreenAiPosition.x,
-      originY: fullscreenAiPosition.y,
+      originX: fullscreenAiPositionRef.current.x,
+      originY: fullscreenAiPositionRef.current.y,
+      latestPosition: fullscreenAiPositionRef.current,
       dragged: false,
     }
     document.body.style.userSelect = 'none'
-  }, [fullscreenAiPosition])
+  }, [])
 
   const handleFullscreenAiDragMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const drag = fullscreenAiDragRef.current
@@ -292,7 +413,14 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     const dx = e.clientX - drag.startX
     const dy = e.clientY - drag.startY
     if (Math.abs(dx) + Math.abs(dy) > 3) drag.dragged = true
-    setFullscreenAiPosition(clampFullscreenAiPosition(drag.originX + dx, drag.originY + dy))
+    const position = clampFullscreenAiPosition(
+      drag.originX + dx,
+      drag.originY + dy,
+      fullscreenAiSizeRef.current,
+    )
+    drag.latestPosition = position
+    fullscreenAiPositionRef.current = position
+    setFullscreenAiPosition(position)
   }, [])
 
   const handleFullscreenAiDragEnd = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -300,11 +428,61 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     if (drag?.pointerId === e.pointerId) {
       fullscreenAiDragRef.current = null
       document.body.style.userSelect = ''
+      persistFullscreenAiPosition(drag.latestPosition)
       if (e.currentTarget.hasPointerCapture(e.pointerId)) {
         e.currentTarget.releasePointerCapture(e.pointerId)
       }
     }
+  }, [persistFullscreenAiPosition])
+
+  const handleFullscreenAiResizeStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    fullscreenAiResizeRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      originSize: fullscreenAiSizeRef.current,
+      latestSize: fullscreenAiSizeRef.current,
+      latestPosition: fullscreenAiPositionRef.current,
+    }
+    document.body.style.cursor = 'nwse-resize'
+    document.body.style.userSelect = 'none'
   }, [])
+
+  const handleFullscreenAiResizeMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const resize = fullscreenAiResizeRef.current
+    if (!resize || resize.pointerId !== e.pointerId) return
+    const size = clampFullscreenAiSize(
+      resize.originSize.width + e.clientX - resize.startX,
+      resize.originSize.height + e.clientY - resize.startY,
+    )
+    const position = clampFullscreenAiPosition(
+      fullscreenAiPositionRef.current.x,
+      fullscreenAiPositionRef.current.y,
+      size,
+    )
+    resize.latestSize = size
+    resize.latestPosition = position
+    fullscreenAiSizeRef.current = size
+    fullscreenAiPositionRef.current = position
+    setFullscreenAiSize(size)
+    setFullscreenAiPosition(position)
+  }, [])
+
+  const handleFullscreenAiResizeEnd = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const resize = fullscreenAiResizeRef.current
+    if (resize?.pointerId !== e.pointerId) return
+    fullscreenAiResizeRef.current = null
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    persistFullscreenAiSize(resize.latestSize)
+    persistFullscreenAiPosition(resize.latestPosition)
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
+  }, [persistFullscreenAiPosition, persistFullscreenAiSize])
 
   useEffect(() => {
     if (!isFullscreen || !aiPanelOpen) return
@@ -436,7 +614,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     },
     'CTRL+J': () => toggleAiPanel(),
     'CTRL+N': () => handleNewFile(),
-    'CTRL+O': () => void runAfterNormalLayout(() => handleOpenFile()),
+    'CTRL+O': () => void handleOpenFile(),
     'CTRL+S': () => handleSaveFile(),
     'CTRL+SHIFT+V': () => togglePreview(),
     'CTRL+SHIFT+D': () => toggleDiffPreview(),
@@ -485,6 +663,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
         {/* AI Panel */}
         {!isFullscreen && aiPanelOpen && (
           <div
+            data-product-tour="ai-panel"
             className="border-l border-gm-border flex-shrink-0 animate-slideInRight relative"
             style={{ width: aiPanelWidth, contain: 'layout' }}
           >
@@ -493,7 +672,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
               className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize z-10 hover:bg-gm-primary/30 transition-colors"
               onMouseDown={handleResizeStart}
             />
-            <Suspense fallback={null}><AiPanel /></Suspense>
+            <Suspense fallback={<AiPanelFallback />}><AiPanel /></Suspense>
           </div>
         )}
       </div>
@@ -503,6 +682,8 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
           fileDrawerOpen={fullscreenFileDrawerOpen}
           onToggleFileDrawer={toggleFullscreenFileDrawer}
           onCloseFileDrawer={closeFullscreenFileDrawer}
+          onNewFile={handleNewFile}
+          onOpenFile={handleOpenFile}
         />
       )}
 
@@ -521,20 +702,32 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
           style={{
             left: fullscreenAiPosition.x,
             top: fullscreenAiPosition.y,
-            width: getFullscreenAiSize().width,
-            height: getFullscreenAiSize().height,
+            width: fullscreenAiSize.width,
+            height: fullscreenAiSize.height,
             contain: 'layout',
           }}
         >
           <div className="min-h-0 min-w-0 flex-1">
-            <Suspense fallback={null}><AiPanel
+            <Suspense fallback={<AiPanelFallback />}><AiPanel
               fullscreenDragHandleProps={{
                 onPointerDown: handleFullscreenAiDragStart,
                 onPointerMove: handleFullscreenAiDragMove,
                 onPointerUp: handleFullscreenAiDragEnd,
                 onPointerCancel: handleFullscreenAiDragEnd,
-              }}
-            /></Suspense>
+            }}
+          /></Suspense>
+          </div>
+          <div
+            aria-label="调整 AI 助手窗口大小"
+            className="absolute bottom-0 right-0 z-30 flex h-5 w-5 cursor-grab items-center justify-center text-gm-text-secondary touch-none hover:text-gm-primary active:cursor-grabbing"
+            onPointerDown={handleFullscreenAiResizeStart}
+            onPointerMove={handleFullscreenAiResizeMove}
+            onPointerUp={handleFullscreenAiResizeEnd}
+            onPointerCancel={handleFullscreenAiResizeEnd}
+          >
+            <svg className="rotate-90" width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+              <path d="M5 5l10 10M10 5l5 5" />
+            </svg>
           </div>
         </div>
       )}
@@ -561,7 +754,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
         cursor={customCursorEnabled}
       >
         <div className={customCursorEnabled ? undefined : 'gm-system-cursor'} style={{ width: '100%', height: '560px', overflow: 'hidden', padding: '10px 14px', minHeight: 0 }}>
-          <Suspense fallback={null}><SettingsPage initialSection={settingsSection} /></Suspense>
+          <Suspense fallback={null}><SettingsPage initialSection={settingsSection} onSectionChange={setSettingsSection} /></Suspense>
         </div>
       </Modal>
 
@@ -580,8 +773,11 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
 
       {productTourOpen && <Suspense fallback={null}><ProductTourOverlay
         open={productTourOpen}
+        topic={productTourTopic}
+        steps={productTourSteps}
         stepIndex={productTourStep}
         onStepChange={setProductTourStep}
+        onTopicChange={(topic) => { setProductTourTopic(topic); setProductTourStep(0) }}
         onClose={finishProductTour}
       /></Suspense>}
 
@@ -596,12 +792,25 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
 }
 
 const FULLSCREEN_AI_MARGIN = 16
-const FULLSCREEN_AI_MAX_WIDTH = 404
+const FULLSCREEN_AI_MIN_WIDTH = 360
+const FULLSCREEN_AI_MIN_HEIGHT = 520
+const FULLSCREEN_AI_RESIZE_SPAN = 280
+const FULLSCREEN_AI_MAX_WIDTH = FULLSCREEN_AI_MIN_WIDTH + FULLSCREEN_AI_RESIZE_SPAN
+const FULLSCREEN_AI_MAX_HEIGHT = FULLSCREEN_AI_MIN_HEIGHT + FULLSCREEN_AI_RESIZE_SPAN
 
 function getFullscreenAiSize() {
-  const width = Math.min(FULLSCREEN_AI_MAX_WIDTH, Math.max(320, window.innerWidth - FULLSCREEN_AI_MARGIN * 2))
-  const height = Math.min(680, Math.max(360, window.innerHeight - FULLSCREEN_AI_MARGIN * 2))
-  return { width, height }
+  return clampFullscreenAiSize(404, 680)
+}
+
+function clampFullscreenAiSize(width: number, height: number): FullscreenAiSize {
+  const availableWidth = Math.max(0, window.innerWidth - FULLSCREEN_AI_MARGIN * 2)
+  const availableHeight = Math.max(0, window.innerHeight - FULLSCREEN_AI_MARGIN * 2)
+  const maxWidth = Math.min(FULLSCREEN_AI_MAX_WIDTH, availableWidth)
+  const maxHeight = Math.min(FULLSCREEN_AI_MAX_HEIGHT, availableHeight)
+  return {
+    width: Math.min(maxWidth, Math.max(Math.min(FULLSCREEN_AI_MIN_WIDTH, maxWidth), width)),
+    height: Math.min(maxHeight, Math.max(Math.min(FULLSCREEN_AI_MIN_HEIGHT, maxHeight), height)),
+  }
 }
 
 function getDefaultFullscreenAiPosition() {
@@ -609,8 +818,7 @@ function getDefaultFullscreenAiPosition() {
   return clampFullscreenAiPosition(window.innerWidth - size.width - FULLSCREEN_AI_MARGIN, 64)
 }
 
-function clampFullscreenAiPosition(x: number, y: number) {
-  const size = getFullscreenAiSize()
+function clampFullscreenAiPosition(x: number, y: number, size = getFullscreenAiSize()) {
   const maxX = Math.max(FULLSCREEN_AI_MARGIN, window.innerWidth - size.width - FULLSCREEN_AI_MARGIN)
   const maxY = Math.max(FULLSCREEN_AI_MARGIN, window.innerHeight - size.height - FULLSCREEN_AI_MARGIN)
   return {

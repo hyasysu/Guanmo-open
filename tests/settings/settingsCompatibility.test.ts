@@ -71,7 +71,7 @@ describe('设置兼容', () => {
       lineHeight: 1.65,
       fontFamily: "'JetBrains Mono', 'Cascadia Code', monospace",
       previewFontFamily: 'var(--gm-font-family)',
-      fullscreenContentPadding: 88,
+      fullscreenContentPaddingPercent: 7,
       inlinePreviewEdit: true,
       autoSendAiShortcut: true,
       defaultOpenMode: 'preview',
@@ -83,6 +83,11 @@ describe('设置兼容', () => {
       aiAssistantFontSize: 14,
       fullscreenTransitionEnabled: true,
     })
+  })
+
+  it('将旧版全屏像素边距迁移为百分比', async () => {
+    const store = await loadSettingsStore({ editor: { fullscreenContentPadding: 88 } })
+    expect(store.getState().editor.fullscreenContentPaddingPercent).toBe(7)
   })
 
   it('保留全屏过渡动画开关并对非法值回退开启', async () => {

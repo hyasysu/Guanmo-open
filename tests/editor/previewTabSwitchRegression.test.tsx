@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, renderHook, screen } from '@testing-library/react'
 import { EditorView } from '@codemirror/view'
 import { createRef } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -77,9 +77,12 @@ vi.mock('@/services/markdownBlocks', async (importOriginal) => {
 })
 
 import { EditorArea } from '@/components/editor/EditorArea'
+import { useReadingPositionBridge } from '@/components/editor/useReadingPositionBridge'
+import type { MarkdownPreviewHandle } from '@/components/editor/markdownPreviewTypes'
 import { MarkdownDiffView, type MarkdownDiffViewHandle } from '@/components/editor/MarkdownDiffView'
 import { useEditorStore, type Tab, type ViewMode } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { runtimeFileReadingPositions, ScrollSyncSession } from '@/services/editorSession'
 
 function anonymousTab(id: string, content: string): Tab {
   return {
@@ -124,6 +127,7 @@ function setupEditor(
 }
 
 beforeEach(() => {
+  runtimeFileReadingPositions.clear()
   vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'Date'] })
   vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
   scheduledCallbacks.raf.clear()
@@ -551,7 +555,63 @@ describe('preview selection bridge', () => {
 // after restore useLayoutEffect set it, causing leftPreviewMasked = true
 // ============================================================
 describe('preview visibility regression: restoredPreviewKeysRef race', () => {
+  it('restores the editor position after renaming, closing, and reopening a file', async () => {
+    const content = '# 文档 A\n\n' + '正文 A\n\n'.repeat(80)
+    const tabA = { ...anonymousTab('tab-a', content), filePath: 'C:/fixtures/old.md' }
+    const tabB = { ...anonymousTab('tab-b', '# 文档 B'), filePath: 'C:/fixtures/b.md' }
+    setupEditor([tabA, tabB], tabA.id, 'edit')
+    const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 500 })
+    try {
+      const { container } = render(<EditorArea />)
+      await settleLazyEditorModules()
+      act(() => vi.advanceTimersByTime(50))
+      const scroller = container.querySelector<HTMLElement>('.cm-scroller')!
+      act(() => {
+        scroller.scrollTop = 480
+        fireEvent.scroll(scroller)
+        useEditorStore.getState().renameFilePath('C:/fixtures/old.md', 'C:/fixtures/new.md', 'new.md')
+        useEditorStore.getState().closeTab(tabA.id)
+      })
+      act(() => useEditorStore.getState().addTab('C:/fixtures/new.md', 'new.md', content))
+      act(() => vi.advanceTimersByTime(50))
+      expect(useEditorStore.getState().activeTabId).not.toBe(tabA.id)
+      expect(container.querySelector<HTMLElement>('.cm-scroller')?.scrollTop).toBe(480)
+    } finally {
+      if (width) Object.defineProperty(HTMLElement.prototype, 'clientWidth', width)
+      else Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth')
+    }
+  })
+
   describe('进入对照阅读时同步共享阅读位置', () => {
+    it('keeps the right pane position when its file is closed and reopened', async () => {
+      const content = '# 文档\n\n' + '正文\n\n'.repeat(80)
+      const tabA = { ...anonymousTab('tab-a', content), filePath: 'C:/fixtures/a.md' }
+      const tabB = { ...anonymousTab('tab-b', content), filePath: 'C:/fixtures/b.md' }
+      setupEditor([tabA, tabB], tabA.id, 'dual-preview')
+      useEditorStore.setState({ rightPaneTabId: tabB.id, rightPaneUserSelected: true })
+      const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+      Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 500 })
+      try {
+        const { container } = render(<EditorArea />)
+        await settleLazyEditorModules()
+        act(() => vi.advanceTimersByTime(50))
+        const panes = container.querySelectorAll<HTMLElement>('.overflow-y-auto.overflow-x-hidden.select-text.bg-gm-surface')
+        act(() => {
+          panes[1].scrollTop = 720
+          fireEvent.scroll(panes[1])
+          useEditorStore.getState().closeTab(tabB.id)
+        })
+        act(() => useEditorStore.getState().addTab(tabB.filePath, tabB.title, content))
+        act(() => vi.advanceTimersByTime(50))
+        const reopenedPanes = container.querySelectorAll<HTMLElement>('.overflow-y-auto.overflow-x-hidden.select-text.bg-gm-surface')
+        expect(reopenedPanes[1].scrollTop).toBe(720)
+      } finally {
+        if (width) Object.defineProperty(HTMLElement.prototype, 'clientWidth', width)
+        else Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth')
+      }
+    })
+
     it('未指定右栏文件时把共享行号播种到左右两栏', async () => {
       const content = Array.from({ length: 120 }, (_, index) => `第 ${index + 1} 段`).join('\n\n')
       setupEditor([anonymousTab('tab-a', content)], 'tab-a', 'preview')
@@ -676,6 +736,180 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
   })
 
   describe('tab switch in preview mode', () => {
+    it('corrects a late virtual measurement and stops correcting after user input', () => {
+      setupEditor([anonymousTab('tab-a', '# A')], 'tab-a', 'preview')
+      useEditorStore.setState({ readingPositions: { 'tab-a': { previewScrollTop: 400, topLine: 25, previewLineOffset: 100 } } })
+      const container = document.createElement('div')
+      Object.defineProperty(container, 'clientHeight', { value: 600 })
+      let measuredLine = 25
+      let measuredTop = 600
+      const handle = {
+        getLineForTop: () => measuredLine,
+        getTopForLine: () => measuredTop,
+      } as unknown as MarkdownPreviewHandle
+      const restoredKeys = { current: { left: null as string | null, right: null as string | null } }
+      const { result } = renderHook(() => useReadingPositionBridge({
+        activeTabId: 'tab-a',
+        viewMode: 'preview',
+        viewModeRef: { current: 'preview' },
+        editorViewRef: { current: null },
+        leftPreviewContainerRef: { current: container },
+        rightPreviewContainerRef: { current: null },
+        leftMarkdownPreviewRef: { current: handle },
+        rightMarkdownPreviewRef: { current: null },
+        restoredPreviewKeysRef: restoredKeys,
+        scrollSyncSessionRef: { current: new ScrollSyncSession() },
+        clearPreviewSwitching: vi.fn(),
+        setPreviewRestoreTick: vi.fn(),
+        flushReadingPositions: vi.fn(),
+        updateEditorHeading: vi.fn(),
+        setTocFocus: vi.fn(),
+      }))
+
+      act(() => {
+        result.current.restorePreviewReadingPosition('tab-a', container, 'left')
+        vi.advanceTimersByTime(50)
+      })
+      expect(restoredKeys.current.left).toBe('tab-a')
+      expect(container.scrollTop).toBe(668)
+      measuredLine = 10
+      measuredTop = 650
+      act(() => vi.advanceTimersByTime(250))
+      expect(container.scrollTop).toBe(718)
+
+      act(() => result.current.allowPreviewPositionUpdates('tab-a', 'left'))
+      container.scrollTop = 700
+      act(() => result.current.savePreviewReadingPosition('tab-a', container, handle, 'left'))
+      expect(result.current.readingPositionsRef.current.get('tab-a')).toMatchObject({ previewLineOffset: 82 })
+      measuredLine = 10
+      act(() => vi.advanceTimersByTime(800))
+      expect(container.scrollTop).toBe(700)
+    })
+
+    it('uses a measured line target on the first preview-to-editor switch', async () => {
+      const content = Array.from({ length: 120 }, (_, index) => `第 ${index + 1} 行`).join('\n')
+      setupEditor([anonymousTab('tab-a', content)], 'tab-a', 'preview', { modePerformancePolicy: 'memory' })
+      useEditorStore.setState({ readingPositions: { 'tab-a': { previewScrollTop: 900, topLine: 80 } } })
+      const { container } = render(<EditorArea />)
+      await settleLazyEditorModules()
+      act(() => vi.advanceTimersByTime(50))
+
+      expect(container.querySelector('.cm-editor')).toBeNull()
+      const scrollIntoViewSpy = vi.spyOn(EditorView, 'scrollIntoView')
+      act(() => useEditorStore.getState().setViewMode('edit'))
+      act(() => vi.advanceTimersByTime(50))
+
+      const target = content.split('\n').slice(0, 79).join('\n').length + 1
+      expect(scrollIntoViewSpy).toHaveBeenCalledWith(target, { y: 'start', yMargin: 32 })
+    })
+
+    it('saves the first user scroll even while the initial restore frame is pending', async () => {
+      const contentA = '# 文档 A\n\n' + '正文 A\n\n'.repeat(100)
+      const tabA = anonymousTab('tab-a', contentA)
+      const tabB = anonymousTab('tab-b', '# 文档 B')
+      setupEditor([tabA, tabB], tabA.id, 'preview')
+      useEditorStore.setState({ readingPositions: { [tabA.id]: { previewScrollTop: 400, topLine: 25 } } })
+
+      const { container } = render(<EditorArea />)
+      await settleLazyEditorModules()
+      const preview = getLeftPreviewContainer(container)!
+      act(() => {
+        preview.scrollTop = 520
+        fireEvent.wheel(preview, { deltaY: 120 })
+        fireEvent.scroll(preview)
+        useEditorStore.getState().setActiveTab(tabB.id)
+      })
+
+      expect(useEditorStore.getState().readingPositions[tabA.id]?.previewScrollTop).toBe(520)
+    })
+
+    it('does not replace a restored position with a later layout scroll before user input', async () => {
+      const content = '# 文档 A\n\n' + '正文 A\n\n'.repeat(100)
+      setupEditor([anonymousTab('tab-a', content), anonymousTab('tab-b', '# 文档 B')], 'tab-a', 'preview')
+      useEditorStore.setState({ readingPositions: { 'tab-a': { previewScrollTop: 400, topLine: 25 } } })
+      const clientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+      Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 600 })
+      try {
+        const { container } = render(<EditorArea />)
+        await settleLazyEditorModules()
+        act(() => vi.advanceTimersByTime(300))
+
+        const preview = getLeftPreviewContainer(container)!
+        act(() => {
+          fireEvent.pointerDown(preview, { pointerType: 'mouse', clientX: 100 })
+          preview.scrollTop = 64
+          fireEvent.scroll(preview)
+          useEditorStore.getState().setActiveTab('tab-b')
+        })
+        expect(useEditorStore.getState().readingPositions['tab-a']?.previewScrollTop).toBe(400)
+
+        act(() => useEditorStore.getState().setActiveTab('tab-a'))
+        act(() => vi.advanceTimersByTime(300))
+        const restored = getLeftPreviewContainer(container)!
+        act(() => {
+          fireEvent.wheel(restored, { deltaY: 120 })
+          restored.scrollTop = 520
+          fireEvent.scroll(restored)
+          useEditorStore.getState().setActiveTab('tab-b')
+        })
+        expect(useEditorStore.getState().readingPositions['tab-a']?.previewScrollTop).toBe(520)
+      } finally {
+        if (clientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeight)
+        else Reflect.deleteProperty(HTMLElement.prototype, 'clientHeight')
+      }
+    })
+
+    it('keeps a restored preview hidden until its line correction finishes', async () => {
+      const content = Array.from({ length: 80 }, (_, index) => `## Section ${index + 1}\n\nParagraph ${index + 1}`).join('\n\n')
+      setupEditor([anonymousTab('tab-a', content), anonymousTab('tab-b', content)], 'tab-a', 'preview')
+      useEditorStore.setState({ readingPositions: { 'tab-a': { previewScrollTop: 400, topLine: 25 } } })
+      const clientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+      Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 600 })
+      try {
+        const { container } = render(<EditorArea />)
+        await settleLazyEditorModules()
+        act(() => vi.advanceTimersByTime(50))
+        act(() => useEditorStore.getState().setActiveTab('tab-b'))
+        act(() => useEditorStore.getState().setActiveTab('tab-a'))
+        const preview = getLeftPreviewContainer(container)!
+        expect(preview.style.visibility).toBe('hidden')
+        act(() => vi.advanceTimersByTime(50))
+        expect(preview.style.visibility).not.toBe('hidden')
+      } finally {
+        if (clientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeight)
+        else Reflect.deleteProperty(HTMLElement.prototype, 'clientHeight')
+      }
+    })
+
+    it('restores a file after its tab is closed and reopened with a new ID', async () => {
+      const contentA = '# 文档 A\n\n' + '正文 A\n\n'.repeat(60)
+      const tabA = { ...anonymousTab('tab-a', contentA), filePath: 'C:/fixtures/a.md' }
+      const tabB = { ...anonymousTab('tab-b', '# 文档 B\n\n正文 B'), filePath: 'C:/fixtures/b.md' }
+      setupEditor([tabA, tabB], tabA.id, 'preview')
+      const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+      Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 500 })
+      try {
+        const { container } = render(<EditorArea />)
+        await settleLazyEditorModules()
+        act(() => vi.advanceTimersByTime(50))
+        const preview = getLeftPreviewContainer(container)!
+        act(() => {
+          preview.scrollTop = 380
+          fireEvent.scroll(preview)
+          useEditorStore.getState().closeTab(tabA.id)
+        })
+
+        act(() => useEditorStore.getState().addTab('c:\\fixtures\\a.md', '文档 A.md', contentA))
+        const reopenedId = useEditorStore.getState().activeTabId
+        expect(reopenedId).not.toBe(tabA.id)
+        act(() => vi.advanceTimersByTime(50))
+        expect(getLeftPreviewContainer(container)?.scrollTop).toBe(380)
+      } finally {
+        if (width) Object.defineProperty(HTMLElement.prototype, 'clientWidth', width)
+        else Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth')
+      }
+    })
+
     it('tab switch remounts container and keeps preview visible', async () => {
       // When switching tabs, the preview container's key changes, causing a remount.
       // The new container starts with scrollTop=0, so leftPreviewMasked should be false.

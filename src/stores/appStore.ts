@@ -7,6 +7,16 @@ import { createVolatilePersistStorage } from '@/services/webSessionStorage'
 export { createWorkspaceRoot, normalizeWorkspacePath } from '@/services/workspaceIdentity'
 export type { WorkspaceRoot } from '@/services/workspaceIdentity'
 
+export interface FullscreenAiPosition {
+  x: number
+  y: number
+}
+
+export interface FullscreenAiSize {
+  width: number
+  height: number
+}
+
 export type AiServiceStatus =
   | 'unchecked'
   | 'ok'
@@ -24,6 +34,8 @@ export interface AppState {
   aiPanelOpen: boolean
   sidebarWidth: number
   aiPanelWidth: number
+  fullscreenAiPosition: FullscreenAiPosition | null
+  fullscreenAiSize: FullscreenAiSize | null
   workspaceRoots: WorkspaceRoot[]
   aiStatus: AiServiceStatus
   isFullscreen: boolean
@@ -34,6 +46,8 @@ export interface AppState {
   closeAiPanel: () => void
   setSidebarWidth: (width: number) => void
   setAiPanelWidth: (width: number) => void
+  setFullscreenAiPosition: (position: FullscreenAiPosition) => void
+  setFullscreenAiSize: (size: FullscreenAiSize) => void
   addWorkspaceRoot: (path: string) => boolean
   removeWorkspaceRoot: (id: string) => void
   resetWorkspaceForWebSession: () => void
@@ -60,6 +74,20 @@ function sanitizeWorkspaceRoots(value: unknown): WorkspaceRoot[] {
   return roots
 }
 
+function sanitizeFullscreenAiPosition(value: unknown): FullscreenAiPosition | null {
+  if (!value || typeof value !== 'object') return null
+  const candidate = value as Partial<FullscreenAiPosition>
+  if (!Number.isFinite(candidate.x) || !Number.isFinite(candidate.y)) return null
+  return { x: candidate.x as number, y: candidate.y as number }
+}
+
+function sanitizeFullscreenAiSize(value: unknown): FullscreenAiSize | null {
+  if (!value || typeof value !== 'object') return null
+  const candidate = value as Partial<FullscreenAiSize>
+  if (!Number.isFinite(candidate.width) || !Number.isFinite(candidate.height)) return null
+  return { width: candidate.width as number, height: candidate.height as number }
+}
+
 export function migratePersistedAppState(persistedState: unknown): Partial<AppState> {
   const saved = (persistedState ?? {}) as Partial<AppState> & { workspacePath?: string | null }
   const workspaceRoots = sanitizeWorkspaceRoots(
@@ -70,7 +98,12 @@ export function migratePersistedAppState(persistedState: unknown): Partial<AppSt
         : []
   )
   const { workspacePath: _legacyWorkspacePath, ...rest } = saved
-  return { ...rest, workspaceRoots }
+  return {
+    ...rest,
+    fullscreenAiPosition: sanitizeFullscreenAiPosition(saved.fullscreenAiPosition),
+    fullscreenAiSize: sanitizeFullscreenAiSize(saved.fullscreenAiSize),
+    workspaceRoots,
+  }
 }
 
 export function selectPrimaryWorkspacePath(state: Pick<AppState, 'workspaceRoots'>): string | null {
@@ -84,6 +117,8 @@ export const useAppStore = create<AppState>()(
       aiPanelOpen: false,
       sidebarWidth: 260,
       aiPanelWidth: 360,
+      fullscreenAiPosition: null,
+      fullscreenAiSize: null,
       workspaceRoots: [],
       aiStatus: 'unchecked',
       isFullscreen: false,
@@ -94,6 +129,8 @@ export const useAppStore = create<AppState>()(
       closeAiPanel: () => set({ aiPanelOpen: false }),
       setSidebarWidth: (width) => set({ sidebarWidth: width }),
       setAiPanelWidth: (width) => set({ aiPanelWidth: width }),
+      setFullscreenAiPosition: (position) => set({ fullscreenAiPosition: position }),
+      setFullscreenAiSize: (size) => set({ fullscreenAiSize: size }),
       addWorkspaceRoot: (path) => {
         const root = createWorkspaceRoot(path)
         if (!root) return false
@@ -121,6 +158,8 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         sidebarWidth: state.sidebarWidth,
         aiPanelWidth: state.aiPanelWidth,
+        fullscreenAiPosition: state.fullscreenAiPosition,
+        fullscreenAiSize: state.fullscreenAiSize,
         workspaceRoots: state.workspaceRoots,
       }),
       version: 1,

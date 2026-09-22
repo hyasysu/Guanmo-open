@@ -1,4 +1,5 @@
 import type { ViewMode, ViewModeUsageStat } from '@/stores/editorStore'
+import { normalizeFilePath } from '@/services/pathIdentity'
 
 export const SCROLL_SYNC_LOCK_MS = 220
 export const MODE_PREWARM_IDLE_DELAY = 650
@@ -94,6 +95,7 @@ export interface ReadingPosition {
   editorScrollTop?: number
   previewScrollTop?: number
   topLine?: number
+  previewLineOffset?: number
   /** 编辑器光标位置 */
   cursor?: number
   /** 编辑器主选区 {anchor, head} */
@@ -122,8 +124,10 @@ export class ReadingPositionSession {
     if (hasEditorTop && hasPreviewTop) {
       next.editorScrollTop = undefined
       next.previewScrollTop = undefined
+      next.previewLineOffset = undefined
     } else if (hasEditorTop) {
       next.previewScrollTop = undefined
+      next.previewLineOffset = undefined
     } else if (hasPreviewTop) {
       next.editorScrollTop = undefined
     }
@@ -138,13 +142,111 @@ export class ReadingPositionSession {
   seedPaneFromSharedPosition(tabId: string, pane: 'left' | 'right'): ReadingPosition {
     const shared = this.positions[tabId]
     const position: ReadingPosition = typeof shared?.topLine === 'number'
-      ? { topLine: shared.topLine }
+      ? { topLine: shared.topLine, ...(typeof shared.previewScrollTop === 'number' && typeof shared.previewLineOffset === 'number'
+        ? { previewLineOffset: shared.previewLineOffset } : {}) }
       : typeof shared?.previewScrollTop === 'number'
         ? { previewScrollTop: shared.previewScrollTop }
         : { topLine: 1 }
     this.positions[`${tabId}:${pane}`] = position
     return position
   }
+}
+
+type ReadingPositionScope = 'shared' | 'left' | 'right'
+
+interface RuntimeFilePosition {
+  position: ReadingPosition
+  contentSignature: string
+  layoutKey: string
+}
+
+type RuntimeFilePositions = Partial<Record<ReadingPositionScope, RuntimeFilePosition>>
+export type RuntimeFileLayoutKeys = Record<'sharedEditor' | 'sharedPreview' | 'left' | 'right', string>
+
+/** Only transfers positions between tab IDs during this process lifetime. */
+export class RuntimeFileReadingPositions {
+  private files = new Map<string, RuntimeFilePositions>()
+  private lastContent: string | null = null
+  private lastContentSignature = ''
+
+  clear(): void {
+    this.files.clear()
+    this.lastContent = null
+    this.lastContentSignature = ''
+  }
+
+  copyPath(previousPath: string | null | undefined, nextPath: string | null | undefined): boolean {
+    const previous = this.files.get(normalizeFilePath(previousPath))
+    const nextKey = normalizeFilePath(nextPath)
+    if (!previous || !nextKey) return false
+    this.files.set(nextKey, { ...previous })
+    return true
+  }
+
+  remember(path: string | null | undefined, content: string, scope: ReadingPositionScope, position: ReadingPosition, layoutKey: string): void {
+    const key = normalizeFilePath(path)
+    if (!key) return
+    const positions = this.files.get(key) ?? {}
+    positions[scope] = {
+      position: { ...position },
+      contentSignature: this.getContentSignature(content),
+      layoutKey,
+    }
+    this.files.set(key, positions)
+  }
+
+  restore(path: string | null | undefined, content: string, layoutKeys: RuntimeFileLayoutKeys): Partial<Record<ReadingPositionScope, ReadingPosition>> {
+    const positions = this.files.get(normalizeFilePath(path))
+    if (!positions) return {}
+    const contentSignature = this.getContentSignature(content)
+    const restored: Partial<Record<ReadingPositionScope, ReadingPosition>> = {}
+    for (const scope of ['shared', 'left', 'right'] as const) {
+      const saved = positions[scope]
+      if (!saved) continue
+      const sameContent = saved.contentSignature === contentSignature
+      const layoutKey = scope === 'shared'
+        ? (typeof saved.position.previewScrollTop === 'number' ? layoutKeys.sharedPreview : layoutKeys.sharedEditor)
+        : layoutKeys[scope]
+      const sameLayout = Boolean(saved.layoutKey && saved.layoutKey === layoutKey)
+      const position = { ...saved.position }
+      if (!sameContent || !sameLayout) {
+        position.editorScrollTop = undefined
+        position.previewScrollTop = undefined
+        position.previewLineOffset = undefined
+      }
+      if (!sameContent) {
+        position.cursor = undefined
+        position.selection = undefined
+        position.ranges = undefined
+        position.mainIndex = undefined
+      }
+      if (typeof position.editorScrollTop === 'number'
+        || typeof position.previewScrollTop === 'number'
+        || typeof position.topLine === 'number') {
+        restored[scope] = position
+      }
+    }
+    return restored
+  }
+
+  private getContentSignature(content: string): string {
+    if (this.lastContent !== content) {
+      this.lastContent = content
+      this.lastContentSignature = getReadingPositionContentSignature(content)
+    }
+    return this.lastContentSignature
+  }
+}
+
+export const runtimeFileReadingPositions = new RuntimeFileReadingPositions()
+
+function getReadingPositionContentSignature(content: string): string {
+  let hash = 2166136261
+  for (let i = 0; i < content.length; i++) {
+    hash ^= content.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `${content.length}:${hash >>> 0}`
 }
 
 export class ScrollSyncSession {

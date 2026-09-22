@@ -339,10 +339,10 @@ const StableMarkdownBlock = memo(function StableMarkdownBlock({
   const blockRehypePlugins = useMemo(
     () => [
       ...(rehypePlugins ?? []),
-      createSourceOffsetAnnotator(block.startOffset, contentProps.markdown),
+      createSourceOffsetAnnotator(block.startOffset, contentProps.markdown, block.textSegments),
       createReadingMarkHitRegionAnnotator(readingMarkRanges ?? []),
     ],
-    [contentProps.markdown, readingMarkRanges, rehypePlugins, block.startOffset],
+    [block.textSegments, contentProps.markdown, readingMarkRanges, rehypePlugins, block.startOffset],
   )
 
   return (
@@ -380,6 +380,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   isVisible = true,
   onFirstVisible,
   onRenderComplete,
+  onPositionIntent,
   resource = 'preview',
   readingMarks = [],
   onCreateReadingMark,
@@ -1597,10 +1598,15 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       return getSourceOffsetForLine(model, line)
     },
     scrollToLine(line: number) {
+      onPositionIntent?.()
       cancelPendingAnchorRestore()
       scrollToLineInternal(line)
     },
-    revealSourceLines: revealSourceLinesInternal,
+    revealSourceLines(request) {
+      const applied = revealSourceLinesInternal(request)
+      if (applied) onPositionIntent?.()
+      return applied
+    },
     scrollToOffset(offset: number) {
       cancelPendingAnchorRestore()
       cancelProgrammaticScroll()
@@ -1609,6 +1615,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       if (!block) return
       const container = scrollContainerRef.current
       if (!container) return
+      onPositionIntent?.()
       const match = searchMatchesByBlockRef.current?.get(block.blockId)?.find((item) => item.from === offset)
       const to = match?.to ?? Math.min(block.endOffset, offset + 1)
       const element = blockRefs.current.get(index)
@@ -1664,8 +1671,12 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       selectionAnchorRef.current = null
       applySelection(null)
     },
-    navigateToReadingMark: navigateToReadingMarkInternal,
-  }), [cancelProgrammaticScroll, cancelPendingAnchorRestore, model, estimateBlockHeight, requiresWholeDocumentRender, scrollToLineInternal, revealSourceLinesInternal, setSearchStateImpl, applySelection, navigateToReadingMarkInternal])
+    navigateToReadingMark(markId: string) {
+      const applied = navigateToReadingMarkInternal(markId)
+      if (applied) onPositionIntent?.()
+      return applied
+    },
+  }), [cancelProgrammaticScroll, cancelPendingAnchorRestore, model, estimateBlockHeight, requiresWholeDocumentRender, scrollToLineInternal, revealSourceLinesInternal, setSearchStateImpl, applySelection, navigateToReadingMarkInternal, onPositionIntent])
 
   // Visible range
   const visible = useMemo(
@@ -2340,7 +2351,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const wholeDocumentRehypePlugins = useMemo(
     () => [
       ...rehypePlugins,
-      createSourceOffsetAnnotator(0, normalizedContent),
+      createSourceOffsetAnnotator(0, normalizedContent, model.blocks.flatMap((block) => block.textSegments)),
       createReadingMarkHitRegionAnnotator(readingMarkHitRanges),
       createMarkdownBlockWrapperPlugin(model.blocks),
     ],
@@ -2476,7 +2487,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
           code: ({ children, className, node }) => {
             // eslint-disable-next-line react-hooks/rules-of-hooks
             const base = useBlockLineBase()
-            const code = String(children)
+            const code = node ? getCodeNodeText(node) : String(children)
             const language = className?.match(/language-([\w-]+)/)?.[1]
             const isBlock = Boolean(language) || code.endsWith('\n')
             if (isBlock && language === 'mermaid') {
@@ -2494,11 +2505,6 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
             if (isBlock) {
               return (
                 <CodeBlock code={code.replace(/\n$/, '')} language={language} fontSize={fontSize} startLine={getNodeStartLine(node, base)} endLine={getNodeEndLine(node, base)}>
-                  {language && (
-                    <div className="px-4 py-1.5 border-b border-gm-border text-micro text-gm-text-secondary font-mono">
-                      {language}
-                    </div>
-                  )}
                   <pre className="p-4 overflow-x-auto m-0">
                     <code className={['font-mono', className].filter(Boolean).join(' ')} style={{ fontSize: '0.9em' }}>
                       {children}
@@ -2952,7 +2958,7 @@ function getMountedPreviewLineForTop(
     if (!block) continue
     const rect = element.getBoundingClientRect()
     if (rect.height <= 0) continue
-    if (targetViewportTop > rect.bottom) continue
+    if (targetViewportTop >= rect.bottom - 1) continue
     if (targetViewportTop <= rect.top) return block.startLine
     if (block.endLine <= block.startLine) return block.startLine
     const progress = Math.max(0, Math.min(1, (targetViewportTop - rect.top) / rect.height))
@@ -2982,6 +2988,13 @@ function getMountedSourceRangeTop(
   return undefined
 }
 
+type CodeTextNode = { type: string; value?: string; children?: CodeTextNode[] }
+
+function getCodeNodeText(node: CodeTextNode): string {
+  if (node.type === 'text') return node.value ?? ''
+  return node.children?.map(getCodeNodeText).join('') ?? ''
+}
+
 function CodeBlock({
   code,
   language,
@@ -3009,21 +3022,32 @@ function CodeBlock({
     }
   }
 
+  const copyButton = (
+    <button
+      type="button"
+      onClick={() => void handleCopy()}
+      className="flex h-6 min-w-6 items-center justify-center border-0 bg-transparent px-1.5 text-micro text-gm-text-tertiary opacity-0 shadow-none transition-opacity hover:text-gm-primary group-hover:opacity-100 focus-visible:opacity-100"
+      title={language ? `复制 ${language} 代码` : '复制代码'}
+    >
+      {copied ? '已复制' : (
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+          <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+        </svg>
+      )}
+    </button>
+  )
+
   return (
     <div className="group gm-code-block relative my-4 rounded-xl border border-gm-border overflow-hidden" data-md-line={startLine} data-md-end-line={endLine}>
-      <button
-        type="button"
-        onClick={() => void handleCopy()}
-        className="absolute right-2 top-2 z-10 flex h-7 min-w-7 items-center justify-center rounded-md border border-gm-border bg-gm-surface/90 px-2 text-micro text-gm-text-tertiary opacity-0 shadow-sm transition-opacity hover:text-gm-primary group-hover:opacity-100 focus-visible:opacity-100"
-        title={language ? `复制 ${language} 代码` : '复制代码'}
-      >
-        {copied ? '已复制' : (
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
-          </svg>
-        )}
-      </button>
+      {language ? (
+        <div className="flex items-center justify-between border-b border-gm-border px-4 py-1.5 text-micro text-gm-text-secondary font-mono">
+          <span>{language}</span>
+          {copyButton}
+        </div>
+      ) : (
+        <div className="absolute right-3 top-1 z-10">{copyButton}</div>
+      )}
       <div style={{ fontSize }}>
         {children}
       </div>
@@ -3169,6 +3193,27 @@ function getBlockOffsetForLine(block: PreviewBlock, clickedLine: number): number
   return offset
 }
 
+function resolveMermaidColor(value: string): string {
+  if (!value.includes('(') || typeof document === 'undefined') return value
+
+  const probe = document.createElement('span')
+  probe.style.color = value
+  if (!probe.style.color) return value
+  document.body.appendChild(probe)
+  const resolved = getComputedStyle(probe).color.trim()
+  probe.remove()
+
+  const srgb = resolved.match(/^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?\)$/i)
+  if (srgb) {
+    const [, red, green, blue, alpha] = srgb
+    const channels = [red, green, blue].map((channel) => Math.round(Number(channel) * 255))
+    return alpha === undefined
+      ? `rgb(${channels.join(', ')})`
+      : `rgba(${channels.join(', ')}, ${alpha})`
+  }
+  return resolved || value
+}
+
 function MermaidBlock({ code, startLine, endLine }: { code: string; startLine?: number; endLine?: number }) {
   const [svg, setSvg] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -3180,7 +3225,7 @@ function MermaidBlock({ code, startLine, endLine }: { code: string; startLine?: 
       try {
         const mermaid = (await import('mermaid')).default
         const styles = getComputedStyle(document.documentElement)
-        const token = (name: string) => styles.getPropertyValue(name).trim()
+        const token = (name: string) => resolveMermaidColor(styles.getPropertyValue(name).trim())
         mermaid.initialize({
           startOnLoad: false,
           theme: 'base',
