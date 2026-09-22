@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Database, LoaderCircle, RefreshCw, Trash2 } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { FileTree, type FileTreeHandle } from '@/components/file-tree/FileTree'
 import { isTauri } from '@/hooks/useTauri'
@@ -373,30 +374,32 @@ export function WorkspaceRoots({ onOpenFile }: WorkspaceRootsProps) {
                       >
                         <CollapseAllIcon />
                       </WorkspaceRootActionButton>
-                      <button
-                        type="button"
-                        disabled={!getRuntimeCapabilities().database || Boolean(workingRootId)}
+                      <WorkspaceRootActionButton
+                        label={working ? `正在索引 ${root.name}` : `索引 ${root.name}`}
                         title={!getRuntimeCapabilities().database ? '知识库索引仅桌面版可用' : undefined}
+                        disabled={!getRuntimeCapabilities().database || Boolean(workingRootId)}
                         onClick={() => void handleIndex(root.id, root.path)}
-                        className="ml-1 shrink-0 text-micro text-gm-text-tertiary hover:text-gm-text disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        {working ? '索引中…' : '索引'}
-                      </button>
-                      <button
-                        type="button"
+                        {working ? (
+                          <LoaderCircle size={16} strokeWidth={1.8} className="animate-spin" />
+                        ) : (
+                          <Database size={16} strokeWidth={1.8} />
+                        )}
+                      </WorkspaceRootActionButton>
+                      <WorkspaceRootActionButton
+                        label={`刷新 ${root.name}`}
                         onClick={() => void refreshWorkspaceRoot(root.id)}
-                        className="shrink-0 text-micro text-gm-text-tertiary hover:text-gm-text"
                       >
-                        刷新
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleRemove(root.id)}
-                        className="shrink-0 text-micro text-gm-text-tertiary hover:text-gm-error"
+                        <RefreshCw size={16} strokeWidth={1.8} />
+                      </WorkspaceRootActionButton>
+                      <WorkspaceRootActionButton
+                        label={`移除工作区 ${root.name}`}
                         title="仅移除工作区记录，不删除本地文件"
+                        onClick={() => handleRemove(root.id)}
+                        danger
                       >
-                        移除
-                      </button>
+                        <Trash2 size={16} strokeWidth={1.8} />
+                      </WorkspaceRootActionButton>
                     </div>
                     <button
                       type="button"
@@ -469,20 +472,29 @@ export function WorkspaceRoots({ onOpenFile }: WorkspaceRootsProps) {
 
 function WorkspaceRootActionButton({
   label,
+  title,
   onClick,
   children,
+  disabled = false,
+  danger = false,
 }: {
   label: string
+  title?: string
   onClick: () => void
   children: React.ReactNode
+  disabled?: boolean
+  danger?: boolean
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-gm-text-tertiary transition-colors hover:bg-gm-surface-hover hover:text-gm-text"
+      disabled={disabled}
+      className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-gm-text-tertiary transition-colors hover:bg-gm-surface-hover disabled:cursor-not-allowed disabled:opacity-50 ${
+        danger ? 'hover:text-gm-error' : 'hover:text-gm-text'
+      }`}
       aria-label={label}
-      title={label}
+      title={title ?? label}
     >
       {children}
     </button>
