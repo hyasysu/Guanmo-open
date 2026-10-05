@@ -64,7 +64,12 @@ interface AppearanceSettings extends AppearanceConfigV1 {
   aiAvatarStyle: AiAvatarStyle
   aiAssistantFontSize: AiAssistantFontSize
   fullscreenTransitionEnabled: boolean
+  sendMessageAnimationEnabled: boolean
   lastLightThemeId: NonDarkThemeId
+  fullscreenBackgroundPath: string | null
+  fullscreenBackgroundOpacity: number
+  fullscreenBackgroundEnabled: boolean
+  fullscreenBackgroundScene: 'snow' | 'sea' | 'stars' | 'custom' | `local:${string}`
 }
 
 interface KnowledgeSettings {
@@ -131,6 +136,12 @@ function resolveFullscreenContentPaddingPercent(value: unknown, legacyValue?: un
   )
 }
 
+function resolveFullscreenBackgroundScene(value: unknown): AppearanceSettings['fullscreenBackgroundScene'] {
+  if (value === 'snow' || value === 'sea' || value === 'stars') return value
+  if (typeof value === 'string' && /^local:[0-9a-f-]{36}$/i.test(value)) return value as `local:${string}`
+  return 'custom'
+}
+
 const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   fontSize: 14,
   lineHeight: 1.65,
@@ -156,7 +167,12 @@ const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   aiAvatarStyle: 'sprite',
   aiAssistantFontSize: 14,
   fullscreenTransitionEnabled: true,
+  sendMessageAnimationEnabled: false,
   lastLightThemeId: 'warm',
+  fullscreenBackgroundPath: null,
+  fullscreenBackgroundOpacity: 40,
+  fullscreenBackgroundEnabled: false,
+  fullscreenBackgroundScene: 'custom',
 }
 
 function resolveAiAssistantFontSize(value: unknown): AiAssistantFontSize {
@@ -539,6 +555,21 @@ export const useSettingsStore = create<SettingsState>()(
               fullscreenTransitionEnabled: typeof savedAppearance.fullscreenTransitionEnabled === 'boolean'
                 ? savedAppearance.fullscreenTransitionEnabled
                 : current.appearance.fullscreenTransitionEnabled,
+              sendMessageAnimationEnabled: typeof savedAppearance.sendMessageAnimationEnabled === 'boolean'
+                ? savedAppearance.sendMessageAnimationEnabled
+                : current.appearance.sendMessageAnimationEnabled,
+              fullscreenBackgroundPath: typeof savedAppearance.fullscreenBackgroundPath === 'string' && savedAppearance.fullscreenBackgroundPath
+                ? savedAppearance.fullscreenBackgroundPath
+                : null,
+              fullscreenBackgroundOpacity: typeof savedAppearance.fullscreenBackgroundOpacity === 'number' && Number.isFinite(savedAppearance.fullscreenBackgroundOpacity)
+                ? Math.min(100, Math.max(0, savedAppearance.fullscreenBackgroundOpacity))
+                : savedAppearance.fullscreenBackgroundBrightness === 0
+                  ? 0
+                  : current.appearance.fullscreenBackgroundOpacity,
+              fullscreenBackgroundEnabled: typeof savedAppearance.fullscreenBackgroundEnabled === 'boolean'
+                ? savedAppearance.fullscreenBackgroundEnabled
+                : Boolean(savedAppearance.fullscreenBackgroundPath),
+              fullscreenBackgroundScene: resolveFullscreenBackgroundScene(savedAppearance.fullscreenBackgroundScene),
               ...resolved,
               themeId,
               lastLightThemeId,

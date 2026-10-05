@@ -1,6 +1,7 @@
+import { useReducedMotion } from 'motion/react'
 import { forwardRef, useState, useCallback, useEffect, useImperativeHandle, useRef } from 'react'
 import { useEditorStore } from '@/stores/editorStore'
-import { createFile, createFolder, openFile, removeFileEntry } from '@/services/fileSystem'
+import { createFile, createFolder, openFile } from '@/services/fileSystem'
 import type { FileNode } from '@/services/fileTree'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
@@ -16,7 +17,9 @@ import { readRememberedMarkdownFileForOpen } from '@/services/markdownFileOpenPo
 import { toast } from '@/services/toast'
 import { Tooltip, TruncatedText } from '@/components/common/Tooltip'
 import { useFileRename } from '@/hooks/useFileRename'
+import { revealFileInFolder } from '@/hooks/useTauri'
 import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
+import { TreeCollapse } from './TreeCollapse'
 
 interface FileTreeProps {
   nodes: FileNode[]
@@ -66,6 +69,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
   const [creating, setCreating] = useState<'file' | 'folder' | null>(null)
   const [newName, setNewName] = useState('')
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => getTopLevelExpandedPaths(nodes))
+  const [instantCollapse, setInstantCollapse] = useState(false)
   const createCancelledRef = useRef(false)
   const createSubmittingRef = useRef(false)
   const previousWorkspacePathRef = useRef<string | null | undefined>(workspacePath)
@@ -93,6 +97,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     if (collapseAllSignal === undefined) return
     if (previousCollapseAllSignalRef.current === collapseAllSignal) return
     previousCollapseAllSignalRef.current = collapseAllSignal
+    setInstantCollapse(true)
     setExpandedPaths(new Set())
   }, [collapseAllSignal])
 
@@ -100,12 +105,14 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     if (expandAllSignal === undefined) return
     if (previousExpandAllSignalRef.current === expandAllSignal) return
     previousExpandAllSignalRef.current = expandAllSignal
+    setInstantCollapse(false)
     setExpandedPaths(collectDirectoryPaths(nodes))
   }, [expandAllSignal, nodes])
 
   const isExpandedPath = useCallback((path: string) => expandedPaths.has(path), [expandedPaths])
 
   const toggleDirectory = useCallback((path: string) => {
+    setInstantCollapse(false)
     setExpandedPaths((current) => {
       const next = new Set(current)
       if (next.has(path)) {
@@ -116,6 +123,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       return next
     })
   }, [])
+  const reducedMotion = useReducedMotion() ?? false
 
   const handleBlankContextMenu = useCallback((e: React.MouseEvent) => {
     if (!workspacePath) return
@@ -180,6 +188,8 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
             onToggleDirectory={toggleDirectory}
             onOpenFile={onOpenFile}
             onRefreshWorkspace={onRefreshWorkspace}
+            reducedMotion={reducedMotion}
+            immediateCollapse={instantCollapse}
           />
         ))
       )}
@@ -263,6 +273,8 @@ function FileTreeNode({
   onToggleDirectory,
   onOpenFile,
   onRefreshWorkspace,
+  reducedMotion,
+  immediateCollapse,
 }: {
   node: FileNode
   depth: number
@@ -271,6 +283,8 @@ function FileTreeNode({
   onToggleDirectory: (path: string) => void
   onOpenFile?: (path: string) => void
   onRefreshWorkspace?: () => void
+  reducedMotion: boolean
+  immediateCollapse: boolean
 }) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const rename = useFileRename()
@@ -323,6 +337,15 @@ function FileTreeNode({
     }
   }, [node])
 
+  const handleRevealFile = useCallback(async () => {
+    setContextMenu(null)
+    try {
+      await revealFileInFolder(node.path)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '打开文件位置失败')
+    }
+  }, [node.path])
+
   const handleDragStart = useCallback((e: React.DragEvent) => {
     const mime = isFile ? 'application/x-guanmo-file' : 'application/x-guanmo-folder'
     e.dataTransfer.setData(mime, JSON.stringify({ name: node.name, path: node.path }))
@@ -335,6 +358,7 @@ function FileTreeNode({
       <button
         data-file-tree-node="true"
         draggable
+        aria-expanded={node.type === 'directory' ? expanded : undefined}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
         onDragStart={handleDragStart}
@@ -354,7 +378,7 @@ function FileTreeNode({
             fill="none"
             stroke="currentColor"
             strokeWidth="2"
-            className={`flex-shrink-0 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
+            className={`flex-shrink-0 ${reducedMotion ? '' : 'transition-transform duration-200'} ${expanded ? 'rotate-90' : ''}`}
           >
             <path d="M9 18l6-6-6-6" />
           </svg>
@@ -389,21 +413,9 @@ function FileTreeNode({
         <ContextMenu position={contextMenu} onClose={() => setContextMenu(null)} minWidth={176} maxWidth={176}>
           <ContextMenuGroupTitle variant="strong">文件操作</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => { rename.startRename(node.path, node.name); setContextMenu(null) }}>重命名</ContextMenuItem>
-          <ContextMenuItem onClick={async () => {
-            if (!window.confirm(`确认删除“${node.name}”吗？此操作不可恢复。`)) return
-            setContextMenu(null)
-            try {
-              await removeFileEntry(node.path)
-              if (isFile) {
-                const active = useEditorStore.getState().tabs.find((tab) => isSameFilePath(tab.filePath, node.path))
-                if (active) useEditorStore.getState().closeTab(active.id)
-              }
-              onRefreshWorkspace?.()
-              toast.success('已删除文件')
-            } catch (err) {
-              toast.error(err instanceof Error ? err.message : '删除文件失败')
-            }
-          }}>{isFile ? '删除文件' : '删除文件夹'}</ContextMenuItem>
+          {isFile && (
+            <ContextMenuItem onClick={() => void handleRevealFile()}>打开文件位置</ContextMenuItem>
+          )}
           <ContextMenuItem onClick={handleSaveAs}>另存为</ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuGroupTitle variant="strong">AI 助手</ContextMenuGroupTitle>
@@ -478,8 +490,8 @@ function FileTreeNode({
       )}
 
       {/* Children */}
-      {node.type === 'directory' && expanded && node.children && (
-        <div>
+      {node.type === 'directory' && node.children && (
+        <TreeCollapse open={expanded} reducedMotion={reducedMotion} immediate={immediateCollapse}>
           {node.children.map((child) => (
             <FileTreeNode
               key={child.path}
@@ -490,9 +502,11 @@ function FileTreeNode({
               onToggleDirectory={onToggleDirectory}
               onOpenFile={onOpenFile}
               onRefreshWorkspace={onRefreshWorkspace}
+              reducedMotion={reducedMotion}
+              immediateCollapse={immediateCollapse}
             />
           ))}
-        </div>
+        </TreeCollapse>
       )}
     </div>
   )

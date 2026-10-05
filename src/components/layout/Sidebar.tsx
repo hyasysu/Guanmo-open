@@ -31,6 +31,8 @@ interface SidebarProps {
 
 export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpenSearch }: SidebarProps) {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
+  const sidebarSectionExpanded = useAppStore((s) => s.sidebarSectionExpanded)
+  const setSidebarSectionExpanded = useAppStore((s) => s.setSidebarSectionExpanded)
   const addWorkspaceRoot = useAppStore((s) => s.addWorkspaceRoot)
   const recentFiles = useEditorStore((s) => s.recentFiles).filter((file) => isWorkspaceDisplayFile(file.path))
   const favorites = useEditorStore((s) => s.favorites).filter(isWorkspaceDisplayFile)
@@ -131,43 +133,46 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
 
   if (collapsed) {
     return (
-      <div className="animal-cursor gm-instant-color w-14 flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col items-center py-3 gap-2">
-        <SidebarIcon label="展开侧边栏" onClick={toggleSidebar} tourTarget="sidebar-toggle">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-        </SidebarIcon>
-        <SidebarIcon label="打开文件" onClick={handleOpenFile} tourTarget="open-file">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-            <path d="M14 2v6h6" />
-          </svg>
-        </SidebarIcon>
-        <SidebarIcon label="搜索" onClick={onOpenSearch}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8" />
-            <path d="M21 21l-4.35-4.35" />
-          </svg>
-        </SidebarIcon>
-        <SidebarIcon
-          label="打开文件夹"
-          onClick={handleOpenFolder}
-          disabled={!isTauri() && !browserFileSystem}
-          title={!isTauri() && !browserFileSystem ? '当前浏览器不支持目录工作区' : undefined}
-          tourTarget="open-folder"
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
-            <path d="M12 11v6M9 14l3-3 3 3" />
-          </svg>
-        </SidebarIcon>
-        <div className="flex-1" />
-        <SidebarIcon label="设置" onClick={onOpenSettings} tourTarget="settings">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
-          </svg>
-        </SidebarIcon>
+      <div
+        className="animal-cursor gm-instant-color gm-layout-sidebar flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col items-center py-3 gap-2"
+        style={{ width: collapsed ? 56 : width }}
+      >
+          <SidebarIcon label="展开侧边栏" onClick={toggleSidebar} tourTarget="sidebar-toggle">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </SidebarIcon>
+          <SidebarIcon label="打开文件" onClick={handleOpenFile} tourTarget="open-file">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+              <path d="M14 2v6h6" />
+            </svg>
+          </SidebarIcon>
+          <SidebarIcon label="搜索" onClick={onOpenSearch}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8" />
+              <path d="M21 21l-4.35-4.35" />
+            </svg>
+          </SidebarIcon>
+          <SidebarIcon
+            label="打开文件夹"
+            onClick={handleOpenFolder}
+            disabled={!isTauri() && !browserFileSystem}
+            title={!isTauri() && !browserFileSystem ? '当前浏览器不支持目录工作区' : undefined}
+            tourTarget="open-folder"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+              <path d="M12 11v6M9 14l3-3 3 3" />
+            </svg>
+          </SidebarIcon>
+          <div className="flex-1" />
+          <SidebarIcon label="设置" onClick={onOpenSettings} tourTarget="settings">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+            </svg>
+          </SidebarIcon>
       </div>
     )
   }
@@ -175,7 +180,7 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
   return (
     <div
       data-product-tour="sidebar-panel"
-      className="animal-cursor gm-instant-color relative flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col overflow-hidden"
+      className="animal-cursor gm-instant-color gm-layout-sidebar relative flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col overflow-hidden"
       style={{ width }}
     >
       <div
@@ -183,7 +188,7 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
         onMouseDown={onResizeStart}
       />
       {/* Header */}
-      <div className="h-11 flex items-center px-4 border-b border-gm-border-subtle">
+      <div className="gm-layout-sidebar-fade-in h-11 flex items-center px-4 border-b border-gm-border-subtle">
         <span className="text-body font-bold text-gm-text tracking-wide">
           文件侧边栏
         </span>
@@ -204,14 +209,19 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
       {/* File Sections with Collapse */}
       <div className="flex-1 overflow-y-auto p-3 pb-16 space-y-2">
         <Collapse
+          className="gm-layout-sidebar-fade-in"
           question="最近文件"
-          defaultExpanded
+          expanded={sidebarSectionExpanded.recentFiles}
+          onExpandedChange={(expanded) => setSidebarSectionExpanded('recentFiles', expanded)}
           answer={
             <RecentFiles files={recentFiles} onOpen={handleOpenRecentFile} onRefreshWorkspace={refreshWorkspaces} />
           }
         />
         <Collapse
+          className="gm-layout-sidebar-fade-in"
           question="收藏"
+          expanded={sidebarSectionExpanded.favorites}
+          onExpandedChange={(expanded) => setSidebarSectionExpanded('favorites', expanded)}
           answer={
             favoriteFiles.length > 0 ? (
               <FavoriteFiles files={favoriteFiles} onRefreshWorkspace={refreshWorkspaces} />
@@ -223,8 +233,10 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
           }
         />
         <Collapse
+          className="gm-layout-sidebar-fade-in"
           question="工作区"
-          defaultExpanded
+          expanded={sidebarSectionExpanded.workspace}
+          onExpandedChange={(expanded) => setSidebarSectionExpanded('workspace', expanded)}
           answer={
             <WorkspaceRoots onOpenFile={(path) => { void handleOpenFileFromTree(path) }} />
           }
@@ -232,7 +244,7 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
       </div>
 
       {/* Bottom Actions */}
-      <div className="absolute bottom-0 left-0 right-0 z-20 bg-gm-surface/70 shadow-[0_-8px_24px_0_rgba(61,52,40,0.08)] backdrop-blur-xl">
+      <div className="gm-layout-sidebar-fade-in absolute bottom-0 left-0 right-0 z-20 bg-gm-surface/70 shadow-[0_-8px_24px_0_rgba(61,52,40,0.08)] backdrop-blur-xl">
         <Divider type="line-brown" />
         <div className="flex items-center gap-1 p-2">
           <div data-product-tour="open-file">

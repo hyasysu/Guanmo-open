@@ -6,6 +6,7 @@ import { useFileOperations } from '@/hooks/useFileOperations'
 import { Modal } from 'animal-island-ui'
 import { exportMarkdownAsHtml } from '@/services/markdownExport'
 import { Sidebar } from './Sidebar'
+import './layoutMotion.css'
 import { StatusBar } from './StatusBar'
 import { TitleBar } from './TitleBar'
 import { OPEN_EDITOR_SEARCH_EVENT } from '@/services/editorEvents'
@@ -144,7 +145,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
   const toggleDiffPreview = useEditorStore((s) => s.toggleDiffPreview)
   const setViewMode = useEditorStore((s) => s.setViewMode)
   const { handleNewFile, handleOpenFile, handleSaveFile } = useFileOperations()
-  const { isFullscreen, toggleFullscreen, exitFullscreen } = useFullscreen()
+  const { isFullscreen, toggleFullscreen, enterFullscreen, exitFullscreen } = useFullscreen()
   const customCursorEnabled = useSettingsStore((s) => s.appearance.customCursorEnabled)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [commandPaletteMode, setCommandPaletteMode] = useState<'commands' | 'files'>('commands')
@@ -159,6 +160,8 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
   const [productTourStep, setProductTourStep] = useState(0)
   const productTourSteps = useMemo(() => productTourTopic === 'topics' ? [] : getProductTourSteps(productTourTopic, getRuntimeCapabilities().isWeb), [productTourTopic])
   const productTourSnapshotRef = useRef<{
+    isFullscreen: boolean
+    fullscreenFileDrawerOpen: boolean
     activeTabId: string | null
     viewMode: ReturnType<typeof useEditorStore.getState>['viewMode']
     previewVisible: boolean
@@ -192,6 +195,20 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     latestPosition: FullscreenAiPosition
     dragged: boolean
   } | null>(null)
+  const productTourFullscreenTaskRef = useRef<Promise<void> | null>(null)
+  const setProductTourFullscreen = useCallback((next: boolean) => {
+    const change = () => next ? enterFullscreen() : exitFullscreen()
+    const task = productTourFullscreenTaskRef.current
+      ? productTourFullscreenTaskRef.current.then(change, change)
+      : change()
+    productTourFullscreenTaskRef.current = task
+    void task.then(() => {
+      if (productTourFullscreenTaskRef.current === task) productTourFullscreenTaskRef.current = null
+    }, () => {
+      if (productTourFullscreenTaskRef.current === task) productTourFullscreenTaskRef.current = null
+    })
+    return task
+  }, [enterFullscreen, exitFullscreen])
   const fullscreenAiResizeRef = useRef<{
     pointerId: number
     startX: number
@@ -227,6 +244,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     isSidebarResizing.current = true
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
+    document.body.classList.add('gm-layout-resizing')
   }, [])
 
   const finishProductTour = useCallback(() => {
@@ -249,25 +267,31 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
       })
       const app = useAppStore.getState()
       if (app.sidebarCollapsed !== snapshot.sidebarCollapsed) app.toggleSidebar()
-      if (app.aiPanelOpen !== snapshot.aiPanelOpen) app.toggleAiPanel()
-      if (snapshot.aiPanelOpen) {
-        if (snapshot.aiPanelView === 'artifacts') requestOpenReadingArtifacts()
-        else if (snapshot.aiPanelView === 'reminders') requestOpenReadingReminders()
-        else requestOpenAiChat()
-      }
       setSettingsSection(snapshot.settingsSection)
       setSettingsOpen(snapshot.settingsOpen)
+      void setProductTourFullscreen(snapshot.isFullscreen).then(() => {
+        const restoredApp = useAppStore.getState()
+        if (restoredApp.aiPanelOpen !== snapshot.aiPanelOpen) restoredApp.toggleAiPanel()
+        if (snapshot.aiPanelOpen) {
+          if (snapshot.aiPanelView === 'artifacts') requestOpenReadingArtifacts()
+          else if (snapshot.aiPanelView === 'reminders') requestOpenReadingReminders()
+          else requestOpenAiChat()
+        }
+        setFullscreenFileDrawerOpen(snapshot.fullscreenFileDrawerOpen)
+      })
     }
     productTourSnapshotRef.current = null
     setProductTourTopic('overview')
     setProductTourStep(0)
-  }, [])
+  }, [setProductTourFullscreen])
 
   const startProductTour = useCallback(() => {
     if (productTourOpen) return
     const editor = useEditorStore.getState()
     const createdDemoTab = editor.tabs.length === 0
     productTourSnapshotRef.current = {
+      isFullscreen: useAppStore.getState().isFullscreen,
+      fullscreenFileDrawerOpen,
       activeTabId: editor.activeTabId,
       viewMode: editor.viewMode,
       previewVisible: editor.previewVisible,
@@ -293,10 +317,18 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
       })
     }
     editor.setViewMode('preview')
+    if (useAppStore.getState().isFullscreen) setProductTourFullscreen(false)
     setProductTourTopic('overview')
     setProductTourStep(0)
     setProductTourOpen(true)
-  }, [productTourOpen, settingsOpen, settingsSection])
+  }, [fullscreenFileDrawerOpen, productTourOpen, setProductTourFullscreen, settingsOpen, settingsSection])
+
+  const changeProductTourTopic = useCallback((topic: ProductTourTopic | 'topics') => {
+    setProductTourFullscreen(topic === 'fullscreen')
+    setFullscreenFileDrawerOpen(false)
+    setProductTourTopic(topic)
+    setProductTourStep(0)
+  }, [setProductTourFullscreen])
 
   const tourSurface = productTourSteps[productTourStep]?.surface
   useEffect(() => {
@@ -309,6 +341,10 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
       if (app.aiPanelOpen) app.closeAiPanel()
       return
     }
+    if (tourSurface === 'fullscreen') {
+      if (!app.sidebarCollapsed) app.toggleSidebar()
+      return
+    }
     const sidebar = tourSurface === 'sidebar'
     if (app.sidebarCollapsed === sidebar) app.toggleSidebar()
     const ai = tourSurface === 'ai-chat' || tourSurface === 'artifacts'
@@ -317,6 +353,17 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     if (tourSurface === 'ai-chat') requestOpenAiChat()
     if (tourSurface === 'artifacts') requestOpenReadingArtifacts()
   }, [productTourOpen, tourSurface])
+
+  useEffect(() => {
+    if (!productTourOpen || productTourTopic !== 'fullscreen' || !isFullscreen) return
+    const app = useAppStore.getState()
+    if (productTourStep === 1) {
+      if (!app.aiPanelOpen) app.toggleAiPanel()
+    } else if (app.aiPanelOpen) {
+      app.closeAiPanel()
+    }
+    setFullscreenFileDrawerOpen(productTourStep === 3)
+  }, [isFullscreen, productTourOpen, productTourStep, productTourTopic])
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -330,6 +377,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
         isSidebarResizing.current = false
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
+        document.body.classList.remove('gm-layout-resizing')
       }
     }
 
@@ -338,6 +386,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     return () => {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
+      document.body.classList.remove('gm-layout-resizing')
     }
   }, [setSidebarWidth])
 
@@ -349,6 +398,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     isAiPanelResizing.current = true
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
+    document.body.classList.add('gm-layout-resizing')
   }, [])
 
   useEffect(() => {
@@ -365,6 +415,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
         isAiPanelResizing.current = false
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
+        document.body.classList.remove('gm-layout-resizing')
       }
     }
 
@@ -373,6 +424,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     return () => {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
+      document.body.classList.remove('gm-layout-resizing')
     }
   }, [setAiPanelWidth])
 
@@ -487,6 +539,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
   useEffect(() => {
     if (!isFullscreen || !aiPanelOpen) return
     const handlePointerDown = (e: PointerEvent) => {
+      if ((e.target as Element | null)?.closest('.gm-product-tour')) return
       if (fullscreenAiPanelRef.current?.contains(e.target as Node)) return
       useAppStore.getState().closeAiPanel()
     }
@@ -661,24 +714,30 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
         </div>
 
         {/* AI Panel */}
-        {!isFullscreen && aiPanelOpen && (
+        {!isFullscreen && (
           <div
-            data-product-tour="ai-panel"
-            className="border-l border-gm-border flex-shrink-0 animate-slideInRight relative"
-            style={{ width: aiPanelWidth, contain: 'layout' }}
+            data-product-tour={aiPanelOpen ? 'ai-panel' : undefined}
+            aria-hidden={!aiPanelOpen}
+            className={`gm-layout-ai-panel flex-shrink-0 relative ${aiPanelOpen ? 'border-l border-gm-border' : 'gm-layout-ai-panel--closed'}`}
+            style={{ width: aiPanelOpen ? aiPanelWidth : 0, contain: 'layout' }}
           >
-            {/* Resize handle */}
-            <div
-              className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize z-10 hover:bg-gm-primary/30 transition-colors"
-              onMouseDown={handleResizeStart}
-            />
-            <Suspense fallback={<AiPanelFallback />}><AiPanel /></Suspense>
+            {aiPanelOpen && (
+              <>
+                {/* Resize handle */}
+                <div
+                  className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize z-10 hover:bg-gm-primary/30 transition-colors"
+                  onMouseDown={handleResizeStart}
+                />
+                <Suspense fallback={<AiPanelFallback />}><AiPanel /></Suspense>
+              </>
+            )}
           </div>
         )}
       </div>
 
       {isFullscreen && (
         <FullscreenControlBar
+          productTourStep={productTourOpen && productTourTopic === 'fullscreen' ? productTourStep : null}
           fileDrawerOpen={fullscreenFileDrawerOpen}
           onToggleFileDrawer={toggleFullscreenFileDrawer}
           onCloseFileDrawer={closeFullscreenFileDrawer}
@@ -695,10 +754,12 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
         />
       )}
 
-      {isFullscreen && aiPanelOpen && (
+      {isFullscreen && (
         <div
+          data-fullscreen-ai-panel="true"
+          aria-hidden={!aiPanelOpen}
           ref={fullscreenAiPanelRef}
-          className="fixed z-[45] flex flex-col overflow-hidden rounded-2xl border border-gm-border bg-gm-surface/92 shadow-lg backdrop-blur-xl animate-slideInRight"
+          className={`gm-layout-ai-panel gm-layout-ai-panel--fullscreen fixed z-[45] flex flex-col overflow-hidden rounded-2xl border border-gm-border bg-gm-surface/92 shadow-lg backdrop-blur-xl ${aiPanelOpen ? '' : 'gm-layout-ai-panel--closed'}`}
           style={{
             left: fullscreenAiPosition.x,
             top: fullscreenAiPosition.y,
@@ -707,28 +768,32 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
             contain: 'layout',
           }}
         >
-          <div className="min-h-0 min-w-0 flex-1">
-            <Suspense fallback={<AiPanelFallback />}><AiPanel
-              fullscreenDragHandleProps={{
-                onPointerDown: handleFullscreenAiDragStart,
-                onPointerMove: handleFullscreenAiDragMove,
-                onPointerUp: handleFullscreenAiDragEnd,
-                onPointerCancel: handleFullscreenAiDragEnd,
-            }}
-          /></Suspense>
-          </div>
-          <div
-            aria-label="调整 AI 助手窗口大小"
-            className="absolute bottom-0 right-0 z-30 flex h-5 w-5 cursor-grab items-center justify-center text-gm-text-secondary touch-none hover:text-gm-primary active:cursor-grabbing"
-            onPointerDown={handleFullscreenAiResizeStart}
-            onPointerMove={handleFullscreenAiResizeMove}
-            onPointerUp={handleFullscreenAiResizeEnd}
-            onPointerCancel={handleFullscreenAiResizeEnd}
-          >
-            <svg className="rotate-90" width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
-              <path d="M5 5l10 10M10 5l5 5" />
-            </svg>
-          </div>
+          {aiPanelOpen && (
+            <>
+              <div className="min-h-0 min-w-0 flex-1">
+                <Suspense fallback={<AiPanelFallback />}><AiPanel
+                  fullscreenDragHandleProps={{
+                    onPointerDown: handleFullscreenAiDragStart,
+                    onPointerMove: handleFullscreenAiDragMove,
+                    onPointerUp: handleFullscreenAiDragEnd,
+                    onPointerCancel: handleFullscreenAiDragEnd,
+                  }}
+                /></Suspense>
+              </div>
+              <div
+                aria-label="调整 AI 助手窗口大小"
+                className="absolute bottom-0 right-0 z-30 flex h-5 w-5 cursor-grab items-center justify-center text-gm-text-secondary touch-none hover:text-gm-primary active:cursor-grabbing"
+                onPointerDown={handleFullscreenAiResizeStart}
+                onPointerMove={handleFullscreenAiResizeMove}
+                onPointerUp={handleFullscreenAiResizeEnd}
+                onPointerCancel={handleFullscreenAiResizeEnd}
+              >
+                <svg className="rotate-90" width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+                  <path d="M5 5l10 10M10 5l5 5" />
+                </svg>
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -777,7 +842,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
         steps={productTourSteps}
         stepIndex={productTourStep}
         onStepChange={setProductTourStep}
-        onTopicChange={(topic) => { setProductTourTopic(topic); setProductTourStep(0) }}
+        onTopicChange={changeProductTourTopic}
         onClose={finishProductTour}
       /></Suspense>}
 

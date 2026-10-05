@@ -62,7 +62,20 @@ export async function readFile(path: string, options: ReadFileOptions = {}): Pro
   const { invoke } = await import('@tauri-apps/api/core')
   const payload: { path: string; maxBytes?: number } = { path: nativePath }
   if (options.maxBytes !== undefined) payload.maxBytes = options.maxBytes
-  return invoke<string>('read_text_file_by_path', payload)
+  const startedAt = performance.now()
+  try {
+    const content = await invoke<string>('read_text_file_by_path', payload)
+    const durationMs = performance.now() - startedAt
+    if (durationMs >= 200) {
+      void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+        recordDiagnostic('file.read_slow', 'slow', durationMs)).catch(() => undefined)
+    }
+    return content
+  } catch (error) {
+    void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+      recordDiagnostic('file.read_failed', 'error', performance.now() - startedAt)).catch(() => undefined)
+    throw error
+  }
 }
 
 export interface LegacyFileAccessMigrationResult {
@@ -116,20 +129,36 @@ export async function prepareMarkdownAssetsDir(markdownPath: string): Promise<vo
   await invoke<void>('prepare_markdown_assets_dir', { markdownPath: nativePath })
 }
 
+export async function prepareMarkdownImage(markdownPath: string, imagePath: string): Promise<string> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  await waitForFileAccessRestore()
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<string>('prepare_markdown_image', {
+    markdownPath: toNativeFilePath(markdownPath),
+    imagePath: toNativeFilePath(imagePath),
+  })
+}
+
 export async function writeFile(path: string, content: string): Promise<void> {
   if (!isTauri()) throw new Error('Not running in Tauri')
   await waitForFileAccessRestore()
   const nativePath = toNativeFilePath(path)
   const { invoke } = await import('@tauri-apps/api/core')
-  return invoke<void>('write_text_file_by_path', { path: nativePath, content })
+  try {
+    return await invoke<void>('write_text_file_by_path', { path: nativePath, content })
+  } catch (error) {
+    void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+      recordDiagnostic('file.write_failed', 'error')).catch(() => undefined)
+    throw error
+  }
 }
 
-export async function readBinaryFile(path: string): Promise<Uint8Array> {
+export async function readBinaryFile(path: string, options: ReadFileOptions = {}): Promise<Uint8Array> {
   if (!isTauri()) throw new Error('Not running in Tauri')
   await waitForFileAccessRestore()
   const nativePath = toNativeFilePath(path)
   const { invoke } = await import('@tauri-apps/api/core')
-  const bytes = await invoke<number[]>('read_binary_file_by_path', { path: nativePath })
+  const bytes = await invoke<number[]>('read_binary_file_by_path', { path: nativePath, maxBytes: options.maxBytes })
   return new Uint8Array(bytes)
 }
 
@@ -139,6 +168,50 @@ export async function writeBinaryFile(path: string, content: Uint8Array): Promis
   const nativePath = toNativeFilePath(path)
   const { invoke } = await import('@tauri-apps/api/core')
   return invoke<void>('write_binary_file_by_path', { path: nativePath, content: Array.from(content) })
+}
+
+export interface LocalBackgroundRecord {
+  id: string
+  label: string
+  extension: string
+}
+
+export interface BackgroundLibraryRecord {
+  downloadedOfficialIds: string[]
+  localBackgrounds: LocalBackgroundRecord[]
+}
+
+export async function listReadingBackgrounds(): Promise<BackgroundLibraryRecord> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<BackgroundLibraryRecord>('list_reading_backgrounds')
+}
+
+export async function readReadingBackground(id: string, thumbnail = false): Promise<number[]> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<number[]>('read_reading_background', { id, thumbnail })
+}
+
+export async function importReadingBackgroundFile(path: string, id: string, thumbnail: number[]): Promise<LocalBackgroundRecord> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  await waitForFileAccessRestore()
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<LocalBackgroundRecord>('import_reading_background', { path: toNativeFilePath(path), id, thumbnail })
+}
+
+export async function deleteReadingBackground(id: string): Promise<void> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<void>('delete_reading_background', { id })
+}
+
+export async function downloadReadingBackground(id: string, onProgress: (percent: number) => void): Promise<void> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  const { Channel, invoke } = await import('@tauri-apps/api/core')
+  const progress = new Channel<number>()
+  progress.onmessage = onProgress
+  return invoke<void>('download_reading_background', { id, progress })
 }
 
 export async function createTextFile(path: string): Promise<void> {

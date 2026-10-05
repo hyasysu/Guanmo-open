@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
+import { motion, useReducedMotion } from 'motion/react'
 import { invoke } from '@tauri-apps/api/core'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { exportMarkdownAsHtml, exportMarkdownAsPdf } from '@/services/markdownExport'
@@ -43,6 +44,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
   const draggedTabIdRef = useRef<string | null>(null)
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null
   const canReloadActiveTab = Boolean(activeTab?.filePath) && isTauri()
+  const reducedMotion = useReducedMotion() ?? false
 
   const handleContextMenu = useCallback((e: React.MouseEvent, tabId: string) => {
     e.preventDefault()
@@ -149,11 +151,6 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
             } catch (err) {
               toast.error(err instanceof Error ? err.message : String(err || '打开文件位置失败'))
             }
-          }
-          break
-        case 'copyContent':
-          if (contextTab) {
-            navigator.clipboard.writeText(contextTab.content)
           }
           break
         case 'addToAi':
@@ -317,7 +314,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
                 onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDrop(e, tab.id)}
                 onDragEnd={handleDragEnd}
-                className={`h-full px-3 flex items-center gap-1.5 text-caption border-r border-gm-border-subtle group select-none cursor-pointer ${
+                className={`relative h-full px-3 flex items-center gap-1.5 text-caption border-r border-gm-border-subtle group select-none cursor-pointer ${
                   activeTabId === tab.id
                     ? 'bg-gm-canvas text-gm-text font-bold'
                     : 'text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover'
@@ -326,8 +323,17 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
                     ? 'border-l-2 border-l-gm-primary'
                     : ''
                 }`}
-                style={activeTabId === tab.id ? { borderBottom: '2px solid var(--gm-active-indicator)' } : undefined}
               >
+                {activeTabId === tab.id && (
+                  <motion.span
+                    layoutId="tab-active-indicator"
+                    transition={reducedMotion ? { duration: 0 } : { duration: 0.2, ease: [0.23, 1, 0.32, 1] }}
+                    aria-hidden="true"
+                    data-tab-active-indicator
+                    className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-gm-primary opacity-100"
+                    style={{ backgroundColor: 'var(--gm-active-indicator)' }}
+                  />
+                )}
                 {rename.isRenaming(tab.id) ? (
                   <input
                     autoFocus
@@ -525,10 +531,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
             添加文件到 AI 上下文
           </ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuGroupTitle>复制与索引</ContextMenuGroupTitle>
-          <ContextMenuItem onClick={() => handleContextAction('copyContent')}>
-            复制内容
-          </ContextMenuItem>
+          <ContextMenuGroupTitle>文件与索引</ContextMenuGroupTitle>
           {contextTab?.filePath && (
             <ContextMenuItem onClick={() => handleContextAction('copyPath')}>
               复制路径

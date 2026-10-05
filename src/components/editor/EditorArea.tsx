@@ -549,6 +549,7 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
     getStoredEditorTop,
     saveEditorPositionForTab,
     savePreviewReadingPosition,
+    schedulePreviewReadingPositionSave,
     allowPreviewPositionUpdates,
     scheduleFlush,
     restoreEditorReadingPosition,
@@ -1221,16 +1222,14 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
     if (viewModeRef.current === 'edit-preview' && scrollSyncSessionRef.current.source === 'editor') return
     if (isRestoringScrollRef.current) return
     if (viewModeRef.current === 'edit-preview') setTocFocus('preview')
-    savePreviewReadingPosition(activeTab.id, leftPreviewRef.current, leftMarkdownPreviewRef.current, 'left')
-    scheduleFlush()
-  }, [activeTab?.id, savePreviewReadingPosition, scheduleFlush])
+    schedulePreviewReadingPositionSave(activeTab.id, leftPreviewRef.current, leftMarkdownPreviewRef.current, 'left')
+  }, [activeTab?.id, schedulePreviewReadingPositionSave])
 
   const handleRightPreviewScroll = useCallback(() => {
     if (!rightTab?.id) return
     if (isRestoringScrollRef.current) return
-    savePreviewReadingPosition(rightTab.id, rightPreviewRef.current, rightMarkdownPreviewRef.current, 'right')
-    scheduleFlush()
-  }, [rightTab?.id, savePreviewReadingPosition, scheduleFlush])
+    schedulePreviewReadingPositionSave(rightTab.id, rightPreviewRef.current, rightMarkdownPreviewRef.current, 'right')
+  }, [rightTab?.id, schedulePreviewReadingPositionSave])
 
   const jumpToLine = useCallback((line: number) => {
     const view = editorViewRef.current
@@ -1683,7 +1682,8 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
                 ref={leftPreviewRef}
                 data-product-tour="preview-area"
                 className={`${leftPreviewVisible ? 'min-w-0 flex-1' : 'hidden'} ${viewMode === 'dual-preview' ? 'border-r border-gm-border-subtle' : ''} ${viewMode === 'edit-preview' ? 'gm-preview-heading-clickable' : ''} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} ${isFullscreen && viewMode === 'edit-preview' ? 'gm-fullscreen-content-split-right' : isFullscreen && viewMode === 'dual-preview' ? 'gm-fullscreen-content-split-left' : ''} ${fullscreenTocExpanded && viewMode !== 'dual-preview' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-y-auto overflow-x-hidden select-text bg-gm-surface relative`}
-                style={{ overflowAnchor: 'none', ...(leftPreviewMasked ? { visibility: 'hidden' } : {}) }}
+                style={{ overflowAnchor: 'none', ...(!isFullscreen && leftPreviewMasked ? { visibility: 'hidden' } : {}) }}
+                data-preview-masked={isFullscreen && leftPreviewMasked ? '' : undefined}
                 aria-hidden={!leftPreviewVisible}
                 onScroll={handleLeftPreviewScroll}
                 onWheelCapture={allowLeftPreviewPositionUpdates}
@@ -1718,7 +1718,7 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
                     isVisible={leftPreviewVisible && previewContentReady}
                     onFirstVisible={() => {
                       const documentId = activeTab?.id ?? null
-                      if (leftPreviewRef.current?.style.visibility === 'hidden') {
+                      if (leftPreviewRef.current?.style.visibility === 'hidden' || leftPreviewRef.current?.hasAttribute('data-preview-masked')) {
                         pendingMaskedFirstVisibleRef.current = documentId
                       } else {
                         handlePreviewFirstVisible(documentId)
@@ -1742,7 +1742,8 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
               key={`right-${rightTab?.id ?? 'none'}`}
               ref={rightPreviewRef}
               className={`${viewMode === 'dual-preview' ? 'min-w-0 flex-1' : 'hidden'} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} ${isFullscreen && viewMode === 'dual-preview' ? 'gm-fullscreen-content-split-right' : ''} ${fullscreenTocExpanded && viewMode === 'dual-preview' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-y-auto overflow-x-hidden select-text bg-gm-surface relative ${rightPaneDragOver ? 'ring-2 ring-inset ring-gm-primary/40' : ''}`}
-              style={{ overflowAnchor: 'none', ...(rightPreviewMasked ? { visibility: 'hidden' } : {}) }}
+              style={{ overflowAnchor: 'none', ...(!isFullscreen && rightPreviewMasked ? { visibility: 'hidden' } : {}) }}
+              data-preview-masked={isFullscreen && rightPreviewMasked ? '' : undefined}
               aria-hidden={viewMode !== 'dual-preview'}
               onScroll={handleRightPreviewScroll}
               onWheelCapture={allowRightPreviewPositionUpdates}
