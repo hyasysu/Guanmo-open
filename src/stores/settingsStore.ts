@@ -65,6 +65,7 @@ interface AppearanceSettings extends AppearanceConfigV1 {
   aiAssistantFontSize: AiAssistantFontSize
   fullscreenTransitionEnabled: boolean
   sendMessageAnimationEnabled: boolean
+  fullscreenOptionAnimationEnabled: boolean
   lastLightThemeId: NonDarkThemeId
   fullscreenBackgroundPath: string | null
   fullscreenBackgroundOpacity: number
@@ -167,7 +168,8 @@ const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   aiAvatarStyle: 'sprite',
   aiAssistantFontSize: 14,
   fullscreenTransitionEnabled: true,
-  sendMessageAnimationEnabled: false,
+  sendMessageAnimationEnabled: true,
+  fullscreenOptionAnimationEnabled: true,
   lastLightThemeId: 'warm',
   fullscreenBackgroundPath: null,
   fullscreenBackgroundOpacity: 40,
@@ -182,7 +184,7 @@ function resolveAiAssistantFontSize(value: unknown): AiAssistantFontSize {
 }
 
 const DEFAULT_WEB_SEARCH: WebSearchConfig = {
-  provider: 'duckduckgo',
+  provider: 'tavily',
   apiKey: '',
   maxResults: 5,
   customUrl: '',
@@ -462,6 +464,9 @@ export const useSettingsStore = create<SettingsState>()(
         const patchedWebSearch = saved.webSearch ? {
           ...current.webSearch,
           ...saved.webSearch,
+          provider: (saved.webSearch as { provider?: string }).provider === 'duckduckgo'
+            ? 'tavily'
+            : saved.webSearch.provider,
           apiKey: '',
           timeout: normalizeRequestTimeoutMs(saved.webSearch.timeout),
         } : current.webSearch
@@ -558,6 +563,9 @@ export const useSettingsStore = create<SettingsState>()(
               sendMessageAnimationEnabled: typeof savedAppearance.sendMessageAnimationEnabled === 'boolean'
                 ? savedAppearance.sendMessageAnimationEnabled
                 : current.appearance.sendMessageAnimationEnabled,
+              fullscreenOptionAnimationEnabled: typeof savedAppearance.fullscreenOptionAnimationEnabled === 'boolean'
+                ? savedAppearance.fullscreenOptionAnimationEnabled
+                : current.appearance.fullscreenOptionAnimationEnabled,
               fullscreenBackgroundPath: typeof savedAppearance.fullscreenBackgroundPath === 'string' && savedAppearance.fullscreenBackgroundPath
                 ? savedAppearance.fullscreenBackgroundPath
                 : null,

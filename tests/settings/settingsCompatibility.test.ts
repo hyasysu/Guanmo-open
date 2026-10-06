@@ -42,21 +42,28 @@ describe('设置兼容', () => {
       assistantVisualId: 'sprite',
       aiAssistantFontSize: 14,
       fullscreenTransitionEnabled: true,
-      sendMessageAnimationEnabled: false,
+      sendMessageAnimationEnabled: true,
+      fullscreenOptionAnimationEnabled: true,
       motionPreference: 'system',
     })
-    expect(state.webSearch).toMatchObject({ provider: 'duckduckgo', maxResults: 5, timeout: 60000 })
+    expect(state.webSearch).toMatchObject({ provider: 'tavily', maxResults: 5, timeout: 60000 })
     expect(state.ai.timeout).toBe(60000)
     expect(state.ai.maxContextLength).toBe(8192)
     expect(state.ai.embedding.timeout).toBe(60000)
-    expect(state.aiShortcutActions).toHaveLength(6)
+    expect(state.aiShortcutActions).toHaveLength(5)
     expect(state.aiShortcutActions.map((action) => action.label)).toEqual([
-      'AI 解释这段',
-      'AI 结合上下文解释',
-      'AI 总结这段',
-      'AI 改写这段',
-      'AI 优化格式',
-      'AI 翻译',
+      '解释',
+      '结合上下文解释',
+      '翻译',
+      '联网搜索',
+      '检索知识库相关内容',
+    ])
+    expect(state.aiShortcutActions.map((action) => action.prompt)).toEqual([
+      '请解释这段内容',
+      '请结合上下文解释这段内容，优先读取选区附近内容，不要默认阅读全文',
+      '翻译，直接输出译文，并在关键词或专业术语后用括号标注其音标，不要添加任何解释。',
+      '联网搜索',
+      '检索知识库中与这有关的内容',
     ])
   })
 
@@ -83,7 +90,8 @@ describe('设置兼容', () => {
       aiAvatarStyle: 'sprite',
       aiAssistantFontSize: 14,
       fullscreenTransitionEnabled: true,
-      sendMessageAnimationEnabled: false,
+      sendMessageAnimationEnabled: true,
+      fullscreenOptionAnimationEnabled: true,
     })
   })
 
@@ -121,7 +129,7 @@ describe('设置兼容', () => {
     expect(persisted.state?.appearance?.aiAssistantFontSize).toBe(18)
   })
 
-  it('保留发送消息动画开关并对非法值回退关闭', async () => {
+  it('保留发送消息动画开关并对非法值回退开启', async () => {
     const enabledStore = await loadSettingsStore({ appearance: { sendMessageAnimationEnabled: true } })
     expect(enabledStore.getState().appearance.sendMessageAnimationEnabled).toBe(true)
 
@@ -130,7 +138,23 @@ describe('设置兼容', () => {
     expect(persisted.state?.appearance?.sendMessageAnimationEnabled).toBe(false)
 
     const invalidStore = await loadSettingsStore({ appearance: { sendMessageAnimationEnabled: 'true' } })
-    expect(invalidStore.getState().appearance.sendMessageAnimationEnabled).toBe(false)
+    expect(invalidStore.getState().appearance.sendMessageAnimationEnabled).toBe(true)
+  })
+
+  it('全屏选项动画默认开启，兼容旧配置并持久化显式选择', async () => {
+    const defaultStore = await loadSettingsStore()
+    expect(defaultStore.getState().appearance.fullscreenOptionAnimationEnabled).toBe(true)
+
+    const enabledStore = await loadSettingsStore({ appearance: { fullscreenOptionAnimationEnabled: true } })
+    expect(enabledStore.getState().appearance.fullscreenOptionAnimationEnabled).toBe(true)
+    enabledStore.getState().updateAppearanceSettings({ fullscreenOptionAnimationEnabled: false })
+    const persisted = JSON.parse(localStorage.getItem('guanmo-settings') || '{}') as { state?: { appearance?: { fullscreenOptionAnimationEnabled?: boolean } } }
+    expect(persisted.state?.appearance?.fullscreenOptionAnimationEnabled).toBe(false)
+
+    const missingStore = await loadSettingsStore({ appearance: { sendMessageAnimationEnabled: true } })
+    expect(missingStore.getState().appearance.fullscreenOptionAnimationEnabled).toBe(true)
+    const invalidStore = await loadSettingsStore({ appearance: { fullscreenOptionAnimationEnabled: 'true' } })
+    expect(invalidStore.getState().appearance.fullscreenOptionAnimationEnabled).toBe(true)
   })
 
   it('保留用户显式关闭快捷 AI 自动发送的设置', async () => {
@@ -303,7 +327,7 @@ describe('设置兼容', () => {
       editor: { fontSize: 18 },
     })
 
-    expect(store.getState().aiShortcutActions).toHaveLength(6)
+    expect(store.getState().aiShortcutActions).toHaveLength(5)
     expect(store.getState().editor.fontSize).toBe(18)
   })
 
@@ -334,7 +358,7 @@ describe('设置兼容', () => {
     const brokenStore = await loadSettingsStore({
       aiShortcutActions: [{ id: '', label: '', prompt: '' }],
     })
-    expect(brokenStore.getState().aiShortcutActions).toHaveLength(6)
+    expect(brokenStore.getState().aiShortcutActions).toHaveLength(5)
   })
 })
 

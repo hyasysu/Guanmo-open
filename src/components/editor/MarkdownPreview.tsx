@@ -1707,10 +1707,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
         )
       : null
     const anchorIndex = before?.startIndex ?? visible.startIndex
-    const anchorElement = blockRefs.current.get(anchorIndex)
-    const anchorTopBefore = anchorElement && container
-      ? anchorElement.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
-      : before?.blockTops[anchorIndex] ?? 0
+    // Compare model coordinates on both sides; DOM coordinates include pane padding and headers.
+    const anchorTopBefore = before?.blockTops[anchorIndex] ?? 0
     const previousHeights = measuredHeightsRef.current
     const nextHeights = new Map(previousHeights)
     const candidateIndices = new Set<number>()
@@ -2620,6 +2618,9 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
             <td {...props} className="px-4 py-2 border-b border-gm-border-subtle">
               {children}
             </td>
+          ),
+          svg: ({ node: _node, className, ...props }) => (
+            <svg {...props} className={['gm-markdown-embedded-svg', className].filter(Boolean).join(' ')} />
           ),
           img: ({ src, alt, title, width, height, node }) => {
             // eslint-disable-next-line react-hooks/rules-of-hooks

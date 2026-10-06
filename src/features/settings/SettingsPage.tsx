@@ -66,6 +66,7 @@ import { UsageActivity } from '@/features/settings/UsageActivity'
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/services/requestTimeout'
 import { AdvancedTimeoutSettings } from '@/features/settings/AdvancedTimeoutSettings'
 import { ThemeManager } from '@/features/settings/ThemeManager'
+import { DiagnosticsSettings } from '@/features/settings/DiagnosticsSettings'
 import { requestProductTour } from '@/features/productTour/productTourEvents'
 import { AssistantVisual } from '@/components/ai/AssistantVisual'
 import type { AssistantState } from '@/services/assistantState'
@@ -117,6 +118,7 @@ const TABS_CONFIG = [
   { key: 'ai-shortcuts', text: '快捷操作', children: <AiShortcutSettings /> },
   { key: 'shortcuts', text: '快捷键', children: <ShortcutSettings /> },
   { key: 'general', text: '通用', children: <GeneralSettings /> },
+  { key: 'diagnostics', text: '诊断', children: <DiagnosticsSettings /> },
 ]
 
 export function SettingsPage({ initialSection = null, onSectionChange }: { initialSection?: string | null; onSectionChange?: (section: string) => void }) {
@@ -1090,7 +1092,6 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
       <SettingField label="搜索引擎" description="Agent 联网搜索时使用的引擎">
         <Select
           options={[
-            { key: 'duckduckgo', label: 'DuckDuckGo（免费）' },
             { key: 'tavily', label: 'Tavily' },
             { key: 'serper', label: 'Serper（Google）' },
             { key: 'brave', label: 'Brave Search' },
@@ -1109,17 +1110,15 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
           />
         </SettingField>
       )}
-      {webSearch.provider !== 'duckduckgo' && (
-        <SettingField label="搜索 API Key" description={isTauri() ? '同样通过系统安全存储保存' : '填写后在顶部选择保存方式'}>
-          <ApiKeyInput
-            ariaLabel="联网搜索 API Key"
-            value={webSearch.apiKey}
-            onChange={(e) => updateWebSearchConfig({ apiKey: e.target.value })}
-            placeholder={webSearch.provider === 'tavily' ? 'tvly-...' : webSearch.provider === 'custom' ? '可选，用于 Authorization 头' : '...'}
-            disabled={!isTauri() && !webRuntimeSecrets.unlocked}
-          />
-        </SettingField>
-      )}
+      <SettingField label="搜索 API Key" description={isTauri() ? '同样通过系统安全存储保存' : '填写后在顶部选择保存方式'}>
+        <ApiKeyInput
+          ariaLabel="联网搜索 API Key"
+          value={webSearch.apiKey}
+          onChange={(e) => updateWebSearchConfig({ apiKey: e.target.value })}
+          placeholder={webSearch.provider === 'tavily' ? 'tvly-...' : webSearch.provider === 'custom' ? '可选，用于 Authorization 头' : '...'}
+          disabled={!isTauri() && !webRuntimeSecrets.unlocked}
+        />
+      </SettingField>
 
       {/* 测试连接 */}
       <div className="py-1 flex items-center gap-2">
@@ -1610,8 +1609,8 @@ function GeneralSettings() {
       modePerformancePolicy: 'balanced',
       defaultOpenMode: 'preview',
     })
-    updateAppearanceSettings({ customCursorEnabled: true, aiAvatarStyle: 'sprite', aiAssistantFontSize: 14, fullscreenTransitionEnabled: true, sendMessageAnimationEnabled: false, themeId: 'warm' })
-    updateWebSearchConfig({ provider: 'duckduckgo', apiKey: '', maxResults: 5, customUrl: '', timeout: DEFAULT_REQUEST_TIMEOUT_MS })
+    updateAppearanceSettings({ customCursorEnabled: true, aiAvatarStyle: 'sprite', aiAssistantFontSize: 14, fullscreenTransitionEnabled: true, sendMessageAnimationEnabled: true, fullscreenOptionAnimationEnabled: true, themeId: 'warm' })
+    updateWebSearchConfig({ provider: 'tavily', apiKey: '', maxResults: 5, customUrl: '', timeout: DEFAULT_REQUEST_TIMEOUT_MS })
     updateUsageTrackingSettings({ enabled: true })
     resetAiShortcutActions()
     toast.success('已恢复默认设置')
@@ -1789,6 +1788,9 @@ function GeneralSettings() {
       <SectionTitle>动效</SectionTitle>
       <SettingField label="全屏过渡动画" description="用轻微失焦遮盖全屏尺寸切换；系统启用减少动态效果时会自动跳过">
         <Switch checked={appearance.fullscreenTransitionEnabled} onChange={(v) => updateAppearanceSettings({ fullscreenTransitionEnabled: v })} />
+      </SettingField>
+      <SettingField label="全屏选项展开动画" description="边距、主题和背景面板从对应按钮展开；系统启用减少动态效果时会自动跳过">
+        <Switch checked={appearance.fullscreenOptionAnimationEnabled} onChange={(v) => updateAppearanceSettings({ fullscreenOptionAnimationEnabled: v })} />
       </SettingField>
       <SettingField label="发送消息动画" description="发送时让光点从按钮飞出并展开为消息；滚动消息列表会立即结束动画">
         <Switch checked={appearance.sendMessageAnimationEnabled} onChange={(v) => updateAppearanceSettings({ sendMessageAnimationEnabled: v })} />

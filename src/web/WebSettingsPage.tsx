@@ -330,10 +330,10 @@ function WebAiSettings() {
       <Sep />
       <SectionTitle>Web 搜索</SectionTitle>
       <SettingField label="搜索引擎" description="Agent 联网搜索时使用的引擎">
-        <Select options={[{ key: 'duckduckgo', label: 'DuckDuckGo（免费）' }, { key: 'tavily', label: 'Tavily' }, { key: 'serper', label: 'Serper（Google）' }, { key: 'brave', label: 'Brave Search' }, { key: 'custom', label: '自定义' }]} value={webSearch.provider} onChange={(value) => updateWebSearchConfig({ provider: value as WebSearchConfig['provider'] })} />
+        <Select options={[{ key: 'tavily', label: 'Tavily' }, { key: 'serper', label: 'Serper（Google）' }, { key: 'brave', label: 'Brave Search' }, { key: 'custom', label: '自定义' }]} value={webSearch.provider} onChange={(value) => updateWebSearchConfig({ provider: value as WebSearchConfig['provider'] })} />
       </SettingField>
       {webSearch.provider === 'custom' && <SettingField label="搜索 URL" description="搜索 API 的完整地址"><Input value={webSearch.customUrl || ''} onChange={(event) => updateWebSearchConfig({ customUrl: event.target.value })} placeholder="https://api.example.com/search" /></SettingField>}
-      {webSearch.provider !== 'duckduckgo' && <SettingField label="搜索 API Key" description="填写后在顶部选择保存方式"><ApiKeyInput ariaLabel="联网搜索 API Key" value={webSearch.apiKey} onChange={(event) => updateWebSearchConfig({ apiKey: event.target.value })} placeholder={webSearch.provider === 'tavily' ? 'tvly-...' : '...'} disabled={!runtime.unlocked} /></SettingField>}
+      <SettingField label="搜索 API Key" description="填写后在顶部选择保存方式"><ApiKeyInput ariaLabel="联网搜索 API Key" value={webSearch.apiKey} onChange={(event) => updateWebSearchConfig({ apiKey: event.target.value })} placeholder={webSearch.provider === 'tavily' ? 'tvly-...' : '...'} disabled={!runtime.unlocked} /></SettingField>
       <div className="flex items-center gap-2 py-1">
         <Button type="default" size="small" loading={searchTesting} onClick={() => void testSearch()}>测试连接</Button>
         {searchTestResult && <span className={searchTestResult.ok ? 'text-caption text-gm-success' : 'text-caption text-gm-error'}>{searchTestResult.ok ? '连接成功' : searchTestResult.message || '连接失败'}</span>}
@@ -391,6 +391,9 @@ function WebGeneralSettings() {
           <Switch checked={appearance.customCursorEnabled} onChange={(value) => updateAppearanceSettings({ customCursorEnabled: value })} />
         </SettingField>
         <SectionTitle>动效</SectionTitle>
+        <SettingField label="全屏选项展开动画" description="边距、主题和背景面板从对应按钮展开；系统启用减少动态效果时会自动跳过">
+          <Switch checked={appearance.fullscreenOptionAnimationEnabled} onChange={(value) => updateAppearanceSettings({ fullscreenOptionAnimationEnabled: value })} />
+        </SettingField>
         <SettingField label="发送消息动画" description="发送时让光点从按钮飞出并展开为消息；滚动消息列表会立即结束动画">
           <Switch checked={appearance.sendMessageAnimationEnabled} onChange={(value) => updateAppearanceSettings({ sendMessageAnimationEnabled: value })} />
         </SettingField>

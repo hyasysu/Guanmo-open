@@ -156,14 +156,35 @@ body {
 }
 
 .gm-fullscreen-control-shell {
-  background: var(--gm-fullscreen-control-bg);
+  background: transparent;
   border-color: var(--gm-fullscreen-control-border);
   box-shadow: var(--gm-fullscreen-control-shadow);
   color: var(--gm-text);
-  backdrop-filter: blur(18px);
   transition-property: width, max-width, transform, opacity, box-shadow, background-color, border-color !important;
   transition-duration: 440ms !important;
   transition-timing-function: cubic-bezier(0.18, 0.9, 0.18, 1) !important;
+}
+
+.gm-fullscreen-control-glass {
+  position: absolute;
+  inset-block: 0;
+  left: 50%;
+  width: min(960px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  z-index: 0;
+  pointer-events: none;
+  background: var(--gm-fullscreen-control-bg);
+  backdrop-filter: blur(18px);
+}
+
+.gm-fullscreen-control-glass--background {
+  background: color-mix(in srgb, var(--gm-code-bg) var(--gm-fullscreen-glass-cover), transparent);
+  backdrop-filter: blur(8px) saturate(110%);
+  -webkit-backdrop-filter: blur(8px) saturate(110%);
+}
+
+.gm-fullscreen-control-shell > :not(.gm-fullscreen-control-glass) {
+  z-index: 1;
 }
 
 html[data-fullscreen-transition-phase='blurring'] #root,
@@ -1038,6 +1059,16 @@ html[data-fullscreen-transition-phase='focusing'] #root {
   100% { transform: scale(1); opacity: 1; }
 }
 
+@keyframes gmContextMenuFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes gmFeatureIntroStepFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 @keyframes gmReleaseModalScrimIn {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -1114,6 +1145,14 @@ html[data-fullscreen-transition-phase='focusing'] #root {
   animation: bounceIn 0.5s var(--gm-ease);
 }
 
+.animate-context-menu-in {
+  animation: gmContextMenuFadeIn 120ms ease-out both;
+}
+
+.gm-feature-intro-step-content {
+  animation: gmFeatureIntroStepFadeIn 140ms ease-out both;
+}
+
 .gm-release-modal-scrim {
   animation: gmReleaseModalScrimIn 180ms ease-out;
 }
@@ -1183,6 +1222,28 @@ html[data-fullscreen-transition-phase='focusing'] #root {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .animate-slideInUp,
+  .animate-slideInRight,
+  .animate-bounceIn {
+    animation: fadeIn var(--gm-duration-fast) ease-out;
+  }
+
+  .animate-context-menu-in,
+  .gm-feature-intro-step-content {
+    animation: none;
+  }
+
+  .gm-tooltip {
+    animation: fadeIn var(--gm-duration-fast) ease-out !important;
+  }
+
+  .gm-feature-intro-scrim,
+  .gm-feature-intro-dialog {
+    transition: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+
   .gm-release-modal-scrim,
   .gm-release-modal-dialog,
   .gm-legacy-modal-scrim,
@@ -1704,6 +1765,11 @@ html[data-gm-runtime='web'] .gm-settings-tabs--web > div:nth-child(2) {
 .gm-fullscreen-preview-content {
   padding-left: var(--gm-fullscreen-content-padding-percent, 7%);
   padding-right: var(--gm-fullscreen-content-padding-percent, 7%);
+}
+
+.gm-fullscreen-preview-content .gm-markdown-embedded-svg {
+  max-width: 100%;
+  height: auto;
 }
 
 .gm-fullscreen-preview-content[data-preview-masked] > * {
