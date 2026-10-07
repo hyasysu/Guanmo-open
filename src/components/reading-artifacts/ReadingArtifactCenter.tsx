@@ -907,6 +907,7 @@ function ArtifactCard({ item, availability, anchorStatus, currentDocument, reduc
   const [note, setNote] = useState(item.content ?? '')
   const [contentOverflow, setContentOverflow] = useState<Record<string, boolean>>({})
   const [manualExpanded, setManualExpanded] = useState(false)
+  const [questionExpanded, setQuestionExpanded] = useState(false)
   const isUser = item.source === 'user'
   const refs = currentDocument ? [currentDocument] : item.documentRefs
   const webReferences = item.references?.filter((reference) => reference.kind === 'web') ?? []
@@ -928,6 +929,7 @@ function ArtifactCard({ item, availability, anchorStatus, currentDocument, reduc
   useEffect(() => {
     setContentOverflow({})
     setManualExpanded(false)
+    setQuestionExpanded(false)
     setEditing(false)
     setNote(item.content ?? '')
   }, [item.content, item.id])
@@ -948,11 +950,11 @@ function ArtifactCard({ item, availability, anchorStatus, currentDocument, reduc
       </div>
     ) : (
       <>
-        <button id={triggerId} type="button" aria-expanded={expanded} aria-controls={contentId} onClick={onToggleExpand} className="group/trigger flex w-full items-start gap-3 border-b border-gm-border-subtle/80 px-3.5 py-3.5 text-left outline-none transition-colors duration-150 hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover active:scale-[0.995]">
+        <button id={triggerId} type="button" aria-expanded={expanded} aria-controls={contentId} onClick={() => { setQuestionExpanded(false); onToggleExpand?.() }} className="group/trigger flex w-full items-start gap-3 border-b border-gm-border-subtle/80 px-3.5 py-3.5 text-left outline-none transition-colors duration-150 hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover active:scale-[0.995]">
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-2 text-micro font-bold text-gm-text-secondary"><span className="h-2.5 w-2.5 shrink-0 rounded-full bg-gm-primary" /><span className="rounded-full bg-gm-primary-subtle px-1.5 py-0.5 text-[10px] font-bold tracking-[0.04em] text-gm-primary">AI · {TYPE_LABELS[item.type]}</span>{(refs.length + webReferences.length) > 0 && <span className="font-normal text-gm-text-tertiary">· {refs.length + webReferences.length} 个来源</span>}<span className="ml-auto shrink-0 text-micro font-normal text-gm-text-tertiary">{new Date(item.createdAt).toLocaleDateString('zh-CN')}</span></span>
-            <span className="mt-3 block line-clamp-2 text-caption font-bold leading-relaxed text-gm-text" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}>{collapsedTitle}</span>
-            <span className="mt-1 block truncate text-micro leading-relaxed text-gm-text-tertiary" style={{ fontSize: 'var(--gm-ai-chat-meta-font-size)' }}>{replyPreview}</span>
+            <span className="mt-3 line-clamp-2 max-h-[3.25em] whitespace-normal break-words text-caption font-bold leading-relaxed text-gm-text" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}>{collapsedTitle}</span>
+            <span className="mt-1 block max-h-[1.625em] truncate text-micro leading-relaxed text-gm-text-tertiary" style={{ fontSize: 'var(--gm-ai-chat-meta-font-size)' }}>{replyPreview}</span>
           </span>
           <span className="flex shrink-0 items-center gap-1.5 pt-0.5 text-micro text-gm-text-tertiary"><span>{expanded ? '收起' : '展开'}</span><ChevronDown size={15} strokeWidth={1.8} className={`transition-transform duration-200 ${expanded ? 'rotate-180 text-gm-primary' : 'group-hover/trigger:translate-y-0.5'}`} aria-hidden="true" /></span>
         </button>
@@ -960,7 +962,13 @@ function ArtifactCard({ item, availability, anchorStatus, currentDocument, reduc
           {expanded && <motion.div key="details" id={contentId} role="region" aria-labelledby={triggerId} {...contentMotion} className="overflow-hidden">
             <div className="px-3.5 pb-3.5 pt-3.5">
               <div className="space-y-3">
-                <section className="rounded-xl border px-3 py-2.5" style={AI_QUESTION_STYLES}><h4 className="mb-1.5 text-micro font-bold tracking-wide text-gm-primary">原问题</h4><p className="text-caption leading-[1.65] text-gm-text" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}>{question || '未记录原问题'}</p></section>
+                <section className="rounded-xl border px-3 py-2.5" style={AI_QUESTION_STYLES}>
+                  <h4 className="mb-1.5 text-micro font-bold tracking-wide text-gm-primary">原问题</h4>
+                  <div id={`${contentId}-question`}>
+                    <ExpandableText text={question || '未记录原问题'} lines={5} expanded={questionExpanded} reducedMotion={reducedMotion} onOverflowChange={(value) => updateContentOverflow('question', value)} className="whitespace-pre-wrap break-words text-[length:var(--gm-ai-chat-font-size)] leading-[1.65] text-gm-text" />
+                  </div>
+                  {contentOverflow.question && <button type="button" aria-expanded={questionExpanded} aria-controls={`${contentId}-question`} onClick={() => setQuestionExpanded((value) => !value)} className="mt-2 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-micro font-bold text-gm-primary outline-none transition-colors hover:bg-gm-primary/5 focus-visible:ring-1 focus-visible:ring-gm-primary/40"><span>{questionExpanded ? '收起原问题' : '展开原问题'}</span><ChevronDown size={14} strokeWidth={1.8} className={`transition-transform duration-200 ${questionExpanded ? 'rotate-180' : ''}`} aria-hidden="true" /></button>}
+                </section>
                 <section className="rounded-xl border px-3 py-2.5" style={AI_REPLY_STYLES}><h4 className="mb-1.5 text-micro font-bold tracking-wide text-gm-primary">AI 回复</h4>{item.content?.trim() ? <div tabIndex={0} aria-label="AI 回复正文" className="max-h-80 overflow-y-auto pr-1 prose max-w-none text-caption leading-[1.65] text-gm-text [&_p]:my-1.5 [&_p]:text-[length:var(--gm-ai-chat-font-size)] [&_li]:text-[length:var(--gm-ai-chat-font-size)] [&_ul]:my-1.5 [&_ol]:my-1.5 [&_pre]:max-w-full [&_pre]:overflow-x-auto" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown></div> : <p className="text-caption text-gm-text-tertiary" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}>暂无 AI 回复内容</p>}</section>
                 <section><h4 className="mb-1.5 text-micro font-bold tracking-wide text-gm-text-tertiary">参考资料</h4><div className="flex flex-wrap gap-1.5">{refs.map((ref) => <button key={ref.documentId} type="button" aria-label={!ref.filePath || availability[ref.documentId] === 'unavailable' ? `${ref.fileName} · 来源文档不可用` : `${ref.fileName} · 查看原文`} disabled={!ref.filePath || availability[ref.documentId] === 'unavailable'} onClick={() => void onOpenAiSource(ref)} className="flex min-w-0 max-w-full items-center gap-2 rounded-xl border border-gm-border-subtle/80 bg-gm-canvas/45 px-2.5 py-2 text-left text-micro text-gm-text-secondary transition-colors hover:border-gm-primary/35 hover:text-gm-primary disabled:cursor-not-allowed disabled:text-gm-warning"><FileText size={15} strokeWidth={1.7} aria-hidden="true" /><span className="truncate">{availability[ref.documentId] === 'unavailable' || !ref.filePath ? `${ref.fileName} · 来源文档不可用` : `${ref.fileName} · 查看原文`}</span><ChevronRight size={14} strokeWidth={1.8} className="ml-auto shrink-0 text-gm-text-tertiary" aria-hidden="true" /></button>)}{webReferences.map((reference, index) => <a key={`${reference.url}-${index}`} aria-label={`打开来源 ${reference.title || reference.url}`} href={reference.url} target="_blank" rel="noreferrer" className="flex min-w-0 max-w-full items-center gap-2 rounded-xl border border-gm-border-subtle/80 bg-gm-canvas/45 px-2.5 py-2 text-left text-micro text-gm-text-secondary transition-colors hover:border-gm-primary/35 hover:text-gm-primary"><ExternalLink size={15} strokeWidth={1.7} aria-hidden="true" /><span className="truncate">{reference.title || reference.url}</span><ChevronRight size={14} strokeWidth={1.8} className="ml-auto shrink-0 text-gm-text-tertiary" aria-hidden="true" /></a>)}{refs.length === 0 && webReferences.length === 0 && <span className="text-micro text-gm-text-tertiary">暂无可跳转来源</span>}</div>{anchorStatus === 'changed' && <p className="mt-1.5 text-micro text-gm-warning">原文已变更，定位可能偏移</p>}</section>
               </div>

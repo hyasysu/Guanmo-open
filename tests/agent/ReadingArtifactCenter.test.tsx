@@ -360,6 +360,28 @@ describe('ReadingArtifactCenter', () => {
     expect(screen.getByText('未记录原问题')).toBeInTheDocument()
   })
 
+  it('expands long original questions independently and resets them when the AI card closes', async () => {
+    const question = Array.from({ length: 9 }, (_, index) => `匿名代码问题第${index + 1}行`).join('\n')
+    mocks.loadReadingArtifactsPage.mockResolvedValue({
+      artifacts: [{ ...aiArtifact, structuredContent: { ...aiArtifact.structuredContent, question } }],
+      total: 1,
+    })
+    render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
+
+    const cardToggle = await screen.findByRole('button', { name: /AI · AI 解读/ })
+    expect(screen.queryByRole('button', { name: '展开原问题' })).not.toBeInTheDocument()
+    fireEvent.click(cardToggle)
+    const questionToggle = await screen.findByRole('button', { name: '展开原问题' })
+    expect(questionToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByLabelText('AI 回复正文')).toHaveTextContent(aiArtifact.content)
+    fireEvent.click(questionToggle)
+    expect(screen.getByRole('button', { name: '收起原问题' })).toHaveAttribute('aria-expanded', 'true')
+    expect(cardToggle).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(cardToggle)
+    fireEvent.click(cardToggle)
+    expect(await screen.findByRole('button', { name: '展开原问题' })).toHaveAttribute('aria-expanded', 'false')
+  })
+
   it('does not present the recent 40-item window as document totals when aggregation fails and can retry', async () => {
     mocks.loadReadingArtifactsPage
       .mockReset()
