@@ -1,969 +1,396 @@
-# Guanmo 长期维护与外观扩展架构治理计划
+# 观墨保存可靠性、API 安全加固与 Agent 超限恢复｜阶段任务
 
-> 本文件是本任务唯一状态来源。执行者必须使用 `staged-task-handoff` Skill，完整读取后只执行当前阶段；不得一次性重构全项目，不得提前实施后续阶段。
+> 本文件是本任务唯一状态来源。使用 staged-task-handoff 恢复任务，以当前源码和实际验证为准。2026-10-05 按用户授权覆写旧架构治理计划；旧计划的完成记录和未验收事项不属于本任务，也不据此宣称已验收。
 
 ## 当前状态
 
-- 项目状态：代码实现已完成（壁纸配置已放弃并移除）
-- 当前阶段：Phase 3｜外观扩展收口（保留主题与助手形象）
-- 阶段状态：进行中；代码与自动门禁已完成，待 Tauri 设置页人工冒烟
-- 上次执行结果：已删除壁纸 schema、设置入口、启动恢复、CSS 透明层、Tauri 资产命令及壁纸专用测试；保留主题系统、AI 助手形象和通用文件能力
-- 已知验证：定向 Vitest `3 files / 51 passed`；`test:file-access`、`test:runtime-schemas`、Typecheck、Lint（0 errors、45 warnings）、Web/Desktop build 与 bundle gate、Rust fmt/clippy/test/check、`git diff --check` 均通过
-- 其他验证：不删除用户目录中已有的 `wallpapers` 文件；所有无关修改和未跟踪文件均保留；未提交、未推送、未打 tag、未创建 Release
-- 本阶段剩余：Tauri 设置页人工冒烟；冷启动脚本因测试进程以 exit code 0 提前退出，edit/preview 均未形成有效样本（NOT TESTED）
-- 本阶段允许修改：本次壁纸移除涉及的外观、设置、启动、文件权限边界和定向测试文件
-- 阻塞问题：当前工具通道无法执行真实 Tauri WebView 交互；不影响代码门禁
-- 下一阶段：无（完成上述人工验收后收口；Phase 3A、3C 保留；Phase 3B 已放弃）
-- Git 边界：保留所有既有修改和未跟踪文件；未经明确授权不提交、不推送、不打 tag、不创建 Release
+- 当前阶段：阶段 1｜统一保存队列与竞态修复
+- 阶段状态：进行中
+- 当前授权：2026-10-07 用户要求逐阶段实施直到需要新窗口；本轮实施阶段 1，阶段边界按验证与上下文决定，不要求重复授权。
+- 上次执行结果：统一 documentSave 共享队列已接入自动、手动、预览勾选、命令面板、文件菜单与另存为；成功只更新保存基线，下载不清脏。
+- 验证结果：保存/浏览器/文档模型/预览 75 项、类型检查、Lint、Store/文件权限边界、Core Smoke 8 项、Desktop 前端构建与体积门禁 PASS；Rust Release 构建因内存不足 FAIL，原生验收与新产物冷启动对照 NOT TESTED。
+- 本阶段剩余：2026-10-07 用户明确要求验收暂缓；暂不重试构建或原生验收。后续恢复时生成新鲜 Tauri 产物，完成匿名临时文件原生保存验收与启动对照；通过后才标记完成并进入阶段 2。
+- 本阶段允许修改：见下方“允许修改”；必要扩展 CommandPalette、fileEntryActions 和浏览器句柄测试，修复遗漏的文档保存旁路。
+- 阻塞问题：Rust 报 memory allocation of 18288 bytes failed / STATUS_STACK_BUFFER_OVERRUN；单 Cargo worker 重试同样失败，PowerShell 也报 Out of memory。现有 EXE 仍是 2026-10-05 旧产物，不可用于本轮验收。
+- 下一阶段：阶段 2｜Web API Key 常驻安全提示；未开始，可独立交付；完整顺序与依赖见“开发优先级”。
+- 工作区基线：本轮开始时 `AI_IMPLEMENTATION_PLAN.md` 已修改；保留既有保存队列和 Agent 方案。未跟踪 `.workbuddy/`、`src-tauri/target-reading-position-baseline/` 保留，不清理、不夹带。
+- Git 边界：2026-10-07 用户已授权本次阶段 1 相关文件本地提交；未授权推送、打 tag、创建 Release 或 PR。
 
-## 项目目标
+## 项目目标与评估结论
 
-在保持现有功能、持久化格式、文件权限、SQLite 数据和用户体验兼容的前提下，按以下顺序渐进治理：
+本计划包含保存可靠性、API 密钥与 XSS 安全加固、Agent 超限恢复三项；以下保存成功标准仅适用于阶段 1，安全专项标准见阶段 2–5。所有新增阶段均未开始，源码核实不等于安全验收或漏洞已复现。
 
-1. 测试兜底：让核心边界和跨模块流程具备可执行、能真正阻断回归的测试与门禁。
-2. 梳理依赖：消除已确认的 Store 越界、运行时双向依赖和 UI 对数据库/Tauri 实现的穿透。
-3. 拆核心边界：逐步稳定 `document-model`、`preview-rendering`、`workspace`、`persistence`、`ai`、`settings`、`appearance` 的职责和接口。
-4. 建立外观扩展接口：支持内置主题、AI 助手形象及状态动画，避免继续堆叠特判。
+值得修改。写前快照校验只能淘汰尚未启动的旧任务，无法给已经发出的异步保存建立顺序；应由应用级、按文件身份分组的协调器串行写入，并统一处理保存确认、失败重试和索引调度。
 
-本任务不以减少 LOC、统一文件长度或追求形式上的“整洁架构”为目标。成功标准是降低修改影响面、稳定扩展边界并保留现有行为。
+成功标准：同一文件最多一个执行中的写入和一个可替换的待写快照；不同文件可独立保存；停止编辑且写入成功后，磁盘为最新有效保存快照。迟到结果不能覆盖当前正文，只有当前正文等于最后成功写入内容时才显示为已保存。
 
-## 技术栈
+### 已核实的当前链路
 
-- 运行环境：Tauri 2、Windows、WebView2；Web 裁剪版保留基础阅读能力
-- 前端：React 18、TypeScript、Vite、Zustand、CodeMirror 6
-- Markdown：ReactMarkdown、remark/rehype、顶层块虚拟化、DocumentRange
-- 数据：桌面 SQLite，关键事务由 Rust/SQLx command 持有
-- AI：Direct/Agent 路由、RAG、长期记忆、阅读成果、流式聊天
-- 测试：Vitest、React Testing Library、Rust tests、现有专项脚本与 Release 冷启动脚本
+| 位置 | 当前事实与影响 |
+|---|---|
+| `src/hooks/useFileOperations.ts` | 自动保存按 Tab 定时，写前检查 modified、filePath、内容快照；发出 saveFile 后没有同路径锁。失败按旧内容再次定时，计数按 Tab，最多 3 次失败。手动保存也直接调用 saveFile/saveFileAs。 |
+| `src/components/layout/AppLayout.tsx`、`src/components/editor/EditorArea.tsx` | 两处调用 useFileOperations，都会运行其中的自动保存 effect；后者还单独实现 handleSave。队列不能放在某个 Hook 实例的 ref 中。 |
+| `EditorArea.tsx` 的 persistTabContent | 预览勾选先更新正文，再写文件；完成后 replaceTabContentWithSaved 用旧快照覆盖 content，并无条件清除 modified。此时发生新编辑会被覆盖。预览块提交只更新 Tab，随后走自动保存。 |
+| `src/stores/editorStore.ts` | markTabSaved 已按当前 content 与已写内容比较 modified；这部分不是无条件清脏，但只检查 id。saveTabAs 还会替换正文，需防选择器/写入期间的新编辑丢失。 |
+| `src/services/fileSystem.ts` | saveFile 是物理保存适配；桌面 saveFileAs 直接 writeFile，浏览器 saveBrowserFileAs 内部直接写入，需要防另存为绕过统一入口。 |
+| `src/hooks/useTauri.ts`、`src-tauri/src/lib.rs` | 受限 writeFile 最终调用同步 Rust command write_text_file_by_path，再执行 fs::write。没有确认原生 IPC 的实际乱序行为；前端缺少顺序契约不等于已经实测到磁盘回退。 |
+| `src/services/pathIdentity.ts` | 现有 normalizeFilePath/isSameFilePath 处理大小写、分隔符和 Windows 长路径前缀；规范化仅用于身份比较，写盘仍传原始授权路径。 |
+| `src/services/rag/indexer.ts` | 已有按路径的索引 PendingLatest；保存端只调整成功快照与调度入口，不重建索引队列。 |
 
-## 审查基线与已确认事实
+本轮没有实施或尝试代码修复，没有失败测试记录。不要复用旧任务文档的测试通过记录作为本任务证据。
 
-以下结论已由当前源码、测试清单和知识图交叉核实；实现时仍须以最新代码为准：
+## 技术与总体约束
 
-1. 前端现有约 91 个测试文件，编辑器、AI、设置、RAG、数据库、工作区均已有专项测试；问题主要是联合边界和门禁接入，不是完全无测试。
-2. `EditorArea.tsx` 同时承担编辑/预览实例生命周期、预热、滚动同步、阅读位置、TOC、搜索/选区桥接、预览内编辑、首屏事件和保存编排，是当前最大 hub/bridge。
-3. `MarkdownPreview.tsx`、`AiPanel.tsx`、`SettingsPage.tsx`、`useAiChat.ts`、`agent/executor.ts`、`agent/tools.ts` 是其他高耦合热点；不得仅按文件长度机械拆分。
-4. 已确认运行时双向依赖：`settingsStore.ts -> rag/indexer.ts -> settingsStore.ts`。
-5. 已确认纯类型环：`services/ai/types.ts <-> services/ai/sourceReferences.ts`；优先级低于运行时环。
-6. `workspaceIndex.ts` 同时协调文件系统、SQLite、WebView 向量缓存、Rust RAG 索引和重建流程；现有测试主要 mock 协作者，缺少真实联合一致性验证。
-7. UI 直接依赖底层实现的代表：`AiPanel.tsx`、`SettingsPage.tsx` 导入 database persistence；`TabBar.tsx`、`FullscreenControlBar.tsx` 直接调用 Tauri `invoke`。
-8. `AssistantState` 的八个状态已是可靠状态协议，应作为未来头像动画的稳定输入，不重建第二套状态机。
-9. 当前主题为封闭 `ThemeId` 列表，定义和映射分散在 `settingsStore.ts`、`ThemePicker.tsx`、`index.html`、`startupShell.css` 和主题 CSS。
-10. 当前质量 CI 执行 `npm test`，但没有执行独立的 `test:store-boundaries`；数据库契约还引用了 package 中不存在的 legacy migration/recovery 命令。
-
-## 总体成功标准
-
-- 所有新增边界先有能够稳定复现长期 invariant 的测试；不以覆盖率数字代替关键流程测试。
-- `npm run test:store-boundaries` 通过并进入适用的本地/CI 主门禁；规则、文档和实际命令一致。
-- 不再存在 `settingsStore <-> rag/indexer` 运行时双向依赖；Store 不直接 import 另一个 Store，组件/服务不绕过 action 直接修改 Store。
-- UI 不直接依赖 SQL row、数据库连接、任意文件路径或散落的 Tauri command；通过领域 command/repository/adapter 访问。
-- `EditorArea` 的拆分不改变 Tab、DocumentRange、搜索、选区、虚拟化、阅读位置、模式预热和首屏打点语义。
-- Workspace/RAG 清理在部分失败、Root 不可用和快速切换下有明确、可测试的结果，不静默形成跨层不一致。
-- AI 请求从上下文构建到消息/阅读成果保存有联合测试；取消、重试和失败不重复执行副作用。
-- 外观配置使用版本化 Schema、稳定 ID 和受控 resolver/registry；新增内置或用户外观不要求修改多个业务组件的特判。
-- 自定义主题/头像不接受任意用户 JavaScript 或未验证 CSS；资源访问遵守现有文件授权、asset protocol、CSP 和 reduced-motion 边界。
-- Web 基础阅读能力、旧设置、旧数据库和旧文件授权继续兼容；不通过清空数据或重置配置解决迁移。
-
-## 总体约束
-
-- 每次只执行当前阶段；Phase 2 与 Phase 3 的子阶段必须按独立执行窗口推进。
-- 修改前重新执行 `git status --short`，已有修改和未跟踪文件全部视为用户内容。
-- 命中 Store、生命周期、缓存、异步竞态、文件、DB 或启动链时，先按 `docs/AI_REVIEW_PROJECT.md` 写简短 Blast Radius。
-- 修改核心状态前读取 `docs/architecture/state-ownership.md`；涉及 Markdown、AI、文件、数据库、RAG、桌面服务时读取对应 contract。
-- 先补 characterization/contract test，再移动职责；测试必须调用生产入口。
-- 不新增通用 DI 框架、全局 Event Bus、Redux、插件市场、通用 Repository 基类或任意代码执行系统。
-- 不为了消除所有循环依赖而大规模搬文件；优先处理运行时环和高频修改链。
-- 不自动更新快照，不放宽 bundle/CSS/性能预算，不用 Skeleton 或提前打点制造性能收益。
-- 未经明确授权不提交、推送、打 tag、创建 Release 或 PR。
-
-## 不建议重构的现有设计
-
-- `markdownPreviewModel`、DocumentRange、源码 offset 和 previewHighlight registry：现有边界合理，只在有可复现缺陷或性能证据时修改。
-- Zustand 本身：问题是依赖方向与 action 边界，不是状态库选型。
-- Rust `FsAccessState` 文件授权模型与 `useTauri.ts` 受限文件入口。
-- Rust/SQLx 原子事务命令及 SQLite 作为桌面业务主存储的架构。
-- `AssistantState` 状态机、AI 来源引用 registry、现有路由/来源契约。
-- 五个现有主题的视觉实现：后续作为内置定义接入 registry，不进行视觉重做。
-- 旧设置、旧主题、旧头像及性能策略的兼容迁移逻辑。
-- `lib.rs`、`persistence.ts` 等大文件：没有稳定边界和行为任务时，不因行数单独拆分。
-
-## 目标模块边界
-
-### document-model
-
-- 对外：`DocumentSnapshot`、`DocumentRange`、文档内容/保存/标签页 command。
-- 内部：Zustand 结构、持久化 compact 格式、CodeMirror View。
-- 约束：`Tab.content` 继续是会话内正文 Source of Truth；DOM 不是全文数据源。
-
-### preview-rendering
-
-- 对外：`PreviewModel`、viewport/anchor/selection adapter、块编辑提交事件。
-- 内部：虚拟窗口、实测高度、ReactMarkdown 组件、渲染插件加载。
-- 约束：搜索、选区、复制、AI 上下文不依赖块是否挂载。
-
-### workspace / persistence
-
-- Workspace 对外：Root、树快照、文件 command、索引维护结果。
-- Persistence 对外：按现有领域拆分的 `ChatRepository`、`DocumentIndexRepository`、`ReadingArtifactRepository`。
-- 候选窄接口：`WorkspaceFileGateway`、`DocumentIndexRepository`、`RagIndexGateway`。
-- 内部：Database 连接、SQL row、目录枚举和 WebView/Native RAG 清理顺序。
-- 约束：不创建通用 CRUD Repository，不允许 UI 直接 import database persistence。
-
-### ai / settings
-
-- AI 对外：`ConversationController`、`ContextProvider`、`AgentExecutor`、`ArtifactCommands`。
-- Settings 对外：版本化设置 Schema、normalizer、纯 action。
-- 内部：Chat Store 写入顺序、工具 registry、secret 保存、RAG timer、DOM 主题应用。
-- 约束：工具依赖窄上下文；Store 不承担跨领域副作用。
-
-### appearance
-
-- 对外：版本化配置、descriptor registry、resolver、DOM applicator。
-- 内部：CSS token 映射、受管 asset URL、启动 bootstrap 子集、renderer 实现。
-- 约束：Store 只持久化稳定 ID/配置，不持久化 React 组件、任意 CSS 或任意本地路径。
+- 现有 React、TypeScript、Zustand、Tauri 2、Vitest；阶段 1 不新增依赖或保存设置。安全专项优先复用现有 DPAPI、安全存储和清洗链路；确需新增依赖时先核实体积、加载边界与兼容性，不默认引入另一套密钥库。
+- Tab.content 是编辑正文真相；savedContent 是最近确认成功写入的基线；modified 按两者比较维护。队列是临时执行状态，不持久化，不创建第二份业务正文。
+- 只保证本应用当前运行实例中经过统一入口的文档保存顺序；外部程序写入、跨进程锁、符号链接/硬链接身份、断电原子写入和退出阻塞保存不在本阶段。
+- 保留 .md 限制、授权边界、原位保存与浏览器下载回退；阶段 1 不修改 Rust command、FsAccessState、DB schema、旧持久化格式。阶段 3–5 仅按其明确范围修改安全命令、HTTP 代理、配置和渲染边界，不改业务 DB schema。
+- 不把所有文件操作排成一个全局 FIFO，也不把图片、导出、索引文件等无关写入纳入文档队列。
+- 修改前重新读取根目录及目标目录规则、git status；保留全部既有改动。命中范围外必需改动时先说明，不顺带重构。
 
 ## 阶段计划
 
-### Phase 1｜测试兜底、依赖止血与门禁对齐
+### 开发优先级与阶段依赖
 
-- 目标：在不改变产品功能的前提下，让现有边界规则真实通过并进入主门禁，补齐后续拆分必需的 characterization tests。
-- 风险：MEDIUM；涉及 Store action、应用启动恢复、AI 状态写入和设置副作用，但不改变领域功能或持久化格式。
-- 核心任务：
-  1. 为当前 6 个 Store boundary 违规建立最小行为保护，改为已有或新增的领域 action；不得放宽脚本或加 allowlist。
-  2. 消除 `editorStore -> settingsStore` 和 `settingsStore <-> rag/indexer` 运行时耦合；副作用移到明确 coordinator/reaction。
-  3. 将 `test:store-boundaries` 接入 `check:release` 和质量 CI。
-  4. 核对 database contract 中不存在的 legacy migration/recovery 命令：恢复真实入口或修正过时契约，不创建空壳命令。
-  5. 补充后续 Phase 2 必需的组合测试，不重复已有单元测试。
-- 大致范围：`scripts/store-boundary-check.mjs`、`package.json`、`.github/workflows/quality.yml`、相关架构/数据库契约、当前 6 个违规所在源码及其最少测试。
-- 验收：边界门禁真实通过并接入主检查；运行时环消失；Tab 恢复、AI 流式消息、action proposal、secret hydration、perf reset 和自动索引关闭行为兼容。
-- 检查：定向 Vitest、boundary gate、typecheck、lint、Desktop build、bundle gate、`git diff --check`。
-- 暂不处理：拆分 `EditorArea`、AI controller、Workspace repository、Appearance Schema。
+| 顺序 | 阶段 | 原因与依赖 |
+|---|---|---|
+| 1 | 统一保存队列与竞态修复 | 保持当前阶段；用户正文覆盖风险优先，先完成已有保存闭环。 |
+| 2 | Web API Key 常驻安全提示 | 小范围、独立交付，尽早明确现有三种存储模式的风险。 |
+| 3 | 桌面密钥仅由 Rust 读取与使用 | 移除长期前端明文和读取接口，减少密钥外泄面；复用现有 DPAPI。 |
+| 4 | Rust 代理操作约束与滥用限额 | 依赖阶段 3 的密钥绑定；限制读不到 Key 后仍能借代理发请求的空间。阶段 3、4 是安全闭环，不能只完成迁移就宣称防滥用完成。 |
+| 5 | CSP、不可信渲染与 Tauri 权限加固 | 分入口验证防注入与最小权限；核实最终请求链路后收紧 CSP，避免破坏正常渲染与本地模型。 |
+| 6 | Agent 按需上下文超限恢复 | 原阶段 2，方案保留；已有有界重试入口，暂排在数据可靠性与安全加固之后，无保存代码依赖。 |
 
-### Phase 2｜核心解耦
+- 本顺序是默认开发队列；2026-10-07 用户已授权逐阶段实施直到需要新窗口，每阶段先验收再推进，不同时提前实现后续阶段。阶段 2 可单独提前，阶段 5 的只读入口核实可提前；阶段 4 的正式验收依赖阶段 3。
+- 若发现可稳定复现的脚本执行或 Key 外传漏洞，先报告具体证据，再把对应安全修复升为当前优先项；不把本轮静态观察当作已确认漏洞。
+- 2026-10-05 历史记录中的“阶段 2”指原 Agent 任务；自 2026-10-06 起执行“阶段 2”指 Web 提示。使用任务名称消除旧编号歧义。
 
-> Phase 2 必须按 2A → 2B → 2C 分三个独立执行窗口。一个子阶段完成并更新状态后才能进入下一个。
+### 阶段 1｜统一保存队列与竞态修复
 
-#### Phase 2A｜Editor / Document Surface
+- 目标：一次交付完整保存闭环，避免只修自动保存而留下手动/预览旁路。
+- 实施顺序：确定性复现 → 协调器与保存确认 → 接入各入口 → 定向检查 → 原生验收。
+- 风险：HIGH；用户文件覆盖、异步竞态、共享 Tab 状态与 Hook 生命周期。验收模型建议 L3 强模型。
+- 范围：下面列出的保存链路与最少相关测试。
+- 完成条件：下方验收项及必要 Machine Gate 真实通过；原生未验收时阶段保持进行中。
+- 暂不处理：全项目解耦、启动优化、关闭弹窗设计、退出阻塞保存、外部文件冲突系统、RAG 算法与新配置。
 
-- 目标：让 `EditorArea` 只负责组合 Pane，把生命周期、滚动同步、阅读位置和选区桥接按现有 invariant 渐进抽离。
-- 风险：HIGH；涉及 useEffect/cleanup、缓存、快速 Tab/模式切换、虚拟化和首屏性能。
-- 候选范围：`src/components/editor/EditorArea.tsx`、新增同目录窄 hooks/services、现有 editor/selection/markdown 测试。
-- 验收：Tab/模式切换、左右 Pane、预热、迟到结果、阅读位置、搜索、选区、TOC、首屏事件保持语义；不修改 `markdownPreviewModel` 和 DocumentRange 算法。
-- 验证：EditorArea 生命周期、资源泄漏、previewTabSwitch、documentModel、selectionContext、SearchOverlay、MarkdownPreview 定向测试；typecheck、lint、desktop build、bundle gate；新鲜 Tauri 快速切换和真实 surface 验收。
+### 阶段 2｜Web API Key 常驻安全提示
 
-#### Phase 2B｜Workspace / Persistence
+- 状态：未开始；初步 LOW → L1。
+- 目标：在 Key 配置区持续展示内存、明文与密码加密模式的运行期风险；保留原有明文保存确认。
+- 范围与验收：见下方“阶段 2–5 详细任务”；不改变存储默认值、加密格式或 Web 能力。
 
-- 目标：保留 `workspaceIndex` 作为 application coordinator，但让它依赖窄 gateway/repository；FileTree/UI 不接触数据库和 RAG 实现。
-- 风险：HIGH；涉及用户文件、SQLite、索引删除和部分失败一致性。
-- 候选范围：`workspaceIndex.ts`、相关 persistence/RAG adapter、FileTree/workspace hooks、workspace/database 测试、必要 Rust command 测试。
-- 验收：Root 不可用时不清理索引；单 Root 不影响其他 Root；部分失败可见且可重试；跨 SQLite/vector/Native RAG/job 的处理顺序有联合测试。
-- 验证：匿名临时目录 + 临时数据库联合测试、workspace tests、transaction bridge、file-access、rag-index、runtime-schemas、typecheck、lint、desktop build、相关 Rust tests。
+### 阶段 3｜桌面密钥仅由 Rust 读取与使用
 
-#### Phase 2C｜AI / Settings
+- 状态：未开始；初步 HIGH → L3，涉及密钥迁移、共享配置与核心 IPC 边界。
+- 目标：前端传配置身份、操作与业务参数，Rust 从现有安全存储取 Key 并绑定目标；不再返回已保存明文 Key。
+- 范围与验收：见下方详细任务；保留旧配置、自定义 API、本地免 Key 模型和多协议兼容。
 
-- 目标：建立 Conversation/Artifact command 边界，拆开聊天 UI、请求编排、Store mutation 与数据库持久化；Settings UI/Store 不直接承担跨领域副作用。
-- 风险：HIGH；涉及流式请求、取消、重试、工具副作用、消息和阅读成果持久化。
-- 候选范围：`AiPanel.tsx`、`useAiChat.ts`、`services/agent/*`、`chatStore.ts`、reading artifact services/store、`SettingsPage.tsx` 及对应测试。
-- 验收：selection/file tag → context → routing/executor → streaming/cancel/error → message persistence → reading artifact 联合流程可测；失败/重试不重复副作用；UI 不直接导入 database persistence。
-- 验证：AI orchestration、routing、source references、reading artifacts、action proposal、settings compatibility、AI HTTP、typecheck、lint、desktop build；真实 Tauri AI 与阅读成果人工验收。
+### 阶段 4｜Rust 代理操作约束与滥用限额
 
-### Phase 3｜Appearance Extension / Config
+- 状态：未开始；初步 HIGH → L3，依赖阶段 3。
+- 目标：在已有网络与资源限制上，补齐操作/接口约束、频率与累计使用上限；由 Rust 强制执行。
+- 范围与验收：见下方详细任务；不硬编码仅允许内置供应商，不承诺本地估算等于供应商账单硬上限。
 
-> Phase 3 保留 3A → 3C 的主题与助手形象能力；3B 壁纸方案已放弃，不再作为当前功能执行。
+### 阶段 5｜CSP、不可信渲染与 Tauri 权限加固
 
-#### Phase 3A｜Appearance Schema、Registry 与内置主题
+- 状态：未开始；初步 HIGH → L3，涉及脚本执行边界、渲染和 IPC 权限。
+- 目标：收紧实际不必要的 CSP 与权限，复用现有清洗能力覆盖真实不可信渲染入口。
+- 范围与验收：见下方详细任务；保留受支持的安全 Markdown、公式、图表、图片和本地模型。
 
-- 目标：建立版本化 `AppearanceConfigV1`、descriptor registry、resolver 和 DOM applicator；五个现有主题作为内置定义接入，不改变视觉。
-- 风险：MEDIUM-HIGH；涉及设置持久化、启动脚本、主题 DOM 属性、CSS token 和首屏颜色。
-- 推荐接口：
-  - `AppearanceConfigV1 { version, themeId, assistantVisualId, motionPreference }`
-  - `ThemeDefinition { id, label, colorScheme, tokens, startupCanvas }`
-  - `AppearanceRegistry`：合并内置定义与通过校验的用户配置
-- 约束：ThemePicker 从 descriptor 读取；`index.html` 使用可序列化 bootstrap 子集；未知/删除 ID 安全回退。
-- 验证：设置迁移、ThemePicker、startupTheme、五主题 Tauri sweep、Web/Desktop build、CSS/bundle gate、冷启动颜色一致性。
+### 阶段 6｜Agent 按需上下文超限恢复
 
-#### Phase 3B｜自定义壁纸（已放弃）
-
-- 状态：已放弃并移除实现，不再提供壁纸 schema、设置入口、启动恢复、CSS 渲染或 Tauri 资产命令。
-- 兼容边界：旧持久化配置中的壁纸字段被忽略；不删除应用配置目录中可能已经存在的壁纸文件。
-
-#### Phase 3C｜AI 助手形象与状态动画
-
-- 目标：让头像 renderer 由稳定 ID 和 descriptor 选择，并复用现有 `AssistantState` 驱动不同形象/动画。
-- 风险：MEDIUM；主要是 UI、资源与动画生命周期，不改变 AI 请求状态机。
-- 推荐接口：`AssistantVisualDefinition { id, renderer, stateAssets, animationPolicy, staticFallback }`。
-- 约束：不改变八状态；历史消息保持静态；后台页面暂停；支持 reduced-motion；第一版不加载用户 JS/React 组件或任意 CSS。
-- 验证：八状态映射、streaming 最新消息、历史静态头像、visibility pause、reduced-motion、损坏资源回退、设置迁移、AI Panel 视觉验收。
-
-## Phase 2B 已完成的历史子步骤
-
-### Phase 2B｜本次执行子步骤：workspaceIndex gateway 与文件授权门禁收口
-
-#### 目标
-
-保留 `workspaceIndex` 的 application coordinator 职责，但将文件可读性、持久化文档/embedding job、内存向量和 Native RAG 的组合操作收拢到同目录窄 gateway；清理按单文件报告失败，保证不可用 root 不误删索引，且失败项可由后续操作重试。同时修正文件授权门禁对当前会话恢复时序的过时断言，不改变应用行为。
-
-#### 开始前必须读取
-
-- `AGENTS.md`
-- `docs/AI_REVIEW_PROJECT.md`
-- `docs/architecture/state-ownership.md`
-- `docs/agent-contracts/file-access.md`
-- `docs/agent-contracts/database.md`
-- `docs/agent-contracts/rag-memory.md`
-
-#### 允许修改
-
-- `AI_IMPLEMENTATION_PLAN.md`
-- `src/services/workspaceIndex.ts`
-- `src/services/workspaceIndexGateway.ts`
-- `tests/workspace/workspaceIndex.test.ts`
-- `scripts/file-access-check.ts`
-
-#### 实施任务
-
-1. 新增窄 gateway，集中工作区 root 可读性、已索引路径读取、文件存在性检查、Markdown workspace index 和索引清理协作；`workspaceIndex.ts` 不再直接导入数据库/RAG/文件实现。
-2. 索引清理优先使用现有 `remove_knowledge_document_by_path` Rust SQLx 事务；事务完成后只清理 WebView 内存向量，再清理 Native RAG，保留 embedding-only job 的兼容清理路径。
-3. cleanup/rebuild 对单文件失败继续处理其他文件，将错误写入结果并保留失败项，确保下一次操作可以重试；不可读 root 仍完全不触碰其索引。
-4. 将 `scripts/file-access-check.ts` 的 active-tab restore 断言对齐当前实现顺序，补充 gateway 组合行为的 workspace characterization tests，运行当前子步骤定向检查；未完成 Phase 2B 其他 workspace/persistence 边界，不进入 Phase 2C。
-
-#### 验收标准
-
-- [x] `workspaceIndex.ts` 仅依赖窄 gateway 和路径边界逻辑，Settings/FileTree 不新增数据库或 RAG 依赖。
-- [x] 不可用 root 不触发索引清理；多 root 只处理可读 root。
-- [x] 清理使用事务删除数据库文档及 embedding job，随后清理内存/Native RAG；不再通过 vectorStore 触发重复非事务数据库删除。
-- [x] 单文件失败可见且不阻断其他文件；再次 cleanup/rebuild 可重试失败项。
-- [x] workspace 定向测试、file-access、runtime-schemas、rag-index、Typecheck、Lint、Desktop build、bundle gate 与 `git diff --check` 通过；Rust `database_transactions` 定向测试 `11 passed`。
-
-#### 检查命令
-
-```powershell
-npx vitest run tests/workspace/workspaceIndex.test.ts tests/workspace/multiRootWorkspace.test.tsx --maxWorkers=1
-npm run test:file-access
-npm run test:runtime-schemas
-npm run test:rag-index
-npm run typecheck
-npm run lint
-npm run build:desktop
-npm run check:bundle:desktop
-git diff --check
-```
-
-#### 禁止事项
-
-- 不修改 Rust schema/迁移、文件授权模型、RAG 分块/Embedding 算法或 FileTree UI。
-- 不修改 `workspaceRoots` 的 Source of Truth、Tab/最近文件/收藏，不删除真实文件。
-- 不提前实施 Phase 2B 其他边界、Phase 2C 或 Phase 3。
-- 不引入新依赖、通用 DI、Event Bus 或新的持久化格式。
-- 不清理无关死代码，不格式化无关文件，不覆盖既有用户修改。
-- 不提交、推送、打 tag、创建 Release 或 PR。
-
-### Phase 2B｜本次执行子步骤：Workspace UI 的 RAG gateway 边界
-
-#### 目标
-
-让 `WorkspaceRoots` 与 `FileTree` 只调用 workspace 领域 facade，不直接导入 RAG indexer/knowledgeBase 或读取 RAG 实现；保留工作区索引、知识库状态、加入/更新知识库和错误提示的现有行为。
-
-#### 允许修改
-
-- `AI_IMPLEMENTATION_PLAN.md`
-- `src/services/workspaceIndex.ts`
-- `src/services/workspaceIndexGateway.ts`
-- `src/components/file-tree/WorkspaceRoots.tsx`
-- `src/components/file-tree/FileTree.tsx`
-- `tests/workspace/workspaceRootsUi.test.tsx`
-- `tests/workspace/workspaceBoundaryContract.test.ts`
-
-#### 实施任务
-
-1. 在 workspace gateway/facade 暴露工作区索引、Markdown 判断、知识库状态查询和从授权文件读取后入库的窄操作。
-2. 替换 `WorkspaceRoots`/`FileTree` 的 RAG 直接导入；不改变 UI 操作顺序、提示文案、Markdown 限制或文件授权边界。
-3. 添加 UI 边界契约测试和现有 WorkspaceRoots 行为回归；不触碰 `knowledgeBase`、RAG 分块、SQLite schema 或 FileTree 的其他文件操作。
-4. 完成后标记 Phase 2B 完成；本窗口不进入 Phase 2C。
-
-#### 验收标准
-
-- [x] `WorkspaceRoots.tsx`、`FileTree.tsx` 不直接导入 `services/rag/*` 或数据库实现。
-- [x] workspace 索引和知识库操作通过 workspace facade 进入，现有 UI 定向测试通过。
-- [x] 文件仍通过 `useTauri` 读取，非 Markdown 文件不显示知识库操作。
-- [x] 边界契约、workspace、file-access、runtime-schemas、rag-index、Typecheck、Lint、Desktop build、bundle gate 和 `git diff --check` 通过。
-
-#### 禁止事项
-
-- 不修改 `knowledgeBase`、RAG pipeline/indexer 算法、SQLite schema、文件授权 Rust command 或 UI 文案。
-- 不把 workspace roots、Tab、最近文件或收藏迁移到新 Store。
-- 不提前实施 Phase 2C 或 Phase 3。
-- 不提交、推送、打 tag、创建 Release 或 PR。
+- 状态：未开始；原阶段 2，完整目标、范围与验收见下方“阶段 6 详细任务”。
+- 目标：正常请求直接发送，仅 Provider 明确返回上下文超限后进行确定性压缩与有界重试；不恢复默认总预算。
+- 实施顺序：核实错误与请求入口 → 建立最小超限复现 → 压缩与重试接入 → 定向回归与桌面验收。
+- 初步风险：MEDIUM；涉及 Agent 请求消息、异步取消、引用和重试边界。若实际修改触及工具写入执行语义，重新评估，不默认为此授权。
+- 暂不处理：模型摘要调用、全局窗口配置、用户预算设置、主动总量裁剪、RAG 算法或持久化格式。
 
 ## 当前阶段详细任务
 
-### Phase 3A｜Appearance Schema、Registry 与内置主题
+### 开始前必须读取与核实
 
-#### 目标
+- `AGENTS.md`、`docs/AI_REVIEW_PROJECT.md`、`docs/GUANMO_DEVELOPMENT_GUIDE.md` 保存数据流。
+- `docs/architecture/state-ownership.md` 文档模型与标签页章节。
+- `docs/agent-contracts/file-access.md`、`markdown-editor.md`、`rag-memory.md`、`database.md`；涉及浏览器适配时补读 `docs/web-deploy.md`。
+- 全局 `guides/engineering-execution.md`、`guides/delivery.md`；确实涉及持久化格式时另读 compatibility，默认不改格式。
+- 先做一次最小知识图查询；本轮图落后 HEAD，后续若仍过期直接用精确符号搜索，不重建 embedding。
+- 修改 EditorArea 前按项目启动基线规则记录同机基线；仅改保存调用，不改 mount、lazy import、预热或首屏打点，不宣称性能收益。若因环境无法记录，明确保留 NOT TESTED 与对应交付限制。
 
-建立版本化 `AppearanceConfigV1`、内置主题 descriptor registry、兼容 resolver 和 DOM applicator；五个现有主题从 registry 提供设置选项和启动 bootstrap 元数据，保持现有视觉与深浅主题切换语义。
-
-#### Blast Radius
-
-直接影响：
-
-- 新增 `src/services/appearance/appearanceSchema.ts`、`appearanceRegistry.ts`、`appearanceDom.ts`
-- `src/stores/settingsStore.ts` 的外观配置迁移与主题同步
-- `src/features/settings/ThemePicker.tsx` 的主题 descriptor 来源
-- `index.html` 的启动主题可序列化 bootstrap 子集
-
-间接影响：
-
-- `App.tsx`、标题栏、全屏主题控件通过现有 Store action 读取/切换 `themeId`
-- `startupShell.css` 与五个主题 CSS token 的选择器匹配
-
-高风险点：
-
-- 旧 `theme/lightPalette` 配置迁移、未知主题 ID 回退、持久化新字段默认值
-- 启动脚本与运行时 DOM 的 `data-theme-id`、`color-scheme` 和 startup canvas 一致性
-
-禁止影响：
-
-- 不改变五个现有主题的视觉值、`lastLightThemeId` 行为、Web/Desktop 能力边界、文件/数据库/AI 流程
-
-#### 开始前必须读取
-
-- `AGENTS.md`
-- `docs/AI_REVIEW_PROJECT.md`
-- `docs/architecture/state-ownership.md`
-- `docs/agent-contracts/ui.md`
-
-#### 允许修改
+### 允许修改
 
 - `AI_IMPLEMENTATION_PLAN.md`
-- `src/services/appearance/appearanceSchema.ts`
-- `src/services/appearance/appearanceRegistry.ts`
-- `src/services/appearance/appearanceDom.ts`
-- `src/stores/settingsStore.ts`
-- `src/features/settings/ThemePicker.tsx`
-- `index.html`
-- `tests/settings/appearanceRegistry.test.ts`
-- `tests/settings/settingsCompatibility.test.ts`
-- `tests/settings/themePicker.test.tsx`
-- `tests/settings/startupTheme.test.ts`
+- 一个窄的统一保存协调器，建议 `src/services/documentSave.ts`；不预建通用框架。
+- `src/hooks/useFileOperations.ts`
+- `src/components/common/CommandPalette.tsx`、`src/services/fileEntryActions.ts`：源码发现的必要保存旁路，只调整保存调用。
+- `tests/web/browserFileSystem.test.ts`：目标选择不提前写入与句柄身份的最小回归。
+- `src/components/editor/EditorArea.tsx`：仅保存、预览勾选保存调用和必要导入。
+- `src/services/fileSystem.ts`：仅保存/选择目标路径的适配边界。
+- `src/stores/editorStore.ts`：仅保存确认与另存为 action 的身份保护和保留新正文。
+- `src/services/browserFileSystem.ts`：仅在拆分另存为选择目标与写入时作必需调整。
+- 最少的 `tests/editor/` 保存协调器/生产入口测试；已受影响的 documentModelContract、previewTabSwitchRegression、resourceLifecycle/modeResourceLeak 测试按实际需要调整。
+- 不默认修改 pathIdentity、AppLayout、useTauri、Rust、RAG 实现、依赖与 CI。统一服务即使被多个 Hook 实例调用，也必须共享同一个队列。
 
-#### 实施任务
+### Blast Radius
 
-1. 定义 `AppearanceConfigV1 { version, themeId, assistantVisualId, motionPreference }`，并将旧配置安全解析为版本 1；未知/删除主题和非法新字段回退到安全内置值。
-2. 建立五个内置 `ThemeDefinition`，集中保存 id、label、description、colorScheme、startup tokens；registry 仅合并通过校验的 descriptor，不接受任意 CSS 或组件代码。
-3. 将 Store 的主题解析、默认值和 DOM 同步接到 Schema/Registry/DOM applicator；保留现有 Store action、旧字段和 `lastLightThemeId`。
-4. 将 `ThemePicker` 改为读取 registry descriptor；启动脚本只内嵌可序列化的 `themeId → colorScheme/startupCanvas` 子集。
-5. 补充 Schema/registry、设置迁移、ThemePicker 和启动主题定向测试；执行 Typecheck、Lint、Web/Desktop build、bundle gate、定向 Vitest 与 `git diff --check`。
+- 真相：editorStore.tabs；正文与保存基线仍由 Store action 管理。协调器只持有待执行快照及执行序号。
+- 直接链路：自动保存、Ctrl+S、编辑器 onSave、草稿另存为、预览勾选 → 唯一保存协调器 → 文件适配器 → 原有受限写入。
+- 间接影响：未保存标志/提示、Tab 切换/关闭/重开/路径变更、另存为后绑定路径、多个 Hook 的重复调度、保存后索引快照。
+- 风险信号：共享状态、异步竞态、effect cleanup、文件身份与用户数据写入。
+- 不应变化：正文编辑方式、预览块切片/冲突机制、模式/Tab 生命周期、权限、启动恢复、索引算法和 Web 既有能力。
+- 清理边界：组件 cleanup 只撤销其未提交定时器，不销毁应用级执行中队列；释放同路径执行锁必须等待实际写入结束。
 
-#### 验收标准
+### 实施方案
 
-- [x] `AppearanceConfigV1` 默认值、旧配置迁移、未知 ID/非法值回退均有测试并通过。
-- [x] registry 提供五个内置主题；ThemePicker 不再维护第二份主题选项数组。
-- [x] DOM applicator 与启动 bootstrap 对五个主题使用一致的 `colorScheme`/canvas；运行时切换仍立即更新 DOM。
-- [x] 现有设置、启动主题和主题选择行为测试通过；Web/Desktop build 与 bundle gate 通过。
-- [x] fresh Tauri Release 隔离 WebView2 五主题启动 sweep 通过，未触碰正式用户库。
-- [x] 未提交、未推送、未打 tag、未创建 Release。
+1. **统一入口。** 保存协调器拥有唯一的按文件身份分组的队列、成功确认和索引调度。自动、手动、预览勾选全部经过该入口；另存为先选择并授权目标，目标确定后通过同一入口写入。fileSystem 保留底层适配职责，不另建第二套队列。多处 Hook 的重复请求由共享协调器合并；不为消除重复而重构组件结构。
 
-#### 检查命令
+2. **一个执行中 + 一个待写。** 执行中快照不可更改；新有效请求替换待写快照，不积压 FIFO。相同有效版本重复请求合并。当前写入完成才启动下一次；不同路径互不阻塞。复用桌面 normalizeFilePath 作为 key，保留原始路径用于授权写入；浏览器虚拟路径沿用其句柄身份，不用规范化字符串替换实际 URI。
+
+3. **最新版本与防抖边界。** 空闲时保留现有 autoSaveDelay；手动保存立即提交，但不能越过执行中的写入。在自动保存开启且仍是同一有效 Tab/路径时，写入结束或准备重试时重新读取最新正文，覆盖过时待写版本，即使该次编辑的防抖尚未到期，也应让正在进行的保存轮次追上最新内容。自动保存关闭时，只处理明确的手动/勾选请求，不因后续普通编辑擅自增加保存。关闭自动保存撤销尚未启动的自动任务，执行中的写入仍正确完成并确认。
+
+4. **身份与完成回执。** 每次请求捕获 Tab id、原路径身份、内容快照及运行时执行标识；真正启动、完成确认和重试前核实身份。完成副作用由协调器统一执行，调用方不得在 await 后用捕获旧内容重复 markSaved 或调度旧索引。被替换请求只在替代版本成功写入后得到该版本的真实回执；失败/取消必须明确结算，不能假装旧版本写过，也不能留下永不结束的 Promise。正在写入的请求可在其成功后结算，但若当前内容已更新，不能给出“当前内容已全部保存”的提示。
+
+5. **保存基线不回写正文。** 成功写 A 后可把 savedContent 更新为 A，即使此刻 content 已为 B；modified 必须仍为 true。当前 content 等于成功写入内容才清脏。预览勾选完成后取消 replaceTabContentWithSaved 式的旧正文覆盖。Tab 已关闭、原路径已变或旧实例已失效时，不对当前 Tab 做迟到写回；未启动的失效请求取消。保留同路径执行锁至旧写入结束，避免关闭/重开产生并发写。
+
+6. **另存为保留编辑。** 防止同一草稿的重复手动操作启动多个并行选择器或迟到路径绑定。选择目标后读取该草稿当前有效正文再提交；写入期间的新编辑保持在 content 中，成功只绑定仍有效的 Tab/目标并更新基线，不能用 saveTabAs 的旧快照覆盖新正文。若自动保存开启，绑定后最新未保存正文继续由同一目标队列保存。选择器取消不写入、不改路径、不清脏。
+
+7. **有界失败重试。** 自动保存沿用最多 3 次失败的上限与现有延迟，不做无限重试；每次重试取最新有效请求，不重试闭包中的旧内容。连续失败预算不因重复 effect/普通编辑无限刷新；成功清除预算，达到上限后停止自动重试并保留脏状态与现有错误提示，用户再次手动保存可显式开启新一轮。失败与新请求仍在同一锁内串行处理；清理计时器和等待者，不留 unhandled rejection。手动保存保留可观察错误，不能无限等待后台重试。
+
+8. **索引与 Web。** 仅对实际成功写入的快照调度索引，不调度被跳过/替换/失败的内容；保留手动约 1.2 秒、自动约 5 秒的既有延迟与索引 PendingLatest。Web 保留文件句柄和下载回退，回执区分写入成功与触发下载，不把下载点击描述为已确认原文件落盘；不扩大 Web 能力或引入 SQLite。
+
+### 验收标准
+
+以下已勾选项指实际自动化检查；原生表面单列最后一项，仍为 NOT TESTED。
+
+- [x] 用可控 deferred writer 和 fake timer 通过生产保存入口复现“旧写入未结束时发生新保存”；改动前证明缺少同路径串行契约，改动后每条路径最大并发为 1。
+- [x] A 写入阻塞，B/C 到达：实际只写 A、C；A 未结束前 C 不启动；不同路径可独立推进。
+- [x] 自动与手动混用、连续 Ctrl+S、两个 Hook 实例调度、桌面大小写/分隔符路径变体仍共用一条队列。
+- [x] A 完成时 content 为 B：savedContent=A、modified=true，正文 B 不变；最新版本写入成功后才清脏。编辑后撤回到相同内容不会让过时待写版本覆盖当前正文。
+- [x] 预览勾选保存中继续编辑不会被旧回调覆盖；预览块提交继续经既有正文入口与自动保存。
+- [x] A 失败后出现 C：只重试最新 C；永久失败有界停止、提示、保留脏状态，随后手动重试可恢复；所有等待者均正确结算。
+- [x] Tab 快速切换、关闭/重开、原路径改变、自动保存关闭和 Hook 卸载不造成跨文档确认、迟到覆盖或同路径锁提前释放。
+- [x] 另存为取消、重复触发和写入期间继续编辑均安全；新正文与草稿不丢失，只有成功后绑定有效路径。
+- [x] 仅成功写入快照触发索引；重复完成不倒退索引；浏览器保存/下载回退保持现有行为与真实状态语义。
+- [x] 最小相关测试、类型检查、Lint、边界检查及 Core Smoke 通过；无无关 diff。
+- [ ] 用匿名临时 .md 在原生 Tauri 验证持续编辑与手动保存交错、预览勾选后编辑、失败后恢复、另存为后继续编辑；停止后读取临时磁盘文件，确认等于当前正文。自动测试不能代替此项。
+
+
+### 检查命令与证据
+
+本轮为规划，不执行以下功能检查。实现阶段先新增确定性保存测试，再执行；新测试文件名按实际落地更新本节，不把规划命令记为 PASS。
 
 ```powershell
-npx vitest run tests/settings/appearanceRegistry.test.ts tests/settings/settingsCompatibility.test.ts tests/settings/themePicker.test.tsx tests/settings/startupTheme.test.ts --maxWorkers=1
+# 新增保存协调器及入口测试后，先运行这些实际文件（--maxWorkers=1）
+npx vitest run tests/editor/documentSave.test.tsx tests/web/browserFileSystem.test.ts tests/editor/documentModelContract.test.ts tests/editor/previewTabSwitchRegression.test.tsx --maxWorkers=1
+npm run test:store-boundaries
+npm run test:file-access
 npm run typecheck
 npm run lint
-npm run build
-npm run build:desktop
-npm run check:bundle:web
-npm run check:bundle:desktop
+npm run test:smoke
 git diff --check
 ```
 
-#### 禁止事项
+- 命令按依赖顺序执行，失败先处理首个根因；后续只重跑受影响检查。
+- 若保存调用修改触及资源生命周期，追加现有 EditorArea.resourceLifecycle/modeResourceLeak 定向测试；不批量读取所有 tests。
+- 新增模块不引入重型依赖；若实际改变加载边界，再执行相关 Desktop/Web build 与 bundle gate。Rust 未改不运行 Rust 编译/测试；不跑全量测试或发布门禁。
+- 原生验收必须核实正在运行的进程、工作区和 HEAD；使用新鲜对应产物及匿名临时文件。无原生通道时记 NOT TESTED，阶段保持进行中。
+- 风险 HIGH → 验收建议 L3 强模型。用户明确调用后才启动模型 Review；复用已有 Machine Gate，最多一次 Fix → Re-review。
+- 建议调用词：`使用 ai-code-review Skill 执行本次模型 Review；以统一保存任务 diff 为起点，检查 Blast Radius 和 Regression Surface，重点核实串行写入、最新重试、保存确认与另存为，不扫描无关代码。`
 
-- 不修改五个主题的 CSS token 数值、视觉设计或启动窗口策略。
-- 不实施已放弃的 Phase 3B 壁纸；不提前实施 Phase 3C 头像 renderer/动画或用户脚本/组件加载。
-- 不修改 SQLite schema、Tauri command、文件授权、AI/RAG、文档模型或无关 Store。
-- 不引入新依赖，不清空/重建用户配置，不覆盖既有工作区修改。
-- 不提交、推送、打 tag、创建 Release 或 PR。
+### 禁止事项与避坑
 
-### Phase 3B｜自定义壁纸（已放弃）
+- 不只加写前/写后 content 判断：这不能建立写入顺序；不把 Hook 局部锁误当应用级锁。
+- 不只修自动保存而保留手动、另存为、预览勾选旁路；不在旧调用方继续执行陈旧完成副作用。
+- 不将“入队成功”“旧版本写入成功”或“下载已触发”当作当前正文已落盘。
+- 不用执行序号替代内容相等与路径/Tab 身份校验；不持久化队列或新增文档 schema。
+- 不取消或清空执行中写入来释放锁；不无限重试，不用清空数据/重置配置处理错误。
+- 不新建第二套索引队列，不改变 RAG 算法、文件权限或 Web 能力。
+- 不清理未跟踪目录、旧基线产物或无关死代码；不扩大到原生原子写、跨进程保存或文件重命名事务。
+- 用户已授权本轮实施；不在阶段 1 验收未完成时提前实施阶段 2。
 
-- 状态：已放弃并移除实现，不再提供壁纸 schema、设置入口、启动恢复、CSS 渲染或 Tauri 资产命令。
-- 兼容边界：旧持久化配置中的壁纸字段被忽略；不删除应用配置目录中可能已经存在的壁纸文件。
-- 验证：本次移除后的主题、设置兼容、文件边界、TypeScript、构建和 Rust 检查结果以当前状态记录为准。
+## 阶段 2–5 详细任务｜API 密钥与 XSS 安全加固
 
-### Phase 3C｜AI 助手形象与状态动画
+### 已核实基线与待核实边界
 
-#### 目标
+- `src/services/ai/providers/openaiCompatible.ts` 仍用 `config.apiKey` 拼装 Authorization；`src/services/externalHttp.ts` 把请求头通过 IPC 交给 Rust。不能只迁移这个 Provider 而遗漏其他协议、Embedding、模型列表和联网搜索。
+- `src/services/secureStorage.ts` 与 `settingsStore.hydrateSecrets` 是现有密钥/前端恢复入口；开发总指南说明 Windows 存储已由 Rust 使用 DPAPI 保护。实施阶段必须核实当前 Rust 存储命令、配置预设和旧数据迁移；本轮未检查全部读取与导出入口，不声称已发现全部明文副本。
+- `src-tauri/src/api_http.rs` 已有请求体 2 MiB、响应体 16 MiB、超时 120 秒和并发 8 的限制。外部 HTTP 契约已要求 Origin 授权、DNS/IP、请求头和重定向校验；先复用并验证，不能把这些写成全新待建能力，也不默认降低现有上限。
+- `src-tauri/tauri.conf.json` 的 CSP 当前含 `script-src 'unsafe-inline'` 及较宽 connect-src；本轮未复现 XSS，未核实每个渲染入口清洗或现有权限覆盖情况，不能把允许项直接当作已可利用漏洞。
+- `src/web/WebSettingsPage.tsx` 已有 Key 存储选择和明文保存风险弹窗，缺少覆盖所有模式的常驻运行期提示。当前 `external-http.md` 与 `web-deploy.md` 允许 Web 对话/搜索配置；根 AGENTS.md 部分 Web 描述更严格，实施遇到实际权限冲突时先澄清，不借安全任务启用或禁用既有功能。
+- 密钥隔离降低长期泄露风险，不阻止 XSS 借合法代理发请求；CSP、清洗、IPC 最小权限和代理操作限制共同构成防护。首次输入 Key 短暂经过前端，Web 解锁后的 Key 也必须在页面使用，不能宣传为“XSS 无法获取”。
 
-在保留既有 AiSprite 视觉、八状态派生和历史消息静态行为的前提下，建立安全的助手 visual descriptor/resolver；AI Panel 与设置预览只通过稳定 `assistantVisualId` 选择内置 renderer，不加载用户 JS/React 组件或任意 CSS。
+### 各阶段开始前的最小读取
 
-#### Blast Radius
+- 共用：根目录及目标目录规则、`docs/AI_REVIEW_PROJECT.md`、全局 `guides/engineering-execution.md` 与 `guides/delivery.md`；仅查询当前阶段相关知识图，过期或不足时精确搜索，不重建图或 embedding。
+- 阶段 2：`docs/agent-contracts/ui.md`、`external-http.md`、`docs/web-deploy.md`；核实 Web Key 配置区与现有提示。
+- 阶段 3：总指南第 10 节、设置/AI 对应 `state-ownership.md`、`external-http.md`、`desktop-services.md`、全局 `guides/api-coordination.md`、`guides/compatibility.md`；涉及文件或备份边界时补读 file-access/database 契约。
+- 阶段 4：`external-http.md`、`desktop-services.md`、API 协调指南；核实 Rust 代理与阶段 3 密钥绑定契约，修改前给出简短调用链和 Blast Radius。
+- 阶段 5：`markdown-editor.md`、`file-access.md`、`external-http.md`、`desktop-services.md`、`docs/web-deploy.md`；触及预览状态补读对应 ownership。修改 MarkdownPreview、启动或加载边界时遵守项目同机基线与交付限制，不以静态阅读宣称性能无影响。
 
-直接影响：
+### 阶段 2｜提示先行
 
-- `src/services/appearance/appearanceSchema.ts` 的助手 ID 校验与兼容回退
-- 新增 `src/services/appearance/assistantRegistry.ts`、`src/components/ai/AssistantVisual.tsx`
-- `src/components/ai/AiPanel.tsx`、`src/features/settings/SettingsPage.tsx` 的 renderer 选择入口
-- 助手 descriptor、renderer 选择、历史静态头像、visibility pause、reduced-motion 定向测试
+- 允许修改：`src/web/WebSettingsPage.tsx` 的 Key 提示和必要样式、最少直接相关验证、本文件。
+- 实施：在聊天/搜索 Key 配置可见区域展示常驻、主题可读的提示；三种模式均可见，不依赖用户先选择明文保存。保留已有明文保存弹窗和按钮语义，不新增确认步骤。
+- 建议文案：`浏览器运行期间，恶意脚本可能读取或使用 API Key；密码加密保存不能消除这一风险。建议使用专用、低额度、可随时撤销的 Key，并在供应商后台设置消费上限。`
+- 验收：内存/明文/加密、锁定/解锁、明暗主题与窄屏下提示可读；保存、解锁、清除及原有确认行为不变；不把加密模式写成免疫 XSS。不改默认存储、格式、权限或请求行为。
+- 检查：改动文件 ESLint、`git diff --check`；若改 JSX/类型逻辑执行 `npm run typecheck`。在真实 Web 页面核实布局及原有操作；未执行记 NOT TESTED，不为纯文案新增镜像测试。
 
-间接影响：
+### 阶段 3｜Rust 内部密钥使用与兼容迁移
 
-- `useAssistantState` → `assistantState` → `chatStore` 的只读状态订阅
-- `settingsStore.appearance.assistantVisualId` 的持久化迁移
+- 允许修改：`secureStorage.ts`、`settingsStore.ts` 中必要密钥元数据/恢复边界、桌面 Key 配置与预设入口、实际持有凭据的 Provider/Embedding/搜索适配、`externalHttp.ts`、`src-tauri/src/api_http.rs`、实际安全存储命令与注册/权限、直接相关契约与测试、本文件。仅改这些职责，不重构 Agent 或业务 DB。
+- 实施顺序：核实三类 Key、预设身份与旧迁移 → 定义窄 IPC 请求及 Key/Origin 绑定 → Rust 内部读取与鉴权 → 配置 UI/调用入口接入 → 删除前端明文恢复和可读密钥命令 → 兼容与原生验收。
+- 复用已有 DPAPI 存储，不把“从前端移走”误解为重新迁移到另一种库。前端保留已配置/缺失状态与写入、替换、删除能力；编辑时留空代表不变，删除须显式操作。保存后清除本次输入的临时明文，不提供返回完整 Key 的查看/复制接口。
+- IPC 传配置身份、受限操作、模型/消息等业务参数，Rust 决定鉴权头和目标。调用方不能通过传任意 URL、headers 或 credential ID 把另一供应商 Key 发往其他 Origin；无鉴权更新检查与本地免 Key 请求也要保持明确边界。
+- 旧 Key 在迁移确认成功前保留；失败可重试并提示，不能假装已保存、清空旧配置或静默改回前端明文。核实旧预设、备份/导出是否含 Key，并采取兼容读取、受控迁移和脱敏；不擅自扩大为全量备份重构。
+- 验收：冷启动、保存/替换/删除、切换预设、迁移失败与重试可用；聊天、模型列表、Embedding、联网搜索及多协议鉴权正确；自定义 Origin、本地模型和 SSE/取消保持。前端 Store、持久化、普通 IPC 响应及日志/错误/导出均不含已保存明文 Key；任意 Key 读取命令拒绝调用，伪造目标不能带走凭据。
+- 检查：匿名旧格式 Fixture 的最小迁移/存储测试、实际 Rust 密钥及代理定向测试、`npm run test:ai-http`、`npm run test:privacy-logs`、`npm run typecheck`、改动文件 ESLint、`npm run test:smoke`、`git diff --check`。仅构建验收所需新鲜原生产物；真实密钥不进入 Fixture/日志，以本地匿名服务捕获合成鉴权验证请求。
+- 交付边界：本阶段证明减少明文暴露；未完成阶段 4 时不得声称代理滥用已解决。安全存储系统失败不能使用明文回退；跨平台支持以现有产品范围为准，缺失能力明确报错，不新建未要求的跨平台框架。
 
-高风险点：
+### 阶段 4｜操作白名单与代理滥用限制
 
-- 不改变 `AssistantState` 八状态、AI 请求编排、Store 写入和 SQLite 持久化
-- 保留 renderer 的 `visibilitychange` cleanup、CSS `prefers-reduced-motion` 和历史消息 `animated=false`
+- 允许修改：`api_http.rs`、阶段 3 的窄请求类型/调用适配、必要 Origin/凭据绑定配置与撤销 UI、直接相关权限、契约和测试、本文件；不新增通用网络代理或修改 Agent 工具权限。
+- Rust 强制校验供应商/已授权自定义服务、方法、精确接口和操作的组合；覆盖 Chat Completions、多协议聊天、Embedding、模型列表、搜索、更新的真实需要。禁止任意路径、路径编码绕过、任意鉴权头及跨 Origin 凭据复用；配置身份和授权目标不能只由前端自行宣称。
+- 自定义 API 与本地模型沿用明确 Origin 授权，再绑定允许操作与所需端点；切换目标不得默默沿用旧 Key 信任。拒绝危险地址/重定向等现有防护保持，不用固定内置域名名单破坏已支持的自定义服务。
+- 在现有并发、大小、超时上增加按凭据/配置的速率限制，并有应用级累计请求及输出/用量边界，防止切换配置绕过。先记录聊天、Agent 多轮、Embedding 批次和搜索的正常需求，再确定具体阈值与窗口；实现阶段写入实际数值、达到上限的拒绝语义及必要设置，不提前猜测供应商价格或一刀切压低大小上限。
+- 区分请求次数、可校验 token/输出预算与真实费用；每次重试消耗对应额度。若提供跨重启的日累计限制，最小持久化必须兼容旧配置并核实重启不能清零绕过；会话限额明确标为会话限额。供应商消费硬上限由用户在供应商后台设置，本地统计仅为辅助，不包装为账单保证。
+- 验收：合法内置/自定义/本地请求可用；伪造操作、方法、编码路径、跨配置 Key、未授权 Origin 均被 Rust 拒绝；突发、并发、累计限额、取消/超时与失败后的资源释放正确。仅允许读取已配置状态不应泄露 Key。限额不能使正常 Agent/索引产生无限重试或静默失败。
+- 检查：最小 Rust 代理/限额测试和合成本地 HTTP 服务验收，`npm run test:ai-http`、`npm run test:privacy-logs`、`npm run typecheck`、改动文件 ESLint、`npm run test:smoke`、`git diff --check`；数据/接口变化更新对应契约。不跑全量 Rust 或发布门禁。
 
-#### 允许修改
+### 阶段 5｜防注入与最小权限
 
-- `AI_IMPLEMENTATION_PLAN.md`
-- `src/services/appearance/appearanceSchema.ts`
-- `src/services/appearance/assistantRegistry.ts`
-- `src/components/ai/AssistantVisual.tsx`
-- `src/components/ai/AiPanel.tsx`
-- `src/features/settings/SettingsPage.tsx`
-- `tests/agent/aiSprite.test.tsx`
-- `tests/agent/assistantVisual.test.tsx`
-- `tests/settings/assistantRegistry.test.ts`
+- 允许修改：`src-tauri/tauri.conf.json`、实际 capabilities/command 权限、Web CSP 配置入口（先核实部署可用方式）、当前 Markdown/HTML、SVG、Mermaid、图表等不可信内容的实际渲染与清洗模块、直接相关契约/测试、本文件。只改有证据的入口，不另起第二套全局渲染器。
+- 先分别核实原始 HTML、危险 URL/事件属性、SVG、Mermaid/图表与其预览/全屏 surface，复用清洗能力并验证清洗之后未重新拼入不可信 HTML。React 转义或单一 Markdown sanitizer 不能自动证明其他入口安全。
+- 查明内联脚本来源后移除不必要的 `script-src 'unsafe-inline'`，优先使用静态脚本；有真实必要项才采用受控 nonce/hash。分别收紧 connect-src、资源源及其他有效指令；不把 `style-src 'unsafe-inline'` 当成脚本同等风险机械删除，不用放宽其他指令补偿破坏。
+- Desktop 与 Web 使用各自实际 CSP，验证开发/Release 及真实 Web 部署方式；保留图片、公式、图表、资源协议和现有本地模型需求，发现必要兼容例外时记录精确来源与理由，不恢复宽泛允许。
+- 核实窗口/远程内容/iframe 的 IPC 与 command 权限，移除确实不需要的能力；自定义 Rust command 必须核实实际 ACL 注册和后端参数校验，不能只缩 capabilities 文件就宣称已隔离。密钥、Authorization、文档正文和原始服务错误不得进入日志或提示。
+- 验收：匿名攻击 Fixture 的 script、事件属性、危险 URL、SVG 与图表路径不能执行或获取 IPC 能力；安全 Markdown、链接、图片、公式、图表、全屏预览仍正常。桌面 Release 和 Web 真实页面分别验收 CSP 生效、正常网络与权限拒绝；未测表面标 NOT TESTED，不宣称完全消除 XSS。
+- 检查：实际受影响的最小渲染/CSP/权限测试、`npm run test:privacy-logs`、`npm run typecheck`、改动文件 ESLint、`npm run test:smoke`、`git diff --check`；改构建/CSP时执行 `npm run build:desktop` 与 `npm run build` 的对应 bundle gate，涉及 Rust ACL 时仅做必要定向验证。
 
-#### 实施任务
+### 安全专项共同交付边界
 
-1. 将助手 visual ID、八状态 asset descriptor、动画策略和静态 fallback 收拢到内置 registry；未知/损坏 ID 安全回退到 sprite。
-2. 新增受控 `AssistantVisual` 适配器，使用固定 renderer map；AI Panel 的空态、最新流式消息和历史消息通过稳定 ID 进入，历史消息继续静态展示。
-3. 设置预览复用 resolver/adapter；不增加用户脚本、React 组件、任意 CSS 或新的状态机。
-4. 补充 descriptor/fallback、八状态映射和 renderer 接入测试；执行 Typecheck、Lint、Web/Desktop build、bundle gate 和 `git diff --check`。
+- 本轮只规划；以上功能检查、安全攻击 Fixture、迁移、限额、桌面/Web 原生验收均 NOT TESTED。未来阶段按实际执行记录 PASS/FAIL/NOT TESTED；关键验收缺失时保持进行中。
+- HIGH 阶段建议 L3 验收模型；用户明确调用 `ai-code-review` 后才做模型 Review，复用已有门禁，最多一次 Fix → Re-review。提示词：`使用 ai-code-review Skill 审查当前安全阶段 diff，重点检查密钥不返回前端、目标绑定、旧数据兼容、Rust 操作/限额及实际 XSS/IPC 边界；仅检查有调用链证据的影响范围。`
+- 不读取真实用户密钥做自动测试，不在日志、错误、截图或测试结果中显示 Key；不清空旧数据、不静默明文回退、不新增远程中转服务、不改变 Web 存储模式与既有业务权限。远程部署仍需项目安全门禁与二次确认。
 
-#### 验收标准
+## 阶段 6 详细任务｜Agent 按需上下文超限恢复
 
-- [x] 八个 `AssistantState` 均有 descriptor 映射，未知 visual ID/renderer 安全回退为 sprite。
-- [x] AI Panel 最新流式消息跟随真实助手状态；历史消息不播放动画；空态和设置预览沿用既有渲染路径。
-- [x] 页面隐藏暂停动画并在 cleanup 后不残留监听；系统 reduced-motion 继续禁用动画。
-- [x] 旧设置、版本化 `assistantVisualId` 和非法值迁移兼容；不改变 AI 请求状态机。
-- [x] 相关定向测试、Typecheck、Lint、Web/Desktop build、bundle gate 和 `git diff --check` 通过。
-- [x] 新鲜 Tauri/WebView2 中完成 AI Panel 空态、流式、历史静态头像和设置预览视觉验收。
-- [x] 未提交、未推送、未打 tag、未创建 Release。
+### 目标与已确认决策
 
-#### 检查命令
+- 用户反馈：此前尝试默认上下文窗口预算，经常限制日常请求，因此已撤回；撤回后没有观察到明显不可用状态。这是用户使用反馈，不是本轮测试结论。
+- 采用“正常直接发送，明确超限后压缩”的方案，避免未知模型窗口的保守猜测影响日常请求；不新增预算设置，不让用户调整上下文窗口。
+- 保留现有单工具结果限额、去重、权限、工具调用次数和 deadline；正常路径不增加摘要模型请求，也不新增总预算估算或裁剪。
+- 超限恢复解决请求不可发送的问题，不能保证未超限的复杂任务回答质量。只有后续出现明确质量退化证据，再评估执行轨迹整理或任务摘要；本阶段不实现模型摘要。
+
+### 已核实入口与下一步核实
+
+- `src/services/agent/executor.ts`：构建 system、历史、当前上下文与问题；工具循环和无候选工具回复已有上下文超限后的单次 `dropOldestCompleteTurns` 重试。工具结果追加到消息后继续请求，压缩不能重启工具执行循环。
+- `src/services/ai/contextBudget.ts`：已有正文 token 估算、基于错误文本的超限识别和删除最旧完整问答轮次；目前按最后一条 user 判断当前轮次。
+- Agent 工具反馈也可能使用 user 角色，不能仅靠 role 判断当前真实问题和历史轮次；先明确当前请求边界，保护本轮 query、selection/file tag 授权、修改确认及最终回答指令。
+- `src/hooks/useAiChat.ts`：接收 Agent finalMessages 后通过 `src/services/aiChatFlow.ts` 的 `streamFinalAnswer` 生成最终回答；该函数也已有单次删除最旧轮次的超限兜底。不能只改工具循环而遗漏最终回答。
+- 图查询能定位 runAgent，但图落后 HEAD；实施时以当前源码为准，用精确符号补查，不重建 embedding。
+- 下一步只核实上述入口的消息表示、流式重试状态、引用映射和可用 Provider 错误信息；本轮未验证错误分类准确性或真实超限恢复效果。
+
+### 开始前读取、范围与影响
+
+- 读取根目录及目标目录规则、`docs/AI_REVIEW_PROJECT.md`、`docs/GUANMO_DEVELOPMENT_GUIDE.md` 中 Agent 请求链路、`docs/architecture/state-ownership.md` 中 AI/聊天相关边界、`docs/agent-contracts/ai-selection.md`、`external-http.md`；压缩来源信息时补读 `rag-memory.md`。
+- 允许修改：`src/services/agent/executor.ts`、`src/services/ai/contextBudget.ts`、`src/services/aiChatFlow.ts`、`src/services/aiChatMessages.ts`、`src/hooks/useAiChat.ts` 的必要消息/重试接入、最少必要 Agent 请求类型、直接相关测试及本文件。
+- 不默认修改工具实现、路由、Store、Rust、DB、持久化消息、设置、依赖或 CI；确有范围外必要改动先说明。
+- Blast Radius：Agent 普通回复、工具循环、补调后的请求、最终回答 → 模型请求重试；间接影响流式展示、取消/deadline、来源编号和编辑确认。压缩只改变发往模型的请求副本，原始聊天记录、工具步骤和授权真相保持不变。
+
+### 实施方案与禁止事项
+
+1. 先用模拟 Provider 在实际入口复现首次明确超限、普通成功和其他错误；优先复用现有 helper，统一最少必要恢复策略，不预建通用预算框架。
+2. 仅明确的上下文超限触发压缩；优先使用现有可用结构化错误信息，保留必要的供应商文本兼容。网络、限流、鉴权、服务异常和用户取消不得触发压缩；不放宽错误匹配去猜未知错误。
+3. 一次压缩可移除多轮最旧完整历史，并压缩重复或被替代的旧工具结果，避免仍只删一轮。未知模型上限时不倒推出默认窗口，也不声称能保证一次压缩成功。具体压缩力度依据实际消息边界选择可解释规则，不添加用户配置。
+4. 必须保留安全规则、当前问题与约束、当前授权目标、待确认操作、必要证据和稳定来源编号。工具调用/返回按现有协议成组处理；结构化结果按完整条目压缩，不能截断 JSON、破坏调用配对、伪造工具成功或将工具材料提升为可信指令。被裁掉的材料不能被描述为模型已经看到；引用映射不得悬空或重编号。
+5. 每次模型请求最多一次压缩重试，只有消息确实减少且尚未取消/超时才重试；后续工具循环复用压缩后的本轮有效请求上下文，不能每轮恢复已剔除材料。不得重启整个 Agent、重复执行读写工具、重置调用计数或延长 deadline。
+6. 流式与非流式、无候选工具回复及 Agent 最终回答使用一致边界。若错误发生在已有部分流式输出之后，先核实可安全重试的条件与展示复位，不能重复拼接回答或清除非本轮内容。
+7. 无可安全压缩内容或重试仍超限时，明确提示当前材料过大并建议缩小范围，保留原始会话和已完成工具结果。沿用现有失败/未完成语义，不伪装成功、不静默吞错、不无限重试。
+8. 不恢复已撤回的固定总预算，不自动降小单工具限额，不新增模型摘要调用或全局设置，不通过清空聊天数据解决问题；日志不记录正文、密钥、完整错误或用户路径。
+
+### 验收标准与检查
+
+- [ ] 日常成功请求与修改前发送内容一致，请求次数不增加，无主动总量裁剪、摘要或预算配置。
+- [ ] 长历史及累计工具结果场景：首次明确超限后有效减少请求，最多重试一次；保护当前真实问题与授权，后续请求不重新塞回被剔除材料。
+- [ ] 普通错误、取消、deadline 均不触发超限恢复；再次超限或无法压缩时有明确终止结果。
+- [ ] Agent 工具循环、无候选工具回复及最终回答均覆盖流式/非流式适用分支；部分流式失败不重复显示或污染其他请求。
+- [ ] 超限重试不重复任何工具副作用、不重置执行预算；来源编号、必要证据和待确认编辑保持有效，不改原始聊天记录或持久化格式。
+- [ ] 用 mock Provider 的实际生产入口回归上述不变量；类型检查、改动文件 ESLint、定向 Smoke 和 diff 检查通过。
+- [ ] 原生 Tauri 验收日常请求与可控的明确超限恢复；核实运行产物、工作区与 HEAD。缺少真实超限条件时此项记 NOT TESTED，不把 mock 结果当原生验收。
+
+实施时先核实并选择实际受影响的测试文件，例如 `tests/agent/agentContextContinuation.test.ts`、`aiChatFlowContext.test.ts`；工具计数和流式前置条件仅在受影响时补跑 `agentExecutionBudget.test.ts`、`agentStreamPrerequisite.test.ts`。新增测试按实际文件名更新，不批量读取测试目录。
 
 ```powershell
-npx vitest run tests/agent/aiSprite.test.tsx tests/agent/assistantVisual.test.tsx tests/settings/assistantRegistry.test.ts tests/settings/appearanceRegistry.test.ts tests/settings/settingsCompatibility.test.ts --maxWorkers=1
+# 先运行实际受影响的测试文件及最少新增回归，使用 --maxWorkers=1
+npx vitest run tests/agent/agentContextContinuation.test.ts tests/agent/aiChatFlowContext.test.ts --maxWorkers=1
 npm run typecheck
-npm run lint
-npm run build
-npm run build:desktop
-npm run check:bundle:web
-npm run check:bundle:desktop
+# 对实际修改文件执行 npx eslint，不默认运行全仓检查
 git diff --check
 ```
 
-#### 禁止事项
+- 按实际风险执行项目要求的最小定向 Smoke；未改传输层不默认运行 test:ai-http，未改 Rust 不编译 Rust，不执行全量测试、构建或发布门禁。
+- 初步 MEDIUM → L2 验收模型；用户明确要求模型 Review 后，复用已有 Machine Gate。建议提示词：`使用 ai-code-review Skill 审查 Agent 超限恢复阶段 diff，重点检查当前轮次保护、错误分类、重试副作用、流式取消和引用完整性，不扫描无关代码。`
+- 当前验证：仅源码核实；本阶段功能测试、模型实测与原生验收均 NOT TESTED，业务代码未修改。
 
-- 不改变 `AssistantState` 八状态、AI 请求/流式/持久化逻辑或现有 AiSprite 视觉 token/keyframes。
-- 不加载用户 JS、React 组件、任意 CSS、远程头像或未验证资源，不新增依赖。
-- 不修改 SQLite、文件授权、主题视觉或无关 Store，不覆盖既有工作区修改。
-- 不提交、推送、打 tag、创建 Release 或 PR。
+## 明确下一步
 
-## Phase 2C 已完成的历史子步骤
+阶段 1 代码与 Machine Gate 已完成，当前仍为进行中；用户已明确暂缓验收，暂不运行后续构建/原生验收。恢复验收后按以下步骤执行，不要重新实现队列或提前实施阶段 2。
 
-### Phase 2C｜本次执行子步骤：Conversation persistence command
+1. 核实 `git status --short`、本文件和当前 HEAD（本轮为 `0c6496d67695b43ac0d9afb1d608b89116ea66cf`）；全部业务 diff 属于本轮已授权任务，原先计划文件修改和未跟踪目录保留。
+2. 确认系统内存/提交额度足够后，只重试必需的原生构建；不得关闭用户程序、删缓存、改变系统页面文件或修改构建门禁来强行通过。前端产物已通过 Desktop gate，源码/配置不变时可复用 `dist/`，以 `$env:CARGO_BUILD_JOBS='1'; npx tauri build --no-bundle --config 'D:\temp\guanmo-save-build-override.json'` 跳过重复前端构建（临时 JSON 仅 `{ "build": { "beforeBuildCommand": "" } }`）。缺失临时文件时重新在临时目录创建；源代码变化后先重建前端。
+3. 新鲜 EXE 成功后记录路径、时间、工作区/HEAD；独立 APPDATA/LOCALAPPDATA/WebView2 profile 和匿名临时 .md 验证自动与 Ctrl+S 混用、预览勾选后新编辑、写入失败后恢复、另存为继续编辑与取消。读取磁盘与最新正文比较，核实脏标志与目标绑定。不要以 mock、旧 EXE 或下载点击代替真实落盘。
+4. `D:\temp\guanmo-save-native.mjs` 是本轮准备但**尚未执行/验证**的独立 CDP 测试草稿，只包含持续编辑/手动保存的初始探针；先检查它的启动/模式/选择器条件，补齐其余原生流程，不能把该脚本记为 PASS。它复用项目 cold-start CDP/隔离环境模式，并保留临时文件，未修改产品或原生 command。
+5. 本轮只改保存调用，不改模式/资源生命周期，不宣称性能收益。编辑/预览各 3 次旧产物同机基线已记录（下方）；原生构建失败，修改后对照 NOT TESTED。环境恢复后再完成对照；若转为性能优化则必须按 AGENTS 的至少 10 次/模式执行，不用本轮 3 次样本声称优化效果。
+6. 原生项通过后勾选最后一项、将阶段 1 标为已完成并切换阶段 2。阶段 2 涉及 Web 设置与密钥 UI，建议新窗口重新建立范围；用户已有逐阶段实施授权，不要求再次确认。阶段 2–6 的原规划保持未开始。
 
-#### 目标
-
-将会话 SQLite 写入、历史读取和删除从聊天 UI/Store 的直接实现依赖中收拢到窄 command；保留聊天 Store 的内存状态所有权和现有数据库协议，为后续 Artifact 与请求编排边界建立接缝。
-
-#### Blast Radius
-
-直接影响：
-
-- `src/components/ai/AiPanel.tsx` 的历史会话删除入口
-- `src/stores/chatStore.ts` 的会话保存与历史加载
-- 新增 `src/services/agent/conversationCommands.ts` 作为持久化命令边界
-
-间接依赖：
-
-- `src/services/database/persistence.ts` 的会话写入、历史读取和删除函数
-- 聊天历史与 AI 面板定向测试
-
-高风险点：
-
-- Store 状态更新与异步 SQLite 写入的顺序；`chat_messages.parent_id` 和 metadata 编码不能改变
-- 历史加载的分页 offset、去重和 `buildLinkedQaRows` 关联不能改变
-
-禁止影响：
-
-- 流式请求、取消、路由、Agent 工具副作用、阅读成果数据格式、Settings 配置和 Web/Desktop 能力边界
-
-#### 开始前必须读取
-
-- `AGENTS.md`
-- `docs/AI_REVIEW_PROJECT.md`
-- `docs/architecture/state-ownership.md`
-- `docs/agent-contracts/ai-selection.md`
-- `docs/agent-contracts/external-http.md`
-- `docs/agent-contracts/database.md`
-- `docs/agent-contracts/rag-memory.md`
-
-#### 允许修改
-
-- `AI_IMPLEMENTATION_PLAN.md`
-- `src/services/agent/conversationCommands.ts`
-- `src/components/ai/AiPanel.tsx`
-- `src/stores/chatStore.ts`
-- `tests/agent/conversationCommands.test.ts`
-- `tests/agent/conversationBoundaryContract.test.ts`
-
-#### 实施任务
-
-1. 已完成实际调用链梳理：`AiPanel` 删除历史会话、`chatStore` 保存/加载历史，均直接触达 database persistence；Store 继续作为内存消息 Source of Truth。
-2. 通过 `conversationCommands` 收拢会话写入顺序、历史分页读取和删除；不改变 `parentId`、metadata、offset、去重或 `buildLinkedQaRows`。
-3. 添加 command 行为测试和 UI/Store 依赖边界契约测试；不触碰流式请求、Agent 工具、Artifact 数据格式或 Settings。
-4. 完成当前窄边界定向测试、Typecheck、Lint 和 diff 检查；Phase 2C 继续保持进行中，Artifact command 已在相邻子步骤完成。
-
-#### 验收标准
-
-- [x] 已记录会话删除、保存和历史加载的入口、Source of Truth、持久化和副作用边界。
-- [x] command 行为测试证明现有会话写入顺序、历史分页参数和删除参数保持兼容。
-- [x] `AiPanel.tsx` 与 `chatStore.ts` 不再直接导入 database persistence；流式请求、Agent 工具和 Artifact 未被本子步骤修改。
-- [x] 当前窄边界定向 Vitest `22 passed`、Typecheck、Lint（0 errors、45 warnings）和 `git diff --check` 通过。
-
-#### 禁止事项
-
-- 不修改 provider/HTTP 代理边界、数据库 schema/迁移、RAG 算法或选择区模型。
-- 不把聊天、阅读成果或 Settings 状态迁移到新的全局 Store，不引入新依赖或通用事件总线。
-- 不提前实施 Phase 3，不扩大到与首个窄边界无关的 AI 文件。
-- 不提交、推送、打 tag、创建 Release 或 PR。
-
-### Phase 2C｜本次执行子步骤：Artifact persistence command
-
-#### 目标
-
-让 `readingArtifactsStore` 只维护列表、筛选、分页和锚点 UI 状态；阅读成果数据库写入、读取、删除、来源哈希和锚点校验统一经 `artifactCommands`，不改变结构化内容、完整来源快照和过期请求保护。
-
-#### 允许修改
-
-- `AI_IMPLEMENTATION_PLAN.md`
-- `src/services/agent/artifactCommands.ts`
-- `src/stores/readingArtifactsStore.ts`
-- `tests/agent/readingArtifactsStore.test.ts`
-- `tests/agent/readingArtifactsPagination.test.ts`
-- `tests/agent/artifactBoundaryContract.test.ts`
-
-#### 实施任务
-
-1. 将 reading artifact repository 的读写/删除/来源校验收拢到 `artifactCommands`；纯元数据合并和来源快照构建通过同一窄入口复用。
-2. 保留第一个本地来源锚点、完整 Web/本地 references、content hash、服务端分页和 request sequence 保护。
-3. 添加 Store 到 command 的边界契约，并运行现有成果保存、分页、来源和 AI 面板回归；不修改数据库 schema、结构化字段格式或原文文件。
-4. 完成后保留 Phase 2C 进行中，下一子步骤处理请求编排和 Settings，不进入 Phase 3。
-
-#### 验收标准
-
-- [x] `readingArtifactsStore.ts` 不直接导入 database persistence/readingArtifacts，持久化动作全部通过 `artifactCommands`。
-- [x] 来源快照、锚点哈希校验、保存后回读、服务端分页和过期响应保护回归通过。
-- [x] Artifact 边界、Conversation、AI 面板和 Action Proposal 定向 Vitest 共 `51 passed`。
-- [x] Typecheck、Lint（0 errors、45 warnings）、Desktop build、bundle gate 和 `git diff --check` 通过。
-
-#### 禁止事项
-
-- 不修改 `reading_artifacts` schema/迁移、SQLite 事务、Markdown 原文或来源定位算法。
-- 不把 Artifact 列表状态迁移到新的全局 Store，不引入新依赖、DI 或 Event Bus。
-- 不提前实施请求流式状态机、Settings 记忆副作用或 Phase 3。
-- 不提交、推送、打 tag、创建 Release 或 PR。
-
-### Phase 2C｜本次执行子步骤：Settings persistence command
-
-#### 目标
-
-让 `SettingsPage` 只负责设置界面、确认提示和本地 Store 重置；会话清理、记忆分页、记忆状态变更和记忆写入统一经 `settingsCommands`，不改变 SQLite 参数、状态值或现有兼容行为。
-
-#### Blast Radius
-
-直接影响：`src/features/settings/SettingsPage.tsx`、新增 `src/services/settings/settingsCommands.ts`、Settings 记忆分页测试。
-
-间接影响：数据库 persistence 的记忆查询与写入函数，以及清空会话后的 `chatStore.resetHistoryState` 顺序。
-
-风险：分页 offset、项目 scope 参数、候选记忆确认结果和清空会话后的本地状态必须保持原顺序；测试 mock 需要继续覆盖 repository 代理。
-
-#### 验收结果
-
-- [x] `SettingsPage` 不再直接导入 `@/services/database/persistence`。
-- [x] `settingsCommands` 收拢会话清理、记忆分页/计数、删除、锁定、归档、确认、忽略和手动写入。
-- [x] 保留现有 `Memory` 类型、分页参数、scope 参数和 SQLite mock 兼容性。
-- [x] Settings 定向测试 `45 passed`；AI/Settings 联合基线 `279 passed`；Typecheck、Lint、Desktop build、bundle gate、`git diff --check` 通过。
-
-#### 禁止事项
-
-- 不修改 SQLite schema/迁移、记忆查询语义、Settings 文案或全局 Store 所有权。
-- 不提前实施 Stream command 或 Phase 3。
-- 不提交、推送、打 tag、创建 Release 或 PR。
-
-### Phase 2C｜本次执行子步骤：Context / Route request preparation
-
-#### 目标
-
-从 `useAiChat` 抽离请求上下文构建和统一路由准备；保持 ContextTag 文件读取、用户消息结构、路由选项和调用顺序不变，不在本子步骤改动 Agent 执行、Memory 检索、RAG 或流式输出。
-
-#### Blast Radius
-
-直接影响：`src/hooks/useAiChat.ts`、新增 `src/services/agent/conversationRequest.ts`、Context/Route 边界与编排测试。
-
-间接影响：`contextBuilder`、`aiChatMessages`、`routingService`、`requestBuilder` 的类型和现有路由矩阵测试。
-
-风险：ContextTag 读取失败回退、完整文档上下文字符上限、最新编辑上下文、forceAgent/manualCapabilities、agentTaskContext 和消息历史必须原样传入；不得提前触发异步副作用。
-
-#### 允许范围
-
-- 新增纯请求准备函数及定向测试。
-- `useAiChat` 仅改为调用该边界，保留取消、Store mutation、Memory/RAG/Agent/Stream 生命周期。
-
-#### 验收标准
-
-- [x] Context preparation 保留标签去重/读取/截断和 user message metadata。
-- [x] Route preparation 保留 app context、route options 和 RoutingDecision。
-- [x] `useAiChat` 不再直接依赖 ContextBuilder/Route service。
-- [x] Context/Route 新增定向测试 `5 passed`；相关编排测试 `188 passed`；Typecheck、Lint、Desktop build、bundle gate、`git diff --check` 通过。
-
-#### Stream boundary 结论
-
-- [x] `streamFinalAnswer` 已由 `src/services/aiChatFlow.ts` 作为现有请求边界提供流式/非流式输出、取消检查和 context overflow 单次降级重试。
-- [x] `tests/agent/aiChatFlowContext.test.ts` 已覆盖 context overflow retry、重试失败和取消路径；本子步骤不新增无行为的代理层。
-
-#### 禁止事项
-
-- 不改 `streamFinalAnswer`、`runAgent`、Memory/RAG 查询、provider/HTTP 代理或数据库协议。
-- 不修改路由规则、阈值、ContextTag 数据格式或用户可见文案。
-- 不提交、推送、打 tag、创建 Release 或 PR。
-
-### Phase 2C｜本次执行子步骤：真实 Tauri AI / 阅读成果验收
-
-#### 目标
-
-在当前源码 Release 构建的真实 Windows WebView2 中，验证 AI 流式 Agent、阅读成果行动提案确认、SQLite 持久化与阅读成果面板回读；验收数据必须与正式用户库隔离，并在结束后清理。
-
-#### 验收标准
-
-- [x] 使用当前源码 `npm exec tauri build -- --no-bundle` 产物，并通过临时 identifier `com.guanmo.app.codex.phase2c` 建立独立 Release 产物；未修改跟踪配置。
-- [x] 真实 WebView2 通过受限 Rust 外部 HTTP 代理访问本地 11434 mock OpenAI-compatible SSE；对话请求和后续 Agent 请求均记录为 `stream: true`。
-- [x] “把这份回答保存为阅读成果”真实生成行动提案；点击“确认执行”后显示“已完成”，阅读成果面板可回读临时 identifier DB 中的标题和正文。
-- [x] 后续“现在几点？”真实显示 mock 流式回答“独立 DB 流式通过”，证明 Agent 流式输出链路继续工作。
-- [x] 只读 SQLite 查询确认临时 DB 的验收标题记录为 `1`、active 成果为 `1`；临时 identifier 的 Roaming/LocalAppData 目录和临时 Release target 已清理。
-- [x] 正式 `com.guanmo.app` DB 只读复核：验收标题记录为 `0`、active 成果数为 `4`；观墨进程和 11434 mock 端口均无残留。
-
-#### 数据安全记录
-
-- 首轮使用 `APPDATA`/`LOCALAPPDATA` 环境变量的探测发现 Windows Tauri Rust `app_config_dir()` 未被可靠重定向；首轮测试标题已通过真实应用删除入口清理，并只读复核正式库为 `0`。
-- 后续改用 Tauri `--config` 临时 identifier 完成隔离验收；该临时 identifier 和编译 target 均已删除，不改变正式用户库。
-
-#### 禁止事项
-
-- 不把本地 mock 结果表述为真实第三方模型质量验收；不扩大为全量 E2E 或 Release gate。
-- 不修改 AI provider、SQLite schema、Tauri 数据目录策略或用户数据迁移逻辑。
-- 不提交、推送、打 tag、创建 Release 或 PR。
-
-## Phase 2A 已完成的历史子步骤
-
-### Phase 2A｜本次执行子步骤：预览调度生命周期窄抽离
-
-#### 目标
-
-在不改变预览内容时序、文档切换、资源预热和首屏语义的前提下，先把 `EditorArea` 内独立的预览防抖调度边界移出，为后续生命周期拆分建立可验证接缝。
-
-#### 开始前必须读取
-
-- `AGENTS.md`
-- `docs/AI_REVIEW_PROJECT.md`
-- `docs/architecture/state-ownership.md`
-- `docs/agent-contracts/markdown-editor.md`
-
-#### 允许修改
-
-- `AI_IMPLEMENTATION_PLAN.md`
-- `src/components/editor/EditorArea.tsx`
-- `src/components/editor/useScheduledPreviewContent.ts`
-- `tests/editor/previewTabSwitchRegression.test.tsx`
-
-#### 实施任务
-
-1. 通过 `EditorArea` 生产入口补充文档切换与旧调度竞态的 characterization test。
-2. 将 `useScheduledPreviewContent` 及其尺寸感知延迟常量移到同目录窄 hook，保持文档切换/重新启用立即显示、同文档内容防抖、禁用清空和 timer cleanup 语义不变。
-3. 不在本子步骤移动资源预热、实例 TTL、滚动同步、阅读位置、选区、TOC 或 DocumentRange 逻辑。
-4. 运行本子步骤定向检查，并按真实结果更新状态；Phase 2A 保持进行中，不进入 Phase 2B。
-
-#### 验收标准
-
-- [x] 文档切换后旧文档的迟到预览更新不会覆盖新文档。
-- [x] 预览调度 hook 与 `EditorArea` 解耦，生产调用点保持两个 pane 的原有参数。
-- [x] 不改变 `Tab.content`、DocumentRange、资源预热、滚动同步、阅读位置或选区所有权。
-- [x] 定向 Vitest、Typecheck、Lint、Desktop Build、bundle gate 和 `git diff --check` 通过。
-- [x] Phase 2A 其余生命周期边界和新鲜 Tauri/真实 surface 验收已在后续子步骤及阶段收口中完成。
-
-#### 检查命令
-
-```powershell
-npx vitest run tests/editor/EditorArea.resourceLifecycle.test.tsx tests/editor/modeResourceLeak.test.tsx tests/editor/previewTabSwitchRegression.test.tsx tests/editor/documentModelContract.test.ts tests/selection/selectionContextContract.test.ts tests/editor/SearchOverlay.preview.test.tsx tests/markdown/MarkdownPreview.layout.test.tsx tests/markdown/MarkdownPreview.interactiveState.test.tsx --maxWorkers=1
-npm run typecheck
-npm run lint
-npm run build:desktop
-npm run check:bundle:desktop
-git diff --check
-```
-
-#### 禁止事项
-
-- 不提前实施 Phase 2B/2C 或 Phase 3。
-- 不移动 `markdownPreviewModel`、DocumentRange、资源预热参数或 Tauri/SQLite 边界。
-- 不引入新依赖、状态库、DI、Event Bus、通用 Repository 或任意代码执行系统。
-- 不清理无关死代码，不格式化无关文件，不覆盖既有用户修改。
-- 不提交、推送、打 tag、创建 Release 或 PR。
-
-### Phase 2A｜本次执行子步骤：资源生命周期与预热窄抽离
-
-#### 目标
-
-在不改变现有 `memory` / `balanced` / `speed` 资源策略、预热参数、文档切换和首屏门槛的前提下，把 `EditorArea` 的资源 mount/TTL/预热调度及其 cleanup 收拢到同目录窄 hook，保留 `EditorArea` 对左右 Pane 的组合职责。
-
-#### 允许修改
-
-- `AI_IMPLEMENTATION_PLAN.md`
-- `src/components/editor/EditorArea.tsx`
-- `src/components/editor/useEditorResourceLifecycle.ts`
-- `tests/editor/EditorArea.resourceLifecycle.test.tsx`
-
-#### 实施任务
-
-1. 通过 `EditorArea` 生产入口补充卸载前存在 pending prewarm 时不创建隐藏资源、且定时器/idle callback 清理的 characterization test。
-2. 将资源挂载状态、TTL 释放、策略切换、首屏后预热调度、预热资源创建和对应 cleanup 抽为窄 hook；继续复用 `editorSession` 的既有决策函数和参数。
-3. 保留 `EditorArea` 的现有资源 ref/Pane 组合契约；不移动滚动同步、阅读位置、选区桥接、TOC、预览模型或 DocumentRange。
-4. 运行当前子步骤定向检查并据实更新交接状态；Phase 2A 继续保持进行中，不进入 Phase 2B。
-
-#### 验收标准
-
-- [x] `EditorArea` 生产入口下，卸载或快速切换不会让旧 TTL/idle prewarm 创建或释放错误文档资源。
-- [x] `memory` 不预热且隐藏资源立即释放；`balanced` / `speed` 保持现有预热与 TTL 行为。
-- [x] 资源生命周期/预热 hook 与 `EditorArea` 解耦；两个 Pane、编辑器和差异视图的实际 mount/unmount 语义不变。
-- [x] 相关定向 Vitest、Typecheck、Lint、Desktop Build、bundle gate 和 `git diff --check` 通过。
-- [x] Phase 2A 其余滚动同步、阅读位置、选区桥接和新鲜 Tauri/真实 surface 验收已在后续子步骤及阶段收口中完成。
-
-#### 检查命令
-
-```powershell
-npx vitest run tests/editor/EditorArea.resourceLifecycle.test.tsx tests/editor/modeResourceLeak.test.tsx tests/editor/previewTabSwitchRegression.test.tsx tests/editor/documentModelContract.test.ts tests/selection/selectionContextContract.test.ts tests/editor/SearchOverlay.preview.test.tsx tests/markdown/MarkdownPreview.layout.test.tsx tests/markdown/MarkdownPreview.interactiveState.test.tsx --maxWorkers=1
-npm run typecheck
-npm run lint
-npm run build:desktop
-npm run check:bundle:desktop
-git diff --check
-```
-
-#### 禁止事项
-
-- 不重复预览调度 hook 抽离，不修改 `useScheduledPreviewContent.ts`。
-- 不修改 `markdownPreviewModel`、DocumentRange、持久化格式、Store 所有权、Tauri/SQLite 边界或预热策略参数。
-- 不提前实施滚动同步、阅读位置、选区桥接或 Phase 2B/2C。
-- 不引入新依赖、状态库、DI、Event Bus、通用 Repository 或任意代码执行系统。
-- 不清理无关死代码，不格式化无关文件，不覆盖既有用户修改。
-- 不提交、推送、打 tag、创建 Release 或 PR。
-
-### Phase 2A｜本次执行子步骤：阅读位置与编辑器滚动监听窄抽离
-
-#### 目标
-
-在不改变编辑器↔预览滚动同步、阅读位置持久化、模式/文档切换恢复和目录当前项语义的前提下，把阅读位置会话及编辑器滚动监听的生命周期收拢到同目录窄 hook；保留 `EditorArea` 对 Pane、同步 follower 与选区桥接的组合职责。
-
-#### 允许修改
-
-- `AI_IMPLEMENTATION_PLAN.md`
-- `src/components/editor/EditorArea.tsx`
-- `src/components/editor/useReadingPositionBridge.ts`
-- `tests/editor/previewTabSwitchRegression.test.tsx`
-
-#### 实施任务
-
-1. 通过 `EditorArea` 生产入口补充 Tab 切换时旧文档阅读位置立即 flush 的 characterization test。
-2. 将 `ReadingPositionSession` 播种、编辑器滚动监听、位置保存/恢复、debounce flush、可见性 flush 及其 rAF/timer cleanup 抽为窄 hook。
-3. 保留双向滚动 follower、`ScrollSyncSession` 所有权、预览模型、DocumentRange 和选区桥接的既有实现与参数。
-4. 运行当前子步骤定向检查并据实更新交接状态；Phase 2A 继续保持进行中，不进入 Phase 2B。
-
-#### 验收标准
-
-- [x] Tab 切换时旧文档编辑器阅读位置立即写回，防抖 flush 与 beforeunload/visibility flush 语义保持不变。
-- [x] 编辑器/预览位置恢复、左右 Pane 独立位置和目录滚动更新保持现有行为。
-- [x] 阅读位置 hook 与 `EditorArea` 解耦；双向滚动 follower、预览模型、DocumentRange、选区所有权未移动。
-- [x] 相关定向 Vitest、Typecheck、Lint、Desktop Build、bundle gate 和 `git diff --check` 通过。
-- [x] Phase 2A 选区桥接和新鲜 Tauri/真实 surface 验收已完成。
-
-#### 检查命令
-
-```powershell
-npx vitest run tests/editor/EditorArea.resourceLifecycle.test.tsx tests/editor/modeResourceLeak.test.tsx tests/editor/previewTabSwitchRegression.test.tsx tests/editor/documentModelContract.test.ts tests/selection/selectionContextContract.test.ts tests/editor/SearchOverlay.preview.test.tsx tests/markdown/MarkdownPreview.layout.test.tsx tests/markdown/MarkdownPreview.interactiveState.test.tsx --maxWorkers=1
-npm run typecheck
-npm run lint
-npm run build:desktop
-npm run check:bundle:desktop
-git diff --check
-```
-
-#### 禁止事项
-
-- 不重复预览调度或资源生命周期 hook 抽离，不修改 `useScheduledPreviewContent.ts`、`useEditorResourceLifecycle.ts`。
-- 不移动双向滚动 follower、预览模型、DocumentRange、选区桥接、持久化格式、Store 所有权或 Tauri/SQLite 边界。
-- 不提前实施 Phase 2B/2C 或 Phase 3。
-- 不引入新依赖、状态库、DI、Event Bus、通用 Repository 或任意代码执行系统。
-- 不清理无关死代码，不格式化无关文件，不覆盖既有用户修改。
-- 不提交、推送、打 tag、创建 Release 或 PR。
-
-### Phase 2A｜本次执行子步骤：预览选区桥接窄抽离
-
-#### 目标
-
-在不改变原生 DOM 选区、MarkdownPreview 精确句柄、DocumentRange/source offset、复制/全选和 AI 上下文语义的前提下，把预览右键菜单及选区动作桥接收拢到同目录窄 hook；保留 `EditorArea` 对 Pane 与其他编辑器组合逻辑的所有权。
-
-#### 允许修改
-
-- `AI_IMPLEMENTATION_PLAN.md`
-- `src/components/editor/EditorArea.tsx`
-- `src/components/editor/usePreviewSelectionBridge.ts`
-- `tests/editor/previewTabSwitchRegression.test.tsx`
-
-#### 实施任务
-
-1. 通过 `EditorArea` 生产入口补充原生预览选区进入 AI 上下文的 characterization test。
-2. 将预览菜单状态、原生/MarkdownPreview 选区读取、CSS 高亮清理、复制/全选、DocumentRange/source offset 回退、AI 上下文和快捷动作抽为窄 hook。
-3. 保留 MarkdownPreview handle 快照、选区标题和 `referencedSourceIds`/source offsets 传递语义；不修改 `markdownPreviewModel`、DocumentRange 算法或 selection service。
-4. 运行当前子步骤定向检查，并把 Phase 2A 的最终剩余项收敛到新鲜 Tauri/真实 surface 验收。
-
-#### 验收标准
-
-- [x] 原生预览选区可经生产右键菜单添加到 AI 上下文，选中文本和标题保持传递。
-- [x] 选区桥接 hook 与 `EditorArea` 解耦；MarkdownPreview 精确句柄优先，DOM/source offset 为原有回退路径。
-- [x] 复制、全选、快捷 AI 动作、CSS 高亮 cleanup 和菜单关闭语义保持不变。
-- [x] 相关定向 Vitest、Typecheck、Lint、Desktop Build、bundle gate 和 `git diff --check` 通过。
-- [x] 新鲜 Tauri 快速切换与真实 surface 验收完成；正常 identifier 受既有 `D:\观墨\guanmo.exe` 单实例进程占用，未结束用户进程，改用临时 identifier 的当前源码 Release 产物在隔离数据目录完成验收。
-
-#### 检查命令
-
-```powershell
-npx vitest run tests/editor/EditorArea.resourceLifecycle.test.tsx tests/editor/modeResourceLeak.test.tsx tests/editor/previewTabSwitchRegression.test.tsx tests/editor/documentModelContract.test.ts tests/selection/selectionContextContract.test.ts tests/editor/SearchOverlay.preview.test.tsx tests/markdown/MarkdownPreview.layout.test.tsx tests/markdown/MarkdownPreview.interactiveState.test.tsx --maxWorkers=1
-npm run typecheck
-npm run lint
-npm run build:desktop
-npm run check:bundle:desktop
-git diff --check
-```
-
-#### 禁止事项
-
-- 不重复预览调度、资源生命周期或阅读位置 hook 抽离，不修改对应既有窄 hook。
-- 不修改 `markdownPreviewModel`、DocumentRange、持久化格式、Store 所有权或 Tauri/SQLite 边界。
-- 不提前实施 Phase 2B/2C 或 Phase 3。
-- 不引入新依赖、状态库、DI、Event Bus、通用 Repository 或任意代码执行系统。
-- 不清理无关死代码，不格式化无关文件，不覆盖既有用户修改。
-- 不提交、推送、打 tag、创建 Release 或 PR。
+验收建议：HIGH → L3 强模型；仅用户明确调用才做模型 Review。可用提示词：`使用 ai-code-review Skill 审查阶段 1 的保存链路 diff，复用 75 项回归、Core Smoke 与边界检查，重点检查串行写入、失败预算、身份保护、保存确认和另存为；原生未验收保持 NOT TESTED。`
 
 ## 阶段历史
 
-### Phase 1｜测试兜底、依赖止血与门禁对齐
+### 2026-10-05｜评估与计划覆写
 
-- 状态：已完成
-- 完成内容：为产品引导恢复、AI 行动提案、密钥 hydration、性能采样和自动索引关闭补充行为保护；将 5 处直接 Store.setState 改为领域 action，移除 editorStore 与 settingsStore 的 Store 间导入，并将自动索引 timer 取消移到 indexer 的单向 settings reaction；Store boundary 接入 Release 本地 gate 与质量 CI；修正文档中的不存在 legacy DB 脚本。为完成边界迁移，额外修改 `src/stores/chatStore.ts` 和 `src/App.tsx`，原因已记录在允许修改范围。
-- 验证结果：`npm run test:store-boundaries`；定向 Vitest `63 passed`；`npm run typecheck`；`npm run lint`（0 errors、43 warnings）；`npm run build:desktop`；`npm run check:bundle:desktop`；数据库迁移/事务 Vitest `8 passed`；`npm run test:runtime-schemas`；`npm run test:session-restore`；`npm run test:rag-index`；`git diff --check` 均通过。
-- 遗留问题：无；未提交、未推送、未打 tag、未创建 Release。Phase 2A 尚未实施。
+- 状态：计划已编写；阶段 1 未开始。
+- 完成内容：核实当前入口与状态边界；选择按路径共享队列、最新待写合并、身份保护、正文不回写和有界重试。
+- 实际修改：仅 AI_IMPLEMENTATION_PLAN.md；业务代码、依赖、配置均未修改，既有未跟踪内容保留。
+- 验证结果：git diff --check PASS；功能测试、构建与原生验收 NOT TESTED。
+- 遗留问题：尚未实施；原生磁盘乱序未实测，权限失败/另存为/浏览器回退需实施时定向验证。
 
-### Phase 2A｜Editor / Document Surface（首个窄边界）
+### 2026-10-05｜追加 Agent 超限恢复计划
 
-- 状态：进行中
-- 完成内容：补充 `EditorArea` 生产入口的文档切换/旧预览调度竞态保护；抽出 `useScheduledPreviewContent`；再抽出 `useEditorResourceLifecycle`，收拢资源 mount/TTL/策略切换/预热调度及 cleanup；新增卸载前 pending prewarm characterization test。实际修改：`AI_IMPLEMENTATION_PLAN.md`、`src/components/editor/EditorArea.tsx`、`src/components/editor/useEditorResourceLifecycle.ts`、`tests/editor/EditorArea.resourceLifecycle.test.tsx`（前一子步骤另含 `useScheduledPreviewContent.ts`、`previewTabSwitchRegression.test.tsx`）。
-- 验证结果：八文件定向 Vitest `76 passed、2 skipped`；`npm run typecheck`；`npm run lint`（0 errors、43 warnings）；`npm run build:desktop`；`npm run check:bundle:desktop`；`git diff --check` 均通过。单文件生命周期测试最终 `43 passed`，默认 5 秒首次运行曾因冷转换超时并产生 30 个连带失败，未作为最终验收结果。
-- 遗留问题：Phase 2A 的滚动同步、阅读位置、选区桥接和新鲜 Tauri/真实 surface 验收尚未完成；未提交、未推送、未打 tag、未创建 Release。
+- 状态：阶段 2 未开始；当前阶段仍为阶段 1。
+- 完成内容：记录已撤回固定窗口方案的原因，选择明确超限后确定性压缩与单次重试；补齐最终回答、当前轮次保护、引用及副作用验收边界。
+- 实际修改：仅本文件的标题、状态和新增阶段内容；保留既有保存队列计划与未跟踪内容，未提交。
+- 验证结果：`git diff --check` PASS；功能测试、构建、模型实测与原生验收 NOT TESTED。
+- 遗留问题：实施时核实 Provider 超限识别、工具反馈与当前问题边界、压缩力度和部分流式输出恢复；模型摘要留待明确证据与后续授权。
 
-### Phase 2A｜Editor / Document Surface（阅读位置窄边界）
+### 2026-10-06｜追加 API 安全专项与重排开发顺序
 
-- 状态：进行中
-- 完成内容：补充 Tab 切换时旧文档阅读位置立即 flush 的生产入口 characterization test；抽出 `useReadingPositionBridge`，收拢阅读位置会话播种、编辑器滚动监听、预览/编辑器位置恢复、debounce/可见性 flush 与 rAF/timer cleanup；保留双向滚动 follower、预览模型、DocumentRange 和选区桥接。实际修改：`AI_IMPLEMENTATION_PLAN.md`、`src/components/editor/EditorArea.tsx`、`src/components/editor/useReadingPositionBridge.ts`、`tests/editor/previewTabSwitchRegression.test.tsx`。
-- 验证结果：八文件定向 Vitest `77 passed、2 skipped`；`npm run typecheck`；`npm run lint`（0 errors、45 warnings）；`npm run build:desktop`；`npm run check:bundle:desktop`；`git diff --check` 均通过。
-- 遗留问题：Phase 2A 选区桥接和新鲜 Tauri/真实 surface 验收尚未完成；未提交、未推送、未打 tag、未创建 Release。
+- 状态：阶段 1 保持未开始；新增阶段 2–5 均未开始；原 Agent 阶段 2 改为阶段 6，原方案与历史保留。
+- 完成内容：按保存可靠性 → Web 提示 → Rust 密钥内部使用 → 代理操作/限额 → CSP/清洗/权限 → Agent 超限恢复排序；补齐阶段依赖、允许范围、兼容迁移、禁止事项、自动和真实表面验收。
+- 决策依据：桌面已有 DPAPI 与代理资源限制，优先复用；不再长期返回 Key，但仍需限制代理滥用；Web 加密只能保护持久化密文，解锁后不免疫 XSS。未确认可利用漏洞，不以静态观察宣称攻击已复现。
+- 实际修改：仅本文件，保留原有未提交内容与未跟踪目录；未修改业务代码、未提交。
+- 验证结果：`git diff --check` PASS；新增阶段功能测试、构建、安全攻击验证与桌面/Web 验收 NOT TESTED。
+- 下一步：等待用户指定执行阶段；按本文件对应入口核实，阶段 3 需核实预设/备份与旧格式，阶段 4 确定实际限额，阶段 5 核实每个渲染和部署 CSP 入口，不在本轮预设实现细节。
 
-### Phase 2A｜Editor / Document Surface（选区桥接窄边界）
+### 2026-10-07｜阶段 1 实施与机器验收
 
-- 状态：已完成
-- 完成内容：补充原生预览选区经生产右键菜单添加到 AI 上下文的 characterization test；抽出 `usePreviewSelectionBridge`，收拢菜单状态、原生/MarkdownPreview 选区读取、CSS 高亮清理、复制/全选、DocumentRange/source offset 回退、AI 上下文和快捷动作；保留 `EditorArea` 的 Pane 组合、MarkdownPreview 精确句柄优先和既有回退语义。实际修改：`AI_IMPLEMENTATION_PLAN.md`、`src/components/editor/EditorArea.tsx`、`src/components/editor/usePreviewSelectionBridge.ts`、`tests/editor/previewTabSwitchRegression.test.tsx`。
-- 验证结果：八文件定向 Vitest `78 passed、2 skipped`；`npm run typecheck`；`npm run lint`（0 errors、45 warnings）；`npm run build:desktop`；`npm run check:bundle:desktop`；`git diff --check` 均通过。
-- 遗留问题：无；未提交、未推送、未打 tag、未创建 Release。
+- 状态：进行中；功能实现与机器门禁已完成，原生构建环境阻塞，阶段 2–6 未开始。
+- 当前实现：`documentSave.ts` 持有应用级按文件身份队列，每路径一个执行中/一个 PendingLatest；替代请求等待替代版本真实回执，失效请求取消；自动开启时本轮追上最新正文，关闭撤销自动待写；失败预算按路径共享，3 次停止，手动可开启新一轮。
+- 身份与正文：运行时 Tab 身份在关闭/路径改变时失效，旧写入仍持锁至结束；仅 Store action 更新成功基线。预览不再把旧快照写回正文；saveTabAs 保留当前正文，选择器结束读最新内容，写成功后绑定；下载保留脏状态且不索引、不自动重试下载。
+- 入口与兼容：自动 Hook、AppLayout 的 Ctrl+S、CodeMirror onSave、预览勾选、CommandPalette、Tab/文件菜单全部接入；文件树另存为仍新开副本，不把源 Tab 改绑。非文档 AI 导出保留原有底层 saveFileAs，不纳入文档业务入口。浏览器选择目标不写入，isSameEntry 复用现有句柄 URI；新增 WeakMap 只保存原始 URI，避免内部规范化缓存 key 损坏 `webfs://`，不持久化句柄/队列。
+- 修改文件（全部未提交）：新增 `src/services/documentSave.ts`、`tests/editor/documentSave.test.tsx`；修改 `useFileOperations.ts`、`EditorArea.tsx`、`CommandPalette.tsx`、`fileSystem.ts`、`browserFileSystem.ts`、`fileEntryActions.ts`、`editorStore.ts`、`tests/web/browserFileSystem.test.ts` 和本文件。必要扩展已向用户说明；最终 `git diff --check` PASS。Rust、配置、依赖、权限和 RAG 算法未修改。
+- 修改前证据：生产 useFileOperations 入口 deferred writer 测试 FAIL，阻塞 A 时已经发出 A/B/C；修复后只发 A/C，最大并发 1。仅证明前端顺序缺失；原生磁盘回退未复现。
+- 自审：以当前 diff 与保存入口调用链核实，无已确认的 P0/P1 阻断缺陷；未执行独立模型 Review。残余风险为新鲜原生产物与实际选择器/落盘/失败恢复均未验收。
+- PASS：`npx vitest run tests/editor/documentSave.test.tsx tests/web/browserFileSystem.test.ts tests/editor/documentModelContract.test.ts tests/editor/previewTabSwitchRegression.test.tsx --maxWorkers=1`，4 文件 75 项；`npm run test:store-boundaries`、`npm run test:file-access`、`npm run typecheck`、`npm run lint`（0 error/41 既有 warning）、最终改动文件 ESLint；`npm run test:smoke`，2 文件 8 项。Desktop 前端构建和 bundle gate PASS：入口 1,151,078 bytes，总 JS 6,902,751 bytes，101 chunks。
+- 检查中的问题：预览测试首次与 tsc/Lint 并行执行出现 30 项失败，单项及完整串行重跑 PASS；不为此改生产预览逻辑或测试断言。浏览器新增测试发现重复目标返回规范化 `webfs:/`，已通过原始 URI 映射修复，两个针对性用例 PASS。后续重型 Node/Rust 检查保持串行。
+- FAIL/环境：`npm run tauri -- build --no-bundle` 的 Rust 编译内存分配失败；`CARGO_BUILD_JOBS=1` 复用前端再试仍失败并使 PowerShell 报 Out of memory。未重试循环、未清理缓存、未改配置门禁。原生落盘、原生选择器、失败恢复和新 EXE 启动对照均 NOT TESTED；不可用旧产物宣称通过。
+- 旧产物基线：`node scripts/measure-cold-start.mjs --runs=3 --surface=edit --keep` 与 preview 对应命令 PASS；EXE 2026-10-05 18:03:04、25,887,232 bytes。编辑 launchToSurface 900/1091/928 ms（中位928）、frontendToSurface 324/389/329 ms（中位329）、launchToAppReady 789/949/852 ms（中位852）；预览对应 893/1071/893 ms（中位893）、301/387/316 ms（中位316）、831/932/804 ms（中位831）。不是性能收益结论。
+- 临时证据：`D:\temp\guanmo-save-final-tests.txt`、`guanmo-save-smoke.txt`、`guanmo-save-lint.txt`、`guanmo-save-file-access.txt`、`guanmo-save-native-build.txt`、`guanmo-save-native-retry.txt`、`guanmo-save-baseline-preview.txt`；测试基线目录均保留，不清理。`D:\temp\guanmo-save-native.mjs` 未执行，接续者先核实后使用。
+- 交接约束：全局 guides 路径本机不存在；使用实际 AGENTS、计划、现行契约与 AI_REVIEW_PROJECT。知识图落后 HEAD，不重建。保留 `.workbuddy/`、`src-tauri/target-reading-position-baseline/`；不提交、推送、tag、Release 或 PR。
 
-### Phase 2A｜Editor / Document Surface（阶段收口）
+### 2026-10-07｜本地提交授权与验收暂缓
 
-- 状态：已完成
-- 完成内容：按预览调度、资源生命周期、阅读位置和选区桥接四个窄边界完成 `EditorArea` 渐进解耦；保留 Tab、DocumentRange、预览模型、滚动 follower、预热和 AI 选区语义。
-- 验证结果：八文件定向 Vitest `78 passed、2 skipped`；Typecheck、Lint（0 errors、45 warnings）、Desktop build、bundle gate、`git diff --check`；`npm run tauri build`；隔离 identifier 的当前 Release Tauri 编辑/预览 surface、3 轮 Tab/模式快速切换和预览选区菜单真实 WebView2 smoke 均通过。
-- 遗留问题：无；未提交、未推送、未打 tag、未创建 Release。下一阶段为 Phase 2B｜Workspace / Persistence。
-
-### Phase 2B｜Workspace / Persistence（已完成）
-
-- 状态：已完成
-- 完成内容：新增 `workspaceIndexGateway` 收拢工作区可读性、已索引路径、文件存在性、事务删除、内存向量/Native RAG 清理和 workspace index；`workspaceIndex` 保留路径边界、逐文件结果与多 root 编排；FileTree/WorkspaceRoots 改经 workspace facade；新增 UI 边界、事务顺序、单文件失败重试和 embedding-only job 兼容测试；对齐 `scripts/file-access-check.ts` 的当前会话恢复断言。
-- 验证结果：workspace/边界/transaction bridge/knowledge base 联合 Vitest `32 passed`；Rust `database_transactions` `11 passed`；`npm run test:file-access`；runtime schemas；RAG index；Typecheck；Lint（0 errors、45 warnings）；Desktop build；bundle gate；`git diff --check` 均通过。
-- 遗留问题：无；未提交、未推送、未打 tag、未创建 Release。下一阶段为 Phase 2C｜AI / Settings。
-
-### Phase 2C｜AI / Settings（Conversation persistence command 子步骤）
-
-- 状态：进行中
-- 完成内容：完成聊天入口和状态所有权梳理；新增 `conversationCommands` 收拢会话 SQLite 写入、历史读取和删除；`chatStore` 保留内存消息归一化与 mutation，`AiPanel` 保留确认/提示和本地会话移除。
-- 验证结果：Conversation command、边界、Action Proposal、chat metadata、AI 面板定向 Vitest `22 passed`；Typecheck；Lint（0 errors、45 warnings）；Desktop build；bundle gate（entry `926474` bytes、JS total `5733497` bytes、95 chunks）；`git diff --check` 通过。
-- 遗留问题：Phase 2C 尚未完成；下一子步骤处理请求编排和 Settings 副作用边界。未提交、未推送、未打 tag、未创建 Release。
-
-### Phase 2C｜AI / Settings（Artifact persistence command 子步骤）
-
-- 状态：进行中
-- 完成内容：新增 `artifactCommands`；`readingArtifactsStore` 只保留列表、筛选、分页和锚点状态，数据库读写、来源哈希和锚点校验经 command 进入；保留完整 references、首个本地锚点和 request sequence 保护。
-- 验证结果：Artifact Store、分页、边界、Conversation、Action Proposal、chat metadata、AI 面板定向 Vitest `51 passed`；Typecheck；Lint（0 errors、45 warnings）；Desktop build；bundle gate（entry `926474` bytes、JS total `5733695` bytes、95 chunks）；`git diff --check` 通过。
-- 遗留问题：Phase 2C 尚未完成；下一子步骤处理 Context/Route/Stream 请求编排和 Settings 跨领域副作用。未提交、未推送、未打 tag、未创建 Release。
-
-### Phase 2C｜AI / Settings（Settings persistence command 子步骤）
-
-- 状态：已完成代码子步骤
-- 完成内容：新增 `settingsCommands` 收拢会话清理、记忆分页/计数、记忆状态变更和手动写入；`SettingsPage` 保留 UI、确认提示和 `chatStore.resetHistoryState`，不再直接导入 database persistence；旧 persistence mock 通过部分模块 mock 保持兼容。
-- 验证结果：Settings 定向 Vitest `45 passed`；Typecheck；Lint（0 errors、45 warnings）；Desktop build；bundle gate（entry `926474` bytes、JS total `5733978` bytes、95 chunks）；`git diff --check` 通过。
-- 遗留问题：Phase 2C 仍需完成真实 Tauri AI/阅读成果人工验收。未提交、未推送、未打 tag、未创建 Release。
-
-### Phase 2C｜AI / Settings（Context / Route request preparation 子步骤）
-
-- 状态：已完成代码子步骤
-- 完成内容：新增 `conversationRequest`；`useAiChat` 的 ContextTag 读取、用户消息 metadata 组装和统一 RoutingDecision 通过窄边界进入；保留取消、Store mutation、Memory/RAG、Agent 和 Stream 生命周期；确认现有 `streamFinalAnswer` 已满足 Stream 边界，无新增空代理。
-- 验证结果：Context/Route 新增 Vitest `5 passed`；相关编排测试 `188 passed`；Typecheck；Lint（0 errors、45 warnings）；Desktop build；bundle gate（entry `926474` bytes、JS total `5734402` bytes、95 chunks）。
-- 遗留问题：Phase 2C 代码子步骤已完成，待真实 Tauri AI/阅读成果人工验收。未提交、未推送、未打 tag、未创建 Release。
-
-### Phase 2C｜AI / Settings（真实 Tauri AI / 阅读成果验收）
-
-- 状态：已完成
-- 完成内容：使用当前源码临时 identifier Release 和真实 Windows WebView2，完成本地 SSE Agent 请求、阅读成果行动提案确认、SQLite 写入、阅读成果面板回读和后续流式回答；正式库与临时数据目录已复核并清理。
-- 验证结果：临时 identifier `com.guanmo.app.codex.phase2c` 的 DB 只读查询为验收标题 `1`、active `1`；正式 `com.guanmo.app` DB 只读查询为测试标题 `0`、active `4`；mock 请求均为 `stream: true`；进程、端口和临时目录均无残留。
-- 遗留问题：Phase 2C 已完成；Phase 3A 尚未开始。未提交、未推送、未打 tag、未创建 Release。
-
-### Phase 3A｜Appearance Schema、Registry 与内置主题
-
-- 状态：已完成
-- 完成内容：新增 `appearanceSchema` 的 `AppearanceConfigV1` 与旧主题字段迁移；新增五主题 `appearanceRegistry`、descriptor 校验、未知 ID 回退和 `appearanceDom` applicator；`settingsStore` 保留现有 action/`lastLightThemeId` 并补齐版本化默认字段；ThemePicker 改为读取 registry，`index.html` 使用可序列化启动主题子集。
-- 验证结果：定向 Vitest `4 files / 52 passed`；`npm run typecheck`；`npm run lint`（0 errors、45 warnings）；`npm run build`；`npm run build:desktop`；Web/Desktop bundle gate；`git diff --check`；fresh Tauri no-bundle Release 隔离 WebView2 五主题编辑 surface sweep 全部匹配预期 canvas/colorScheme，临时运行目录由脚本清理且正式库未触碰。
-- 遗留问题：Phase 3B 壁纸方案已放弃；未提交、未推送、未打 tag、未创建 Release。
-
-### Phase 3B｜自定义壁纸（历史记录，已废弃）
-
-- 状态：历史上已完成，现已按用户决策移除
-- 完成内容：扩展版本化外观 schema，增加 `none/color/gradient/image` 壁纸和受控 fit/position/opacity/blur/overlay 参数；新增应用管理 `wallpapers` 目录的导入、解析、删除 Tauri command，沿用已选文件授权并仅动态开放 asset protocol 目录；Settings 增加 Web 安全的颜色/渐变入口和 Desktop 图片入口；App/Layout/index 启动链增加声明式 DOM 壁纸 applicator、资源恢复和缺失资源回退。验收返修为图片导入增加 request ID、类型切换/卸载失效保护和孤立受管资源清理；补充壁纸启用时 canvas/surface 的受控透明层，确保图片背景可见且无壁纸保持原样。
-- 验证结果：返修后定向 Vitest `4 files / 54 passed`；`npm run test:file-access`；`npm run test:runtime-schemas`；Typecheck；Lint（0 errors、45 warnings）；Web/Desktop build 与 bundle gate；`git diff --check` 均通过。返修前且 Rust 源码未再变化的 fmt/clippy/test/check 为 PASS（`37 passed、1 ignored`）；既有隔离 Release WebView2 验收记录保留，本次未重跑真实 Tauri 文件选择竞态。
-- 遗留问题：壁纸能力已不再保留；未提交、未推送、未打 tag、未创建 Release。
-
-### Phase 3C｜AI 助手形象与状态动画
-
-- 状态：已完成
-- 完成内容：新增助手 visual ID 校验、八状态 inline-css descriptor、动画策略和 sprite fallback registry；新增固定 renderer map 的 `AssistantVisual` adapter；AI Panel 空态/流式/历史头像和设置预览改为通过 `assistantVisualId` 选择，保留既有 AssistantState、visibility pause、reduced-motion 和历史静态行为。
-- 验证结果：定向 Vitest `5 files / 63 passed`；`npm run typecheck`；`npm run lint`（0 errors、45 warnings）；`npm run build`；`npm run build:desktop`；Web bundle gate；Desktop bundle gate；`git diff --check` 通过。首次单独 Web gate 因 dist 当时为 Desktop 模式失败，重建 Web 后复跑通过；不是代码预算失败。新鲜 Tauri Release 使用临时 identifier `com.guanmo.stage3c.acceptance` 构建，并在隔离 WebView2 中完成 AI Panel 空态、真实本地 SSE 流式状态、历史静态头像和设置八状态预览的 DOM/截图验收；证据保存在 `.tmp-stage3c-acceptance/visual-evidence-isolated-5/`。
-- 遗留问题：无；未提交、未推送、未打 tag、未创建 Release。
-
-### 计划初始化｜只读架构审查与交接
-
-- 状态：已完成
-- 完成内容：基于当前源码、知识图、测试清单、CI/Release 配置和项目契约完成长期维护与扩展性审查；确定 Phase 1 → Phase 2A/2B/2C → Phase 3A/3C 的渐进路线，3B 壁纸方案后续已废弃。
-- 验证结果：`npm run test:store-boundaries` 失败，确认 6 个边界违规；其余 Machine Gate 未执行，因为本次只初始化计划且未修改业务代码。
-- 遗留问题：Phase 1 尚未实施；知识图构建点曾落后当前 HEAD，后续执行必须以最新源码和实际测试为准。
+- 用户要求：提交本次修改，验收暂缓；只做本地提交，不执行远程操作。
+- 范围：8 个业务文件、2 个测试文件及本计划；保留并排除 `.workbuddy/` 与 `src-tauri/target-reading-position-baseline/`。
+- 阶段 1 保持进行中，原生验收与新产物启动对照维持 NOT TESTED；不因本地提交而标记阶段完成，不重跑已通过的机器检查或失败的构建。
+- 恢复点：用户恢复验收后先核实系统资源和新鲜产物，再按“明确下一步”完成原生验证；阶段 2–6 保持未开始。

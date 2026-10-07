@@ -586,7 +586,7 @@ export const useEditorStore = create<EditorState>()(
         set((s) => ({
           tabs: s.tabs.map((tab) =>
             tab.id === id
-              ? { ...tab, filePath, title, content, savedContent: content, originalContent: content, modified: false }
+              ? { ...tab, filePath, title, savedContent: content, originalContent: content, modified: tab.content !== content }
               : tab
           ),
         }))

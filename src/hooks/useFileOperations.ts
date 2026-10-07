@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useEditorStore } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { openFile, saveFile, saveFileAs } from '@/services/fileSystem'
+import { openFile } from '@/services/fileSystem'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { isTauri } from '@/hooks/useTauri'
 import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
-
-const AUTO_SAVE_INDEX_DELAY = 5000
+import { saveActiveDocument, saveDocument } from '@/services/documentSave'
 
 export function useFileOperations() {
   const addTab = useEditorStore((s) => s.addTab)
@@ -17,7 +16,6 @@ export function useFileOperations() {
   const tabs = useEditorStore((s) => s.tabs)
   const editor = useSettingsStore((s) => s.editor)
   const autoSaveTimersRef = useRef<Map<string, { timer: ReturnType<typeof setTimeout>; content: string }>>(new Map())
-  const autoSaveRetriesRef = useRef<Map<string, number>>(new Map())
 
   const handleNewFile = useCallback(() => {
     createNewDocument()
@@ -42,32 +40,7 @@ export function useFileOperations() {
     }
   }, [addTab, tabs])
 
-  const handleSaveFile = useCallback(async () => {
-    const state = useEditorStore.getState()
-    const tab = state.tabs.find((t) => t.id === state.activeTabId)
-    if (!tab) return
-
-    try {
-      if (tab.filePath) {
-        await saveFile(tab.filePath, tab.content)
-        scheduleMarkdownDocumentIndex(tab.filePath, tab.title, tab.content)
-        // Clear modified flag
-        useEditorStore.getState().markTabSaved(tab.id, tab.content)
-        toast.success('已保存')
-      } else {
-        // Save As
-        const result = await saveFileAs(tab.content)
-        if (result) {
-          scheduleMarkdownDocumentIndex(result.path, result.name, result.content)
-          useEditorStore.getState().saveTabAs(tab.id, result.path, result.name, result.content)
-          toast.success('已保存')
-        }
-      }
-    } catch (err) {
-      console.error('Save file failed:', err)
-      toast.error(describeFileOperationError(err, '保存失败'))
-    }
-  }, [])
+  const handleSaveFile = saveActiveDocument
 
   // Auto-save effect
   useEffect(() => {
@@ -80,11 +53,9 @@ export function useFileOperations() {
 
     if ((!isTauri() && !getRuntimeCapabilities().browserFileWrite) || !editor.autoSave) {
       clearAutoSaveTimers()
-      autoSaveRetriesRef.current.clear()
       return
     }
 
-    const MAX_RETRIES = 3
     const delay = editor.autoSaveDelay || 1000
 
     const scheduleTabSave = (tabId: string, content: string) => {
@@ -94,25 +65,8 @@ export function useFileOperations() {
         const tab = state.tabs.find((t) => t.id === tabId)
         if (!tab?.modified || !tab.filePath || tab.content !== content) return
 
-        const retries = autoSaveRetriesRef.current.get(tab.id) || 0
-        if (retries >= MAX_RETRIES) return
-
-        try {
-          await saveFile(tab.filePath, content)
-          scheduleMarkdownDocumentIndex(tab.filePath, tab.title, content, AUTO_SAVE_INDEX_DELAY)
-          autoSaveRetriesRef.current.delete(tab.id)
-          useEditorStore.getState().markTabSaved(tab.id, content)
-        } catch (err) {
-          const nextRetries = retries + 1
-          autoSaveRetriesRef.current.set(tab.id, nextRetries)
-          console.error(`Auto-save failed for ${tab.title} (${nextRetries}/${MAX_RETRIES}):`, err)
-          if (nextRetries >= MAX_RETRIES) {
-            toast.error(`自动保存「${tab.title}」失败: ${describeFileOperationError(err, '保存失败')}`)
-          } else {
-            toast.warning(`自动保存失败: ${tab.title}，${describeFileOperationError(err, '保存失败')}`)
-            scheduleTabSave(tab.id, content)
-          }
-        }
+        // Shared coordinator owns serialization, retry budget and completion effects.
+        try { await saveDocument(tab.id, 'auto') } catch { /* coordinator reports auto-save failures */ }
       }, delay)
 
       autoSaveTimersRef.current.set(tabId, { timer, content })
@@ -134,7 +88,6 @@ export function useFileOperations() {
       if (modifiedTabIds.has(tabId)) continue
       clearTimeout(timer)
       autoSaveTimersRef.current.delete(tabId)
-      autoSaveRetriesRef.current.delete(tabId)
     }
 
     return clearAutoSaveTimers

@@ -6,8 +6,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { AiShortcutMenuItems } from './AiShortcutMenuItems'
 import { useFileOperations } from '@/hooks/useFileOperations'
 import { useActiveHeading, type ActiveHeadingGeometry } from '@/hooks/useActiveHeading'
-import { saveFile, saveFileAs } from '@/services/fileSystem'
-import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
+import { saveActiveDocument, persistDocumentContent } from '@/services/documentSave'
 import { extractToc, type TocItem } from '@/services/markdownToc'
 import { toggleMarkdownTaskAtLine } from '@/services/markdownTasks'
 import { saveExternalImageForMarkdown, saveImageFileForMarkdown } from '@/services/markdownImages'
@@ -1133,47 +1132,15 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
     }
   }, [activeTab?.id, activePreview.version, cancelEditorFollower, cancelPreviewFollower, setScrollSyncSource, syncEditorToPreviewLine, syncPreviewToEditorLine, syncScroll, viewMode])
 
-  const handleSave = useCallback(async () => {
-    const state = useEditorStore.getState()
-    const tab = state.tabs.find((item) => item.id === state.activeTabId)
-    if (!tab) return
-    try {
-      if (tab.filePath) {
-        await saveFile(tab.filePath, tab.content)
-        scheduleMarkdownDocumentIndex(tab.filePath, tab.title, tab.content)
-        useEditorStore.getState().markTabSaved(tab.id, tab.content)
-        toast.success('已保存')
-      } else {
-        const result = await saveFileAs(tab.content)
-        if (result) {
-          scheduleMarkdownDocumentIndex(result.path, result.name, result.content)
-          useEditorStore.getState().saveTabAs(tab.id, result.path, result.name, result.content)
-          toast.success('已保存')
-        }
-      }
-    } catch (err) {
-      console.error('Save failed:', err)
-      toast.error(describeFileOperationError(err, '保存失败'))
-    }
-  }, [])
+  const handleSave = saveActiveDocument
 
   const persistTabContent = useCallback(async (tabId: string, nextContent: string) => {
-    const targetTab = useEditorStore.getState().tabs.find((tab) => tab.id === tabId)
-    if (!targetTab) return
-
-    updateTabContent(tabId, nextContent)
-
-    if (!targetTab.filePath) return
-
     try {
-      await saveFile(targetTab.filePath, nextContent)
-      scheduleMarkdownDocumentIndex(targetTab.filePath, targetTab.title, nextContent)
-      useEditorStore.getState().replaceTabContentWithSaved(tabId, nextContent)
+      await persistDocumentContent(tabId, nextContent)
     } catch (err) {
-      console.error('Auto-save markdown task failed:', err)
       toast.error(describeFileOperationError(err, '任务勾选保存失败'))
     }
-  }, [updateTabContent])
+  }, [])
 
   const handleTaskToggle = useCallback(async (tabId: string, content: string, line: number, checked: boolean) => {
     const nextContent = toggleMarkdownTaskAtLine(content, line, checked)

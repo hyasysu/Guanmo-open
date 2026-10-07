@@ -30,8 +30,9 @@ import {
   pickBrowserDirectory,
   removeBrowserEntry,
   renameBrowserFile,
-  saveBrowserFileAs,
+  selectBrowserSaveTarget,
   supportsBrowserFileSystem,
+  supportsBrowserFileWrite,
   writeBrowserFile,
 } from '@/services/browserFileSystem'
 
@@ -68,16 +69,16 @@ export async function openFile(): Promise<FileHandle | null> {
   return result
 }
 
-export async function saveFile(path: string, content: string): Promise<void> {
+export async function saveFile(path: string, content: string): Promise<'written' | 'downloaded'> {
   if (isTauri()) {
     await writeFile(path, content)
-    return
+    return 'written'
   }
 
-  if (supportsBrowserFileSystem()) {
+  if (supportsBrowserFileWrite()) {
     try {
       await writeBrowserFile(path, content)
-      return
+      return 'written'
     } catch {
       // Permission may have been revoked; use the safe download fallback.
     }
@@ -92,22 +93,25 @@ export async function saveFile(path: string, content: string): Promise<void> {
   a.download = fallbackName || 'untitled.md'
   a.click()
   URL.revokeObjectURL(url)
+  return 'downloaded'
 }
 
-export async function saveFileAs(content: string): Promise<FileHandle | null> {
+export async function selectSaveTarget(): Promise<Omit<FileHandle, 'content'> | null> {
   if (isTauri()) {
     const path = await saveFileDialog()
     if (!path) return null
     if (!isWorkspaceDisplayFile(path)) {
       throw new Error('仅支持保存为 .md 文件')
     }
-    await writeFile(path, content)
     const name = path.split(/[/\\]/).pop() || 'untitled.md'
-    return { path, name, content }
+    return { path, name }
   }
 
-  const picked = await saveBrowserFileAs(content, 'untitled.md')
-  if (picked) return picked
+  const picked = await selectBrowserSaveTarget('untitled.md')
+  if (picked) {
+    if (!isWorkspaceDisplayFile(picked.name)) throw new Error('仅支持保存为 .md 文件')
+    return picked
+  }
 
   // Web fallback
   const name = prompt('文件名:', 'untitled.md')
@@ -115,8 +119,15 @@ export async function saveFileAs(content: string): Promise<FileHandle | null> {
   if (!isWorkspaceDisplayFile(name)) {
     throw new Error('仅支持保存为 .md 文件')
   }
-  await saveFile(name, content)
-  return { path: name, name, content }
+  return { path: name, name }
+}
+
+// 非文档导出保留此适配；文档保存必须经过 documentSave。
+export async function saveFileAs(content: string): Promise<FileHandle | null> {
+  const target = await selectSaveTarget()
+  if (!target) return null
+  await saveFile(target.path, content)
+  return { ...target, content }
 }
 
 export async function listDirectory(dirPath: string): Promise<DirEntry[]> {

@@ -13,6 +13,7 @@ import {
   supportsBrowserFileRename,
   writeBrowserBinaryFile,
   writeBrowserFile,
+  selectBrowserSaveTarget,
 } from '@/services/browserFileSystem'
 
 type FakeFileHandle = {
@@ -85,6 +86,24 @@ afterEach(() => {
 })
 
 describe('browser file system session adapter', () => {
+  it('选择另存为目标不提前写入，重复句柄保持同一虚拟身份', async () => {
+    const file = makeFile('target.md', 'old')
+    const createWritable = vi.spyOn(file, 'createWritable')
+    vi.stubGlobal('showSaveFilePicker', vi.fn().mockResolvedValue(file))
+    const first = await selectBrowserSaveTarget()
+    const second = await selectBrowserSaveTarget()
+    expect(first?.path).toBe(second?.path)
+    expect(createWritable).not.toHaveBeenCalled()
+    await writeBrowserFile(first!.path, 'new')
+    expect(file.text).toBe('new')
+  })
+
+  it('同一磁盘文件的不同句柄通过 isSameEntry 共享身份', async () => {
+    const first = makeFile('target.md')
+    const second = { ...makeFile('target.md'), isSameEntry: async () => true }
+    vi.stubGlobal('showSaveFilePicker', vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second))
+    expect((await selectBrowserSaveTarget())?.path).toBe((await selectBrowserSaveTarget())?.path)
+  })
   it('lists, reads, writes, creates and removes entries without persisting handles', async () => {
     const rootHandle = makeDirectory('workspace', new Map([
       ['notes.md', makeFile('notes.md', '# old')],
