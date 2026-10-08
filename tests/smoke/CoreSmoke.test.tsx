@@ -39,7 +39,7 @@ function invokeMock(command: string, args?: Record<string, unknown>) {
       case 'load_reading_marks':
       case 'list_authorized_api_origins':
       case 'load_reading_marks_page': return []
-      case 'load_secret': return null
+      case 'configure_api_connection': return { configId: 'smoke-config', configured: false }
       case 'authorize_selected_path':
       case 'authorize_workspace_path':
       case 'record_diagnostic_event':

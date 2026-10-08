@@ -1,3 +1,4 @@
+import { hasApiCredential } from '@/services/apiConnection'
 import { useCallback, useRef } from 'react'
 import { useChatStore } from '@/stores/chatStore'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -162,9 +163,9 @@ export function useAiChat() {
     const currentAi = useSettingsStore.getState().ai
 
     // 初始化对话客户端（本地 API 无需 apiKey）
-    const chatReady = (currentAi.apiKey || isLocalApi(currentAi.baseUrl)) && currentAi.baseUrl && currentAi.chatModel
+    const chatReady = (hasApiCredential(currentAi) || isLocalApi(currentAi.baseUrl)) && currentAi.baseUrl && currentAi.chatModel
     if (chatReady) {
-      const configKey = `${currentAi.baseUrl}|${currentAi.apiKey}|${currentAi.chatModel}`
+      const configKey = `${currentAi.baseUrl}|${currentAi.credentialVersion ?? currentAi.apiKey}|${currentAi.chatModel}`
       if (configKey !== lastConfigRef.current || !isAiReady()) {
         // 提升 AI 客户端初始化优先级（如果正在闲时加载）
         promoteTask(SINGLETON_IDS.CHAT_AI)
@@ -178,6 +179,10 @@ export function useAiChat() {
               return provider
             })
           }
+          if (!isAiReady() || configKey !== lastConfigRef.current) {
+            initAiClient(currentAi)
+            lastConfigRef.current = configKey
+          }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
           setError(`AI 初始化失败：${msg}`)
@@ -187,10 +192,11 @@ export function useAiChat() {
 
     // 初始化 embedding 客户端（独立配置，本地 API 无需 apiKey）
     const emb = currentAi.embedding
-    const embReady = (emb?.apiKey || isLocalApi(emb?.baseUrl || '')) && emb?.baseUrl && emb?.embeddingModel
+    const embReady = ((emb && hasApiCredential(emb)) || isLocalApi(emb?.baseUrl || '')) && emb?.baseUrl && emb?.embeddingModel
     if (embReady) {
       const currentEmbeddingConfig = getEmbeddingConfig()
       const embeddingConfigChanged = !currentEmbeddingConfig
+        || currentEmbeddingConfig.credentialVersion !== emb.credentialVersion
         || currentEmbeddingConfig.apiKey !== emb.apiKey
         || currentEmbeddingConfig.baseUrl !== emb.baseUrl
         || currentEmbeddingConfig.embeddingModel !== emb.embeddingModel
@@ -203,6 +209,7 @@ export function useAiChat() {
               return initEmbeddingClient(emb)
             })
           }
+          if (!isEmbeddingReady() || embeddingConfigChanged) initEmbeddingClient(emb)
         } catch (err) {
           console.warn('[AI] Embedding client init failed:', err)
         }

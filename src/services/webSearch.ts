@@ -1,4 +1,6 @@
-import { externalFetch } from '@/services/externalHttp'
+import { hasApiCredential, searchConnection } from '@/services/apiConnection'
+import { externalApiFetch, externalFetch } from '@/services/externalHttp'
+import { isTauri } from '@/hooks/useTauri'
 import { DEFAULT_REQUEST_TIMEOUT_MS, normalizeRequestTimeoutMs } from './requestTimeout'
 
 export interface SearchResult {
@@ -20,6 +22,8 @@ export type SearchProvider = 'tavily' | 'serper' | 'brave' | 'custom'
 export interface WebSearchConfig {
   provider: SearchProvider
   apiKey: string
+  apiKeyConfigured?: boolean
+  credentialVersion?: number
   maxResults: number
   customUrl?: string
   timeout: number
@@ -81,11 +85,10 @@ function createCombinedAbortSignal(signal?: AbortSignal): { signal: AbortSignal;
 async function searchTavily(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResponse> {
   const abort = createCombinedAbortSignal(signal)
   try {
-    const res = await externalFetch('https://api.tavily.com/search', {
+    const res = await fetchSearch('https://api.tavily.com/search', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${searchConfig.apiKey}`,
       },
       body: JSON.stringify({
         query,
@@ -128,10 +131,9 @@ async function searchTavily(query: string, maxResults: number, signal?: AbortSig
 async function searchSerper(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResponse> {
   const abort = createCombinedAbortSignal(signal)
   try {
-    const res = await externalFetch('https://google.serper.dev/search', {
+    const res = await fetchSearch('https://google.serper.dev/search', {
       method: 'POST',
       headers: {
-        'X-API-KEY': searchConfig.apiKey,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -175,12 +177,11 @@ async function searchSerper(query: string, maxResults: number, signal?: AbortSig
 async function searchBrave(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResponse> {
   const abort = createCombinedAbortSignal(signal)
   try {
-    const res = await externalFetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${maxResults}`, {
+    const res = await fetchSearch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${maxResults}`, {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
         'Accept-Encoding': 'gzip',
-        'X-Subscription-Token': searchConfig.apiKey,
       },
       signal: abort.signal,
       timeoutMs: searchConfig.timeout,
@@ -231,11 +232,8 @@ async function searchCustom(query: string, maxResults: number, signal?: AbortSig
     const headers: Record<string, string> = {
       'Accept': 'application/json',
     }
-    if (searchConfig.apiKey) {
-      headers['Authorization'] = `Bearer ${searchConfig.apiKey}`
-    }
 
-    const res = await externalFetch(url.toString(), { headers, signal: abort.signal, timeoutMs: searchConfig.timeout })
+    const res = await fetchSearch(url.toString(), { headers, signal: abort.signal, timeoutMs: searchConfig.timeout })
 
     if (!res.ok) {
       let detail = ''
@@ -296,13 +294,13 @@ export async function webSearch(query: string, signal?: AbortSignal): Promise<Se
 
   switch (searchConfig.provider) {
     case 'tavily':
-      if (!searchConfig.apiKey) throw new Error('Tavily API Key 未配置，请在设置中填写')
+      if (!hasApiCredential(searchConfig)) throw new Error('Tavily API Key 未配置，请在设置中填写')
       return searchTavily(query, maxResults, signal)
     case 'serper':
-      if (!searchConfig.apiKey) throw new Error('Serper API Key 未配置，请在设置中填写')
+      if (!hasApiCredential(searchConfig)) throw new Error('Serper API Key 未配置，请在设置中填写')
       return searchSerper(query, maxResults, signal)
     case 'brave':
-      if (!searchConfig.apiKey) throw new Error('Brave Search API Key 未配置，请在设置中填写')
+      if (!hasApiCredential(searchConfig)) throw new Error('Brave Search API Key 未配置，请在设置中填写')
       return searchBrave(query, maxResults, signal)
     case 'custom':
       return searchCustom(query, maxResults, signal)
@@ -321,6 +319,7 @@ export interface WebSearchTestResult {
  * 发送一个轻量测试请求，验证 API Key 和网络连通性。
  */
 export async function testWebSearchConnection(config: WebSearchConfig): Promise<WebSearchTestResult> {
+  const testFetch = (url: string, init: RequestInit & { timeoutMs?: number }) => fetchSearch(url, init, config)
   try {
     if (config.provider === 'custom') {
       if (!config.customUrl) {
@@ -330,26 +329,22 @@ export async function testWebSearchConnection(config: WebSearchConfig): Promise<
       url.searchParams.set('q', 'test')
       url.searchParams.set('count', '1')
       const headers: Record<string, string> = { 'Accept': 'application/json' }
-      if (config.apiKey) {
-        headers['Authorization'] = `Bearer ${config.apiKey}`
-      }
-      const res = await externalFetch(url.toString(), { headers, timeoutMs: normalizeRequestTimeoutMs(config.timeout) })
+      const res = await testFetch(url.toString(), { headers, timeoutMs: normalizeRequestTimeoutMs(config.timeout) })
       if (!res.ok) {
         return { ok: false, message: `自定义搜索连接失败 (${res.status})` }
       }
       return { ok: true }
     }
 
-    if (!config.apiKey) {
+    if (!hasApiCredential(config)) {
       return { ok: false, message: 'API Key 未配置' }
     }
 
     if (config.provider === 'tavily') {
-      const res = await externalFetch('https://api.tavily.com/search', {
+      const res = await testFetch('https://api.tavily.com/search', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${config.apiKey}`,
         },
         body: JSON.stringify({ query: 'test', max_results: 1 }),
         timeoutMs: normalizeRequestTimeoutMs(config.timeout),
@@ -363,11 +358,10 @@ export async function testWebSearchConnection(config: WebSearchConfig): Promise<
     }
 
     if (config.provider === 'serper') {
-      const res = await externalFetch('https://google.serper.dev/search', {
+      const res = await testFetch('https://google.serper.dev/search', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-API-KEY': config.apiKey,
         },
         body: JSON.stringify({ q: 'test', num: 1 }),
         timeoutMs: normalizeRequestTimeoutMs(config.timeout),
@@ -381,13 +375,12 @@ export async function testWebSearchConnection(config: WebSearchConfig): Promise<
     }
 
     if (config.provider === 'brave') {
-      const res = await externalFetch(
+      const res = await testFetch(
         `https://api.search.brave.com/res/v1/web/search?q=test&count=1`,
         {
           headers: {
             'Accept': 'application/json',
             'Accept-Encoding': 'gzip',
-            'X-Subscription-Token': config.apiKey,
           },
           timeoutMs: normalizeRequestTimeoutMs(config.timeout),
         },
@@ -417,4 +410,25 @@ export function buildSearchContext(response: SearchResponse): string {
   })
 
   return `以下是网络搜索"${response.query}"的结果：\n\n${parts.join('\n\n')}`
+}
+
+function fetchSearch(url: string, init: RequestInit & { timeoutMs?: number }, config = searchConfig): Promise<Response> {
+  if (!isTauri()) {
+    const headers = new Headers(init.headers)
+    if (config.apiKey) {
+      if (config.provider === 'serper') headers.set('X-API-KEY', config.apiKey)
+      else if (config.provider === 'brave') headers.set('X-Subscription-Token', config.apiKey)
+      else headers.set('Authorization', `Bearer ${config.apiKey}`)
+    }
+    return externalFetch(url, { ...init, headers })
+  }
+  const target = new URL(url)
+  const get = config.provider === 'brave' || config.provider === 'custom'
+  return externalApiFetch(searchConnection(config), 'search', {
+    body: typeof init.body === 'string' ? init.body : undefined,
+    signal: init.signal || undefined,
+    timeoutMs: init.timeoutMs,
+    query: get ? target.searchParams.get('q') || '' : undefined,
+    count: get ? Number(target.searchParams.get('count') || 5) : undefined,
+  })
 }

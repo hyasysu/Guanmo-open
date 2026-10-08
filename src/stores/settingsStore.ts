@@ -1,18 +1,15 @@
+import { pendingLegacyCredentials } from '@/services/legacyApiCredentials'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { AiConfig, ChatProtocol, CustomPreset, EmbeddingConfig, EmbeddingProtocol, ProviderId } from '@/services/ai/types'
 import { DEFAULT_AI_CONFIG } from '@/services/ai/types'
-import { inferProvider } from '@/services/ai/aiClient'
+import { inferProvider, resetAiClient } from '@/services/ai/aiClient'
 import type { WebSearchConfig } from '@/services/webSearch'
 import { updateSearchConfig } from '@/services/webSearch'
 import { DEFAULT_REQUEST_TIMEOUT_MS, normalizeRequestTimeoutMs } from '@/services/requestTimeout'
-import {
-  AI_API_KEY_SECRET,
-  EMBEDDING_API_KEY_SECRET,
-  WEB_SEARCH_API_KEY_SECRET,
-  deleteSecret,
-  saveSecret,
-} from '@/services/secureStorage'
+import { isTauri } from '@/hooks/useTauri'
+import { configureApiConnection } from '@/services/secureStorage'
+import { chatConnection, embeddingConnection, searchConnection, connectionIdentity, type ApiConnection } from '@/services/apiConnection'
 import { toast } from '@/services/toast'
 import {
   createDefaultAiShortcutActions,
@@ -97,10 +94,6 @@ interface SettingsState {
   updateAppearanceSettings: (settings: Partial<Omit<AppearanceSettings, 'version'>>) => void
   updateWebSearchConfig: (config: Partial<WebSearchConfig>) => void
   updateKnowledgeSettings: (settings: Partial<KnowledgeSettings>) => void
-  hydrateSecrets: (
-    secrets: { apiKey: string | null; embeddingApiKey: string | null; webSearchApiKey: string | null },
-    initial: { apiKey: string; embeddingApiKey: string; webSearchApiKey: string },
-  ) => void
   // 仅将 Web 密钥运行时读取到的 API Key 写入内存（不触发 secureStorage 持久化）
   applyWebRuntimeApiKeys: (keys: { chatApiKey: string; webSearchApiKey: string }) => void
   updateUsageTrackingSettings: (settings: Partial<UsageTrackingSettings>) => void
@@ -225,25 +218,28 @@ export const useSettingsStore = create<SettingsState>()(
       customEmbeddingPresets: [],
 
       updateAiConfig: (config) => {
-        if ('apiKey' in config) {
-          const value = config.apiKey ?? ''
-          const task = value
-            ? saveSecret(AI_API_KEY_SECRET, value)
-            : deleteSecret(AI_API_KEY_SECRET)
-          task.catch((err) => { console.warn('[settings] failed to save API key:', err); toast.error('API Key 保存失败') })
-        }
-        set((s) => ({ ai: { ...s.ai, ...config } }))
+        set((s) => {
+          const ai = { ...s.ai, ...config, ...(isTauri() ? { apiKey: '' } : {}) }
+          if (isTauri()) ai.embedding = { ...ai.embedding, apiKey: '' }
+          if (isTauri() && connectionIdentity(chatConnection(ai)) !== connectionIdentity(chatConnection(s.ai))) {
+            ai.apiKeyConfigured = false
+          }
+          return { ai }
+        })
+        resetAiClient('chat')
+        if (isTauri() && ('apiKey' in config || 'baseUrl' in config || 'protocol' in config)) void syncDesktopCredential('chat', { value: config.apiKey }).catch(() => toast.error('API 配置保存失败，请重试'))
       },
 
       updateEmbeddingConfig: (config) => {
-        if ('apiKey' in config) {
-          const value = config.apiKey ?? ''
-          const task = value
-            ? saveSecret(EMBEDDING_API_KEY_SECRET, value)
-            : deleteSecret(EMBEDDING_API_KEY_SECRET)
-          task.catch((err) => { console.warn('[settings] failed to save embedding API key:', err); toast.error('Embedding Key 保存失败') })
-        }
-        set((s) => ({ ai: { ...s.ai, embedding: { ...s.ai.embedding, ...config } } }))
+        set((s) => {
+          const embedding = { ...s.ai.embedding, ...config, ...(isTauri() ? { apiKey: '' } : {}) }
+          if (isTauri() && connectionIdentity(embeddingConnection(embedding)) !== connectionIdentity(embeddingConnection(s.ai.embedding))) {
+            embedding.apiKeyConfigured = false
+          }
+          return { ai: { ...s.ai, embedding } }
+        })
+        resetAiClient('embedding')
+        if (isTauri() && ('apiKey' in config || 'baseUrl' in config || 'protocol' in config)) void syncDesktopCredential('embedding', { value: config.apiKey }).catch(() => toast.error('Embedding 配置保存失败，请重试'))
       },
 
       updateEditorSettings: (settings) =>
@@ -253,30 +249,13 @@ export const useSettingsStore = create<SettingsState>()(
         set((s) => ({ knowledge: { ...s.knowledge, ...settings } }))
       },
 
-      hydrateSecrets: (secrets, initial) => set((s) => ({
-        ai: {
-          ...s.ai,
-          ...(secrets.apiKey && s.ai.apiKey === initial.apiKey ? { apiKey: secrets.apiKey } : {}),
-          embedding: {
-            ...s.ai.embedding,
-            ...(secrets.embeddingApiKey && s.ai.embedding.apiKey === initial.embeddingApiKey
-              ? { apiKey: secrets.embeddingApiKey }
-              : {}),
-          },
-        },
-        webSearch: {
-          ...s.webSearch,
-          ...(secrets.webSearchApiKey && s.webSearch.apiKey === initial.webSearchApiKey
-            ? { apiKey: secrets.webSearchApiKey }
-            : {}),
-        },
-      })),
-
-      applyWebRuntimeApiKeys: ({ chatApiKey, webSearchApiKey }) =>
+      applyWebRuntimeApiKeys: ({ chatApiKey, webSearchApiKey }) => {
+        if (isTauri()) return
         set((s) => ({
           ai: { ...s.ai, apiKey: chatApiKey },
           webSearch: { ...s.webSearch, apiKey: webSearchApiKey },
-        })),
+        }))
+      },
 
       updateUsageTrackingSettings: (settings) =>
         set((s) => ({ usageTracking: { ...s.usageTracking, ...settings } })),
@@ -304,18 +283,15 @@ export const useSettingsStore = create<SettingsState>()(
         }),
 
       updateWebSearchConfig: (config) => {
-        if ('apiKey' in config) {
-          const value = config.apiKey ?? ''
-          const task = value
-            ? saveSecret(WEB_SEARCH_API_KEY_SECRET, value)
-            : deleteSecret(WEB_SEARCH_API_KEY_SECRET)
-          task.catch((err) => { console.warn('[settings] failed to save web search API key:', err); toast.error('搜索 Key 保存失败') })
-        }
         set((s) => {
-          const webSearch = { ...s.webSearch, ...config }
+          const webSearch = { ...s.webSearch, ...config, ...(isTauri() ? { apiKey: '' } : {}) }
+          if (isTauri() && connectionIdentity(searchConnection(webSearch)) !== connectionIdentity(searchConnection(s.webSearch))) {
+            webSearch.apiKeyConfigured = false
+          }
           updateSearchConfig(webSearch)
           return { webSearch }
         })
+        if (isTauri() && ('apiKey' in config || 'provider' in config || 'customUrl' in config)) void syncDesktopCredential('search', { value: config.apiKey }).catch(() => toast.error('搜索配置保存失败，请重试'))
       },
 
       addCustomChatPreset: (preset) =>
@@ -432,15 +408,18 @@ export const useSettingsStore = create<SettingsState>()(
       name: 'guanmo-settings',
       partialize: (state) => ({
         ...state,
+        legacyApiCredentials: isTauri() ? pendingLegacyCredentials() : undefined,
         ai: {
           ...state.ai,
           apiKey: '',
-          embedding: { ...state.ai.embedding, apiKey: '' },
+          apiKeyConfigured: undefined, credentialVersion: undefined,
+          embedding: { ...state.ai.embedding, apiKey: '', apiKeyConfigured: undefined, credentialVersion: undefined },
         },
-        webSearch: { ...state.webSearch, apiKey: '' },
+        webSearch: { ...state.webSearch, apiKey: '', apiKeyConfigured: undefined, credentialVersion: undefined },
       }),
       merge: (persisted, current) => {
-        const saved = persisted as Partial<SettingsState>
+        const saved = { ...(persisted as Partial<SettingsState>) }
+        delete (saved as Record<string, unknown>).legacyApiCredentials
         // 向后兼容：旧配置没有 protocol/provider，自动补全
         const savedAi = saved.ai
         const patchedAi = savedAi ? {
@@ -455,9 +434,11 @@ export const useSettingsStore = create<SettingsState>()(
             protocol: savedAi.embedding.protocol || 'openai-embedding' as const,
             provider: savedAi.embedding.provider || (savedAi.embedding.baseUrl ? inferProvider(savedAi.embedding.baseUrl) : 'custom' as const),
             apiKey: '',
+            apiKeyConfigured: false, credentialVersion: undefined,
             timeout: normalizeRequestTimeoutMs(savedAi.embedding.timeout),
           } : current.ai.embedding,
           apiKey: '',
+          apiKeyConfigured: false, credentialVersion: undefined,
         } : undefined
         const patchedWebSearch = saved.webSearch ? {
           ...current.webSearch,
@@ -466,6 +447,7 @@ export const useSettingsStore = create<SettingsState>()(
             ? 'tavily'
             : saved.webSearch.provider,
           apiKey: '',
+          apiKeyConfigured: false, credentialVersion: undefined,
           timeout: normalizeRequestTimeoutMs(saved.webSearch.timeout),
         } : current.webSearch
         // 向后兼容：旧自定义预设没有 protocol/provider，补齐后类型断言
@@ -598,3 +580,40 @@ export const useSettingsStore = create<SettingsState>()(
     }
   )
 )
+
+export function desktopConnection(kind: ApiConnection['kind']): ApiConnection {
+  const state = useSettingsStore.getState()
+  return kind === 'chat' ? chatConnection(state.ai)
+    : kind === 'embedding' ? embeddingConnection(state.ai.embedding) : searchConnection(state.webSearch)
+}
+
+const credentialQueues = new Map<ApiConnection['kind'], Promise<unknown>>()
+const credentialRevisions = { chat: 0, embedding: 0, search: 0 }
+
+export function syncDesktopCredential(
+  kind: ApiConnection['kind'],
+  change: { value?: string; remove?: boolean; migrateLegacy?: boolean } = {},
+): Promise<void> {
+  const connection = desktopConnection(kind)
+  let validAddress = false
+  try { validAddress = Boolean(new URL(connection.baseUrl).hostname) } catch { /* Address may still be being edited. */ }
+  if (!validAddress) return change.value || change.remove
+    ? Promise.reject(new Error('请先配置 API 地址')) : Promise.resolve()
+  const identity = connectionIdentity(connection)
+  const revision = ++credentialRevisions[kind]
+  const task = (credentialQueues.get(kind) || Promise.resolve()).catch(() => undefined).then(async () => {
+    const status = await configureApiConnection(connection, change)
+    if (revision !== credentialRevisions[kind] || identity !== connectionIdentity(desktopConnection(kind))) return
+    if (kind !== 'search') resetAiClient(kind)
+    useSettingsStore.setState((state) => {
+      const metadata = { apiKey: '', apiKeyConfigured: status.configured, credentialVersion: revision }
+      if (kind === 'chat') return { ai: { ...state.ai, ...metadata } }
+      if (kind === 'embedding') return { ai: { ...state.ai, embedding: { ...state.ai.embedding, ...metadata } } }
+      const webSearch = { ...state.webSearch, ...metadata }
+      updateSearchConfig(webSearch)
+      return { webSearch }
+    })
+  })
+  credentialQueues.set(kind, task)
+  return task
+}

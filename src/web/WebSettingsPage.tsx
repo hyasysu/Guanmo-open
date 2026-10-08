@@ -124,6 +124,7 @@ function WebApiKeySettings() {
     <div className="mb-4 rounded-xl border border-gm-border bg-gm-surface-elevated p-3">
       <div className="mb-2 text-body font-semibold text-gm-text">Web API Key</div>
       <p className="mb-2 text-caption text-gm-text-tertiary">API Key 仍在下方对话 API / 搜索 API 配置中填写；此处只选择保存方式。文档正文默认不会发送。</p>
+      <p className="mb-3 text-caption text-gm-text-secondary">浏览器运行期间，恶意脚本可能读取或使用 API Key；密码加密保存不能消除这一风险。建议使用专用、低额度、可随时撤销的 Key，并在供应商后台设置消费上限。</p>
       {!runtime.unlocked && (
         <div className="mb-2 flex gap-2">
           <Input aria-label="本地密码" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="输入密码解锁已保存的 Key" />

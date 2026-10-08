@@ -38,6 +38,8 @@ const builtinOrigins = new Set([
 ])
 const sessionOrigins = new Set<string>()
 const persistedOrigins = new Set<string>()
+const apiConnections = new Map<string, { kind: string; protocol: string; baseUrl: string }>()
+const nativeApiRequests: unknown[] = []
 const requests: Array<{ requestId: string; url: string; method: string; headers: [string, string][]; body?: number[]; timeoutMs?: number }> = []
 const cancelledRequestIds = new Set<string>()
 const acknowledgedRequestIds: string[] = []
@@ -87,6 +89,12 @@ function responseBody(url: string, body?: number[]) {
 }
 
 runtime.__TAURI_INVOKE__ = async (command, args = {}) => {
+  if (command === 'configure_api_connection') {
+    const { connection } = args.request as { connection: { kind: string; protocol: string; baseUrl: string } }
+    const configId = JSON.stringify(connection)
+    apiConnections.set(configId, connection)
+    return { configId, configured: true }
+  }
   if (command === 'acknowledge_external_http_stream') {
     acknowledgedRequestIds.push(args.requestId as string)
     return true
@@ -115,6 +123,16 @@ runtime.__TAURI_INVOKE__ = async (command, args = {}) => {
   if (command !== 'external_http_stream') throw new Error(`unexpected command: ${command}`)
 
   const request = args.request as { requestId: string; url: string; method: string; headers: [string, string][]; body?: number[]; timeoutMs?: number }
+  const api = (request as typeof request & { api?: { configId: string; operation: string; query?: string; count?: number } }).api
+  if (api) {
+    nativeApiRequests.push(structuredClone(request))
+    assert(!request.url && !request.method && request.headers.length === 0, '凭据请求不得携带 URL、方法或鉴权头')
+    const connection = apiConnections.get(api.configId)!
+    const suffix = { chat: '/chat/completions', models: '/models', embedding: '/embeddings', search: '' }[api.operation] || ''
+    request.url = connection.baseUrl.replace(/\/+$/, '') + suffix
+    request.method = api.operation === 'models' || (api.operation === 'search' && ['brave', 'custom'].includes(connection.protocol)) ? 'GET' : 'POST'
+    if (api.query !== undefined) request.url += `?q=${encodeURIComponent(api.query)}&count=${api.count}`
+  }
   const channel = args.onEvent as { onmessage?: (event: unknown) => void }
   const origin = originOf(request.url)
   requests.push(request)
@@ -166,7 +184,7 @@ const config: AiConfig = {
   temperature: 0.7,
   topP: 1,
   embedding: {
-    protocol: 'openai-embedding', provider: 'custom', baseUrl: '', apiKey: '', embeddingModel: 'embed', timeout: 45000,
+    protocol: 'openai-embedding', provider: 'custom', baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3', apiKey: '', embeddingModel: 'embed', timeout: 45000,
   },
 }
 

@@ -1,5 +1,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { isTauri } from '@/hooks/useTauri'
+import { configureApiConnection } from '@/services/secureStorage'
+import type { ApiConnection } from './apiConnection'
 
 export class UnsupportedCapabilityError extends Error {
   constructor(capability: string) {
@@ -35,6 +37,7 @@ interface NativeHttpRequest {
   headers: [string, string][]
   body?: number[]
   timeoutMs?: number
+  api?: { configId: string; operation: 'chat' | 'models' | 'embedding' | 'search'; query?: string; count?: number }
 }
 
 let requestSequence = 0
@@ -321,9 +324,13 @@ async function externalFetchInner(input: string | URL | Request, init?: RequestI
 }
 
 export async function externalFetch(input: string | URL | Request, init?: RequestInit & { timeoutMs?: number }): Promise<Response> {
+  return measureExternalRequest(() => externalFetchInner(input, init))
+}
+
+async function measureExternalRequest(run: () => Promise<Response>): Promise<Response> {
   const startedAt = performance.now()
   try {
-    const response = await externalFetchInner(input, init)
+    const response = await run()
     const durationMs = performance.now() - startedAt
     if (durationMs >= 1000) void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
       recordDiagnostic('ai.request_slow', 'slow', durationMs)).catch(() => undefined)
@@ -332,6 +339,41 @@ export async function externalFetch(input: string | URL | Request, init?: Reques
     void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
       recordDiagnostic('ai.request_failed', 'error', performance.now() - startedAt)).catch(() => undefined)
     throw error
+  }
+}
+
+export async function externalApiFetch(
+  connection: ApiConnection,
+  operation: 'chat' | 'models' | 'embedding' | 'search',
+  init: { body?: string; signal?: AbortSignal; timeoutMs?: number; query?: string; count?: number } = {},
+): Promise<Response> {
+  return measureExternalRequest(() => externalApiFetchInner(connection, operation, init))
+}
+
+async function externalApiFetchInner(
+  connection: ApiConnection,
+  operation: 'chat' | 'models' | 'embedding' | 'search',
+  init: { body?: string; signal?: AbortSignal; timeoutMs?: number; query?: string; count?: number },
+): Promise<Response> {
+  if (!isTauri()) throw new UnsupportedCapabilityError('外部 API 请求')
+  if (init.signal?.aborted) throw new DOMException('Request aborted', 'AbortError')
+  // An explicit empty value registers a no-key local connection, or preserves its existing key.
+  const status = await configureApiConnection(connection, { value: '' })
+  const request: NativeHttpRequest = {
+    requestId: createRequestId(), url: '', method: '', headers: [],
+    body: init.body === undefined ? undefined : Array.from(new TextEncoder().encode(init.body)),
+    timeoutMs: init.timeoutMs,
+    api: { configId: status.configId, operation, query: init.query, count: init.count },
+  }
+  try {
+    return await invokeStream(request, init.signal)
+  } catch (error) {
+    const normalized = toExternalHttpError(error)
+    if (normalized.code !== 'ORIGIN_NOT_AUTHORIZED' || !normalized.origin) throw error
+    const choice = await requestAuthorization(normalized.origin)
+    if (choice === 'cancel') throw normalized
+    await authorizeApiOrigin(normalized.origin, choice)
+    return invokeStream(request, init.signal)
   }
 }
 

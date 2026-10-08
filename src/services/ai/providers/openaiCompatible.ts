@@ -9,7 +9,8 @@ import type {
 } from '../types'
 import { AiAuthError, AiNetworkError, AiError } from '../errors'
 import { parseSSEStream } from '../stream'
-import { ExternalHttpError, externalFetch, UnsupportedCapabilityError } from '@/services/externalHttp'
+import { ExternalHttpError, externalApiFetch, UnsupportedCapabilityError } from '@/services/externalHttp'
+import { chatConnection, embeddingConnection, type ApiConnection } from '@/services/apiConnection'
 import { applyReasoningMode, removeReasoningParams } from '../reasoningAdapter'
 
 function isLocalApi(baseUrl: string): boolean {
@@ -38,7 +39,9 @@ function wrapNetworkError(err: unknown, baseUrl: string): AiNetworkError {
 }
 
 export class OpenAICompatibleProvider implements AiProvider {
-  constructor(private config: AiConfig) {}
+  constructor(private config: AiConfig, private kind: 'chat' | 'embedding' = 'chat') {
+    this.config = { ...config, apiKey: '', embedding: { ...config.embedding, apiKey: '' } }
+  }
 
   private createAbortContext(signal?: AbortSignal) {
     const controller = new AbortController()
@@ -61,14 +64,11 @@ export class OpenAICompatibleProvider implements AiProvider {
     }
   }
 
-  private get headers(): Record<string, string> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    }
-    if (this.config.apiKey) {
-      headers['Authorization'] = `Bearer ${this.config.apiKey}`
-    }
-    return headers
+  private fetch(operation: 'chat' | 'models' | 'embedding', init: { body?: string; signal?: AbortSignal; timeoutMs?: number }): Promise<Response> {
+    const connection: ApiConnection = this.kind === 'embedding' || operation === 'embedding'
+      ? embeddingConnection(this.kind === 'embedding' ? { ...this.config.embedding, baseUrl: this.config.baseUrl } : this.config.embedding)
+      : chatConnection(this.config)
+    return externalApiFetch(connection, operation, init)
   }
 
   private get baseUrl(): string {
@@ -96,9 +96,7 @@ export class OpenAICompatibleProvider implements AiProvider {
     const abort = this.createAbortContext(request.signal)
 
     try {
-      const res = await externalFetch(`${this.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: this.headers,
+      const res = await this.fetch('chat', {
         body: JSON.stringify(body),
         signal: abort.signal,
         timeoutMs: this.config.timeout,
@@ -110,9 +108,7 @@ export class OpenAICompatibleProvider implements AiProvider {
         // 如果开启了思考模式且请求失败，尝试移除思考参数重试
         if (reasoningApplied && (res.status === 400 || res.status === 422)) {
           removeReasoningParams(this.config.provider, body)
-          const retryRes = await externalFetch(`${this.baseUrl}/chat/completions`, {
-            method: 'POST',
-            headers: this.headers,
+          const retryRes = await this.fetch('chat', {
             body: JSON.stringify(body),
             signal: abort.signal,
             timeoutMs: this.config.timeout,
@@ -210,9 +206,7 @@ export class OpenAICompatibleProvider implements AiProvider {
     const abort = this.createAbortContext(request.signal)
 
     try {
-      const res = await externalFetch(`${this.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: this.headers,
+      const res = await this.fetch('chat', {
         body: JSON.stringify(body),
         signal: abort.signal,
         timeoutMs: this.config.timeout,
@@ -224,9 +218,7 @@ export class OpenAICompatibleProvider implements AiProvider {
         // 如果开启了思考模式且请求失败，尝试移除思考参数重试
         if (reasoningApplied && (res.status === 400 || res.status === 422)) {
           removeReasoningParams(this.config.provider, body)
-          const retryRes = await externalFetch(`${this.baseUrl}/chat/completions`, {
-            method: 'POST',
-            headers: this.headers,
+          const retryRes = await this.fetch('chat', {
             body: JSON.stringify(body),
             signal: abort.signal,
             timeoutMs: this.config.timeout,
@@ -269,9 +261,7 @@ export class OpenAICompatibleProvider implements AiProvider {
     const abort = this.createAbortContext(signal)
 
     try {
-      const res = await externalFetch(`${this.baseUrl}/embeddings`, {
-        method: 'POST',
-        headers: this.headers,
+      const res = await this.fetch('embedding', {
         body: JSON.stringify(body),
         signal: abort.signal,
         timeoutMs: this.config.timeout,
@@ -313,9 +303,7 @@ export class OpenAICompatibleProvider implements AiProvider {
     const abort = this.createAbortContext(signal)
 
     try {
-      const res = await externalFetch(`${this.baseUrl}/embeddings`, {
-        method: 'POST',
-        headers: this.headers,
+      const res = await this.fetch('embedding', {
         body: JSON.stringify(body),
         signal: abort.signal,
         timeoutMs: this.config.timeout,
@@ -346,8 +334,7 @@ export class OpenAICompatibleProvider implements AiProvider {
   async validateConfig(): Promise<ValidateResult> {
     // 1. 先尝试 /models 端点
     try {
-      const res = await externalFetch(`${this.baseUrl}/models`, {
-        headers: this.headers,
+      const res = await this.fetch('models', {
         timeoutMs: this.config.timeout,
       })
       if (res.ok) {
@@ -371,9 +358,7 @@ export class OpenAICompatibleProvider implements AiProvider {
     try {
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), this.config.timeout)
-      const res = await externalFetch(`${this.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: this.headers,
+      const res = await this.fetch('chat', {
         body: JSON.stringify({
           model: this.config.chatModel,
           messages: [{ role: 'user', content: 'hi' }],
@@ -416,8 +401,7 @@ export class OpenAICompatibleProvider implements AiProvider {
   }
 
   async listModels(): Promise<string[]> {
-    const res = await externalFetch(`${this.baseUrl}/models`, {
-      headers: this.headers,
+    const res = await this.fetch('models', {
       timeoutMs: this.config.timeout,
     })
 

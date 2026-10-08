@@ -105,16 +105,122 @@ impl ApiHttpError {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExternalHttpRequest {
     request_id: String,
+    #[serde(default)]
     url: String,
+    #[serde(default)]
     method: String,
     #[serde(default)]
     headers: Vec<(String, String)>,
     body: Option<Vec<u8>>,
     timeout_ms: Option<u64>,
+    api: Option<BoundApiRequest>,
+    #[serde(skip)]
+    response_secret: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoundApiRequest {
+    config_id: String,
+    operation: String,
+    query: Option<String>,
+    count: Option<u32>,
+}
+
+fn bound_target(
+    record: &crate::api_credentials::StoredConnection,
+    api: &BoundApiRequest,
+) -> Result<(String, String, Vec<(String, String)>), ApiHttpError> {
+    let connection = &record.connection;
+    let (method, suffix) = match (
+        connection.kind.as_str(),
+        connection.protocol.as_str(),
+        api.operation.as_str(),
+    ) {
+        ("chat", "openai-chat", "chat") => ("POST", "/chat/completions"),
+        ("chat", "openai-chat", "models") | ("embedding", "openai-embedding", "models") => {
+            ("GET", "/models")
+        }
+        ("embedding", "openai-embedding", "embedding") => ("POST", "/embeddings"),
+        ("search", "tavily" | "serper", "search") => ("POST", ""),
+        ("search", "brave" | "custom", "search") => ("GET", ""),
+        _ => {
+            return Err(ApiHttpError::new(
+                "OPERATION_NOT_ALLOWED",
+                "API 操作与配置不匹配",
+            ))
+        }
+    };
+    let mut url = Url::parse(&format!("{}{suffix}", connection.base_url))
+        .map_err(|_| ApiHttpError::new("INVALID_URL", "API 配置地址无效"))?;
+    if method == "GET" && api.operation == "search" {
+        let existing: Vec<(String, String)> = url
+            .query_pairs()
+            .filter(|(name, _)| name != "q" && name != "count")
+            .map(|(name, value)| (name.into_owned(), value.into_owned()))
+            .collect();
+        url.set_query(None);
+        let mut params = url.query_pairs_mut();
+        params.extend_pairs(existing);
+        params.append_pair("q", api.query.as_deref().unwrap_or(""));
+        params.append_pair("count", &api.count.unwrap_or(5).to_string());
+    } else if api.query.is_some() || api.count.is_some() {
+        return Err(ApiHttpError::new(
+            "INVALID_REQUEST",
+            "当前操作不接受搜索参数",
+        ));
+    }
+    let mut headers = vec![("content-type".into(), "application/json".into())];
+    if !record.key.is_empty() {
+        let (name, value) = match connection.protocol.as_str() {
+            "serper" => ("x-api-key", record.key.clone()),
+            "brave" => ("x-subscription-token", record.key.clone()),
+            _ => ("authorization", format!("Bearer {}", record.key)),
+        };
+        headers.push((name.into(), value));
+    }
+    Ok((url.to_string(), method.into(), headers))
+}
+
+fn prepare_request(
+    app: &AppHandle,
+    mut request: ExternalHttpRequest,
+) -> Result<ExternalHttpRequest, ApiHttpError> {
+    if let Some(api) = &request.api {
+        if !request.url.is_empty() || !request.method.is_empty() || !request.headers.is_empty() {
+            return Err(ApiHttpError::new(
+                "INVALID_REQUEST",
+                "凭据请求不得覆盖目标或请求头",
+            ));
+        }
+        let record =
+            crate::api_credentials::read_connection(app, &api.config_id).map_err(|_| {
+                ApiHttpError::new("CREDENTIAL_UNAVAILABLE", "安全配置不可用，请检查设置")
+            })?;
+        let (url, method, headers) = bound_target(&record, api)?;
+        request.url = url;
+        request.method = method;
+        request.headers = headers;
+        request.response_secret = record.key;
+        if request.method == "GET" && request.body.is_some() {
+            return Err(ApiHttpError::new("INVALID_REQUEST", "当前操作不接受请求体"));
+        }
+    } else if request.headers.iter().any(|(name, _)| {
+        matches!(
+            name.to_ascii_lowercase().as_str(),
+            "authorization" | "x-api-key" | "x-subscription-token" | "api-key"
+        )
+    }) {
+        return Err(ApiHttpError::new(
+            "HEADER_NOT_ALLOWED",
+            "鉴权仅允许由安全配置生成",
+        ));
+    }
+    Ok(request)
 }
 
 #[derive(Debug, Serialize)]
@@ -455,7 +561,7 @@ fn validate_address_kinds(scheme: &str, kinds: &[AddressKind]) -> Result<(), Api
     Ok(())
 }
 
-fn response_headers(response: &Response) -> Vec<(String, String)> {
+fn response_headers(response: &Response, secret: &str) -> Vec<(String, String)> {
     response
         .headers()
         .iter()
@@ -463,9 +569,59 @@ fn response_headers(response: &Response) -> Vec<(String, String)> {
             value
                 .to_str()
                 .ok()
+                .filter(|value| secret.is_empty() || !value.contains(secret))
+                .filter(|_| {
+                    !matches!(
+                        name.as_str(),
+                        "authorization" | "x-api-key" | "x-subscription-token" | "set-cookie"
+                    )
+                })
                 .map(|value| (name.to_string(), value.to_string()))
         })
         .collect()
+}
+
+// Withhold a small suffix so a credential split across network chunks never reaches IPC.
+struct CredentialResponseGuard {
+    patterns: Vec<Vec<u8>>,
+    pending: Vec<u8>,
+}
+
+impl CredentialResponseGuard {
+    fn new(secret: &str) -> Self {
+        let mut patterns = Vec::new();
+        if !secret.is_empty() {
+            patterns.push(secret.as_bytes().to_vec());
+            if let Ok(encoded) = serde_json::to_string(secret) {
+                patterns.push(encoded.as_bytes()[1..encoded.len() - 1].to_vec());
+            }
+        }
+        Self {
+            patterns,
+            pending: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8], finished: bool) -> Result<Vec<u8>, ApiHttpError> {
+        self.pending.extend_from_slice(bytes);
+        if self.patterns.iter().any(|pattern| {
+            self.pending
+                .windows(pattern.len())
+                .any(|part| part == pattern)
+        }) {
+            return Err(ApiHttpError::new(
+                "CREDENTIAL_IN_RESPONSE",
+                "服务响应包含敏感凭据，已拒绝返回",
+            ));
+        }
+        let keep = if finished {
+            0
+        } else {
+            self.patterns.iter().map(Vec::len).max().unwrap_or(1) - 1
+        };
+        let emit = self.pending.len().saturating_sub(keep);
+        Ok(self.pending.drain(..emit).collect())
+    }
 }
 
 fn is_authorized(state: &ApiOriginState, origin: &str) -> Result<bool, ApiHttpError> {
@@ -671,6 +827,7 @@ pub async fn external_http_request(
     request: ExternalHttpRequest,
 ) -> Result<ExternalHttpResponse, ApiHttpError> {
     ensure_loaded(&app, &state).await?;
+    let request = prepare_request(&app, request)?;
     let request_id = request.request_id.clone();
     let cancellation = register_cancellation(&state, &request_id)?;
     let result = async {
@@ -681,7 +838,7 @@ pub async fn external_http_request(
         };
         let response = send_request(&state, &request, &cancellation).await?;
         let status = response.status().as_u16();
-        let headers = response_headers(&response);
+        let headers = response_headers(&response, &request.response_secret);
         let mut body = Vec::new();
         let mut stream = response.bytes_stream();
         loop {
@@ -700,6 +857,7 @@ pub async fn external_http_request(
             }
             body.extend_from_slice(&chunk);
         }
+        CredentialResponseGuard::new(&request.response_secret).push(&body, true)?;
         Ok(ExternalHttpResponse {
             status,
             headers,
@@ -719,6 +877,7 @@ pub async fn external_http_stream(
     on_event: Channel<ExternalHttpStreamEvent>,
 ) -> Result<(), ApiHttpError> {
     ensure_loaded(&app, &state).await?;
+    let request = prepare_request(&app, request)?;
     let request_id = request.request_id.clone();
     let cancellation = register_cancellation(&state, &request_id)?;
     let ack_window = match register_stream_ack_window(&state, &request_id) {
@@ -739,7 +898,7 @@ pub async fn external_http_stream(
             };
             let response = send_request(&state, &request, &cancellation).await?;
             let status = response.status().as_u16();
-            let headers = response_headers(&response);
+            let headers = response_headers(&response, &request.response_secret);
             if on_event
                 .send(ExternalHttpStreamEvent::Start { status, headers })
                 .is_err()
@@ -747,16 +906,17 @@ pub async fn external_http_stream(
                 return Ok(());
             }
             let mut received = 0usize;
+            let mut guard = CredentialResponseGuard::new(&request.response_secret);
             let mut stream = response.bytes_stream();
             loop {
                 let chunk = tokio::select! {
                     _ = cancellation.cancelled() => return Err(cancelled_error()),
                     chunk = stream.next() => chunk,
                 };
-                let Some(chunk) = chunk else { break };
-                let chunk = chunk.map_err(|error| {
+                let finished = chunk.is_none();
+                let chunk = chunk.transpose().map_err(|error| {
                     ApiHttpError::new("RESPONSE_READ_FAILED", error.to_string())
-                })?;
+                })?.unwrap_or_default();
                 received = received.saturating_add(chunk.len());
                 if received > MAX_RESPONSE_BODY_BYTES {
                     return Err(ApiHttpError::new(
@@ -764,7 +924,8 @@ pub async fn external_http_stream(
                         "响应体超过 16 MiB 限制",
                     ));
                 }
-                for batch in chunk.chunks(STREAM_BATCH_BYTES) {
+                let safe = guard.push(&chunk, finished)?;
+                for batch in safe.chunks(STREAM_BATCH_BYTES) {
                     let permit = tokio::select! {
                         _ = cancellation.cancelled() => return Err(cancelled_error()),
                         permit = ack_window.acquire() => permit
@@ -780,6 +941,7 @@ pub async fn external_http_stream(
                         return Ok(());
                     }
                 }
+                if finished { break; }
             }
             let _ = on_event.send(ExternalHttpStreamEvent::End);
             Ok(())
@@ -801,6 +963,56 @@ mod tests {
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
+
+    #[test]
+    fn credential_target_and_authentication_are_derived_from_the_record() {
+        let record = crate::api_credentials::StoredConnection {
+            connection: crate::api_credentials::ApiConnection {
+                kind: "search".into(),
+                protocol: "serper".into(),
+                base_url: "https://google.serper.dev/search".into(),
+            },
+            key: "synthetic-key".into(),
+        };
+        let api = BoundApiRequest {
+            config_id: "opaque".into(),
+            operation: "search".into(),
+            query: None,
+            count: None,
+        };
+        let (url, method, headers) = bound_target(&record, &api).unwrap();
+        assert_eq!(url, "https://google.serper.dev/search");
+        assert_eq!(method, "POST");
+        assert!(headers.contains(&("x-api-key".into(), "synthetic-key".into())));
+        let forged = BoundApiRequest {
+            operation: "chat".into(),
+            ..api
+        };
+        assert_eq!(
+            bound_target(&record, &forged).unwrap_err().code,
+            "OPERATION_NOT_ALLOWED"
+        );
+        assert!(
+            serde_json::from_value::<BoundApiRequest>(serde_json::json!({
+                "configId": "opaque", "operation": "search", "url": "https://other.example",
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn credential_response_guard_blocks_echo_across_chunk_boundaries() {
+        let mut guard = CredentialResponseGuard::new("synthetic-key");
+        assert!(guard.push(b"data: synthetic-", false).is_ok());
+        assert_eq!(
+            guard.push(b"key", false).unwrap_err().code,
+            "CREDENTIAL_IN_RESPONSE"
+        );
+        let mut guard = CredentialResponseGuard::new("synthetic-key");
+        let mut emitted = guard.push(b"data: anonymous", false).unwrap();
+        emitted.extend(guard.push(b"\n\n", true).unwrap());
+        assert_eq!(emitted, b"data: anonymous\n\n");
+    }
 
     #[test]
     fn normalizes_origin_with_explicit_port() {
@@ -957,6 +1169,8 @@ mod tests {
                 headers: vec![],
                 body: None,
                 timeout_ms: Some(5_000),
+                api: None,
+                response_secret: String::new(),
             },
             &CancellationToken::new(),
         )
@@ -995,6 +1209,8 @@ mod tests {
                 headers: vec![],
                 body: None,
                 timeout_ms: Some(5_000),
+                api: None,
+                response_secret: String::new(),
             },
             &cancellation,
         )

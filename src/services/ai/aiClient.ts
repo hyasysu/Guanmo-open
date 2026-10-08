@@ -3,8 +3,8 @@ import type { AiServiceStatus } from '../../stores/appStore'
 import { AiConfigError } from './errors'
 import { OpenAICompatibleProvider } from './providers/openaiCompatible'
 import { normalizeRequestTimeoutMs } from '@/services/requestTimeout'
-import { getSearchConfig } from '../webSearch'
-import { externalFetch, UnsupportedCapabilityError } from '@/services/externalHttp'
+import { getSearchConfig, testWebSearchConnection } from '../webSearch'
+import { hasApiCredential } from '@/services/apiConnection'
 
 let currentProvider: AiProvider | null = null
 let currentConfig: AiConfig | null = null
@@ -136,7 +136,7 @@ export function inferProvider(baseUrl: string): ProviderId {
 }
 
 export function initAiClient(config: AiConfig): AiProvider {
-  if (!config.apiKey && !isLocalApi(config.baseUrl)) {
+  if (!hasApiCredential(config) && !isLocalApi(config.baseUrl)) {
     throw new AiConfigError('API Key is required')
   }
   if (!config.baseUrl) {
@@ -146,7 +146,7 @@ export function initAiClient(config: AiConfig): AiProvider {
     throw new AiConfigError('Chat model name is required')
   }
 
-  const effectiveConfig = { ...config, timeout: normalizeRequestTimeoutMs(config.timeout) }
+  const effectiveConfig = { ...config, apiKey: '', embedding: { ...config.embedding, apiKey: '' }, timeout: normalizeRequestTimeoutMs(config.timeout) }
   currentConfig = effectiveConfig
   currentProvider = createChatProvider(effectiveConfig)
   return currentProvider
@@ -168,7 +168,7 @@ export function isAiReady(): boolean {
 }
 
 export function initEmbeddingClient(config: EmbeddingConfig): AiProvider {
-  if (!config.apiKey && !isLocalApi(config.baseUrl)) {
+  if (!hasApiCredential(config) && !isLocalApi(config.baseUrl)) {
     throw new AiConfigError('Embedding API Key is required')
   }
   if (!config.baseUrl) {
@@ -178,13 +178,15 @@ export function initEmbeddingClient(config: EmbeddingConfig): AiProvider {
     throw new AiConfigError('Embedding model name is required')
   }
 
-  const effectiveEmbeddingConfig = { ...config, timeout: normalizeRequestTimeoutMs(config.timeout) }
+  const effectiveEmbeddingConfig = { ...config, apiKey: '', timeout: normalizeRequestTimeoutMs(config.timeout) }
   embeddingConfig = effectiveEmbeddingConfig
   const fullConfig: AiConfig = {
     protocol: 'openai-chat',
     provider: config.provider || 'custom',
     baseUrl: config.baseUrl.replace(/\/embeddings\/?$/, '').replace(/\/+$/, ''),
-    apiKey: config.apiKey,
+    apiKey: '',
+    apiKeyConfigured: config.apiKeyConfigured,
+    credentialVersion: config.credentialVersion,
     chatModel: config.embeddingModel,
     streamEnabled: false,
     webSearchEnabled: false,
@@ -195,7 +197,7 @@ export function initEmbeddingClient(config: EmbeddingConfig): AiProvider {
     topP: 1,
     embedding: effectiveEmbeddingConfig,
   }
-  embeddingProvider = new OpenAICompatibleProvider(fullConfig)
+  embeddingProvider = new OpenAICompatibleProvider(fullConfig, 'embedding')
   return embeddingProvider
 }
 
@@ -227,7 +229,7 @@ export async function validateAiStatus(): Promise<AiServiceStatus> {
   const [chatResult, embResult, searchOk] = await Promise.all([
     chatReady ? currentProvider!.validateConfig().then(r => r.ok).catch(() => false) : false,
     embReady ? embeddingProvider!.validateConfig().then(r => r.ok).catch(() => false) : false,
-    searchNeedsCheck ? validateSearchApi(searchCfg.provider, searchCfg.apiKey) : true,
+    searchNeedsCheck ? testWebSearchConnection(searchCfg).then(result => result.ok) : true,
   ])
 
   if (chatResult && embResult && searchOk) return 'ok'
@@ -246,38 +248,8 @@ export async function testAiConnection(config: AiConfig): Promise<ValidateResult
   return provider.validateConfig()
 }
 
-/** 轻量校验搜索 API Key 是否有效 */
-async function validateSearchApi(provider: string, apiKey: string): Promise<boolean> {
-  if (!apiKey) return false
-  try {
-    if (provider === 'tavily') {
-      const res = await externalFetch('https://api.tavily.com/search', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({ query: 'test', max_results: 1 }),
-      })
-      return res.ok
-    }
-    if (provider === 'serper') {
-      const res = await externalFetch('https://google.serper.dev/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-API-KEY': apiKey },
-        body: JSON.stringify({ q: 'test', num: 1 }),
-      })
-      return res.ok
-    }
-    if (provider === 'brave') {
-      const res = await externalFetch('https://api.search.brave.com/res/v1/web/search?q=test&count=1', {
-        headers: { 'X-Subscription-Token': apiKey },
-      })
-      return res.ok
-    }
-    return true
-  } catch (error) {
-    if (error instanceof UnsupportedCapabilityError) throw error
-    return false
-  }
+
+export function resetAiClient(kind: 'chat' | 'embedding'): void {
+  if (kind === 'chat') { currentProvider = null; currentConfig = null }
+  else { embeddingProvider = null; embeddingConfig = null }
 }

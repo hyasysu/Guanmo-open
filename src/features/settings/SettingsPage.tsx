@@ -1,3 +1,5 @@
+import { DesktopApiKeyControl } from './DesktopApiKeyControl'
+import { hasApiCredential, embeddingConnection } from '@/services/apiConnection'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Button, Collapse, Divider, Footer, Icon, Input, Modal, Select, Switch, Table, Tabs } from 'animal-island-ui'
 import appIcon from '@/assets/icon-settings.png'
@@ -19,7 +21,7 @@ import {
 import { AI_CHAT_PRESETS, AI_EMBEDDING_PRESETS } from '@/services/ai/types'
 import type { AiConfig, ChatProtocol, CustomPreset, EmbeddingProtocol, ValidateResult } from '@/services/ai/types'
 import { testWebSearchConnection, updateSearchConfig } from '@/services/webSearch'
-import { externalFetch } from '@/services/externalHttp'
+import { externalApiFetch } from '@/services/externalHttp'
 import type { WebSearchTestResult } from '@/services/webSearch'
 import {
   embedPendingChunks,
@@ -605,10 +607,10 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
   useEffect(() => {
     const timer = setTimeout(() => {
       // 重新初始化客户端
-      if ((ai.apiKey || isLocalApi(ai.baseUrl)) && ai.baseUrl && ai.chatModel) {
+      if ((hasApiCredential(ai) || isLocalApi(ai.baseUrl)) && ai.baseUrl && ai.chatModel) {
         try { initAiClient(ai) } catch { /* ignore */ }
       }
-      if ((ai.embedding.apiKey || isLocalApi(ai.embedding.baseUrl)) && ai.embedding.baseUrl && ai.embedding.embeddingModel) {
+      if ((hasApiCredential(ai.embedding) || isLocalApi(ai.embedding.baseUrl)) && ai.embedding.baseUrl && ai.embedding.embeddingModel) {
         try { initEmbeddingClient(ai.embedding) } catch { /* ignore */ }
       }
       validateAiStatus().then((status) => {
@@ -616,18 +618,18 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
       }).catch(() => {})
     }, 1000)
     return () => clearTimeout(timer)
-  }, [ai.protocol, ai.baseUrl, ai.apiKey, ai.chatModel, ai.timeout, ai.embedding.protocol, ai.embedding.baseUrl, ai.embedding.apiKey, ai.embedding.embeddingModel, ai.embedding.timeout])
+  }, [ai.protocol, ai.baseUrl, ai.apiKey, ai.credentialVersion, ai.chatModel, ai.timeout, ai.embedding.protocol, ai.embedding.baseUrl, ai.embedding.apiKey, ai.embedding.credentialVersion, ai.embedding.embeddingModel, ai.embedding.timeout])
 
   // 配置变更时清除旧测试结果
   useEffect(() => {
     setChatTestResult(null)
     setShowChatSavePreset(false)
-  }, [ai.protocol, ai.baseUrl, ai.apiKey, ai.chatModel, ai.timeout])
+  }, [ai.protocol, ai.baseUrl, ai.apiKey, ai.credentialVersion, ai.chatModel, ai.timeout])
 
   useEffect(() => {
     setEmbTestResult(null)
     setShowEmbSavePreset(false)
-  }, [ai.embedding.protocol, ai.embedding.baseUrl, ai.embedding.apiKey, ai.embedding.embeddingModel, ai.embedding.timeout])
+  }, [ai.embedding.protocol, ai.embedding.baseUrl, ai.embedding.apiKey, ai.embedding.credentialVersion, ai.embedding.embeddingModel, ai.embedding.timeout])
 
   const handleChatTest = async () => {
     setChatTesting(true)
@@ -655,18 +657,14 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
     setEmbTesting(true)
     setEmbTestResult(null)
     try {
-      const { baseUrl, apiKey, embeddingModel } = ai.embedding
+      const { baseUrl, embeddingModel } = ai.embedding
       if (!baseUrl) {
         setEmbTestResult({ ok: false, error: 'config', message: 'Embedding Base URL 未配置' })
         return
       }
-      const url = `${baseUrl.replace(/\/+$/, '')}/embeddings`
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
-      const res = await externalFetch(url, {
-        method: 'POST',
-        headers,
+      const res = await externalApiFetch(embeddingConnection(ai.embedding), 'embedding', {
         body: JSON.stringify({ model: embeddingModel, input: 'test' }),
+        timeoutMs: ai.embedding.timeout,
       })
       if (res.ok) {
         setEmbTestResult({ ok: true })
@@ -828,9 +826,10 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
       <SettingField label="API Base URL" description="OpenAI-compatible API 地址">
         <Input aria-label="对话 API 地址" value={ai.baseUrl} onChange={(e) => updateAiConfig({ baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
       </SettingField>
-      {!isLocalApi(ai.baseUrl) && (
-        <SettingField label="API Key" description={isTauri() ? '通过系统安全存储保存，不写入普通设置' : '填写后在顶部选择保存方式'}>
-          <ApiKeyInput ariaLabel="对话 API Key" value={ai.apiKey} onChange={(e) => updateAiConfig({ apiKey: e.target.value })} placeholder="sk-..." disabled={!isTauri() && !webRuntimeSecrets.unlocked} />
+      {(isTauri() || !isLocalApi(ai.baseUrl)) && (
+        <SettingField label="API Key" description={isTauri() ? '本地模型可留空；Key 通过系统安全存储保存' : '填写后在顶部选择保存方式'}>
+          {isTauri() ? <DesktopApiKeyControl key={`${ai.protocol}|${ai.baseUrl}`} kind="chat" configured={ai.apiKeyConfigured} label="对话 API Key" /> :
+            <ApiKeyInput ariaLabel="对话 API Key" value={ai.apiKey} onChange={(e) => updateAiConfig({ apiKey: e.target.value })} placeholder="sk-..." disabled={!webRuntimeSecrets.unlocked} />}
         </SettingField>
       )}
       <SettingField label="对话模型" description="用于日常对话和 Agent 执行的模型">
@@ -940,9 +939,9 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
       <SettingField label="API Base URL" description="Embedding 服务地址">
         <Input aria-label="Embedding API 地址" value={ai.embedding.baseUrl} onChange={(e) => updateEmbeddingConfig({ baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
       </SettingField>
-      {!isLocalApi(ai.embedding.baseUrl) && (
-        <SettingField label="API Key" description="通过系统安全存储保存">
-          <ApiKeyInput value={ai.embedding.apiKey} onChange={(e) => updateEmbeddingConfig({ apiKey: e.target.value })} placeholder="sk-..." disabled={!isTauri()} />
+      {(isTauri() || !isLocalApi(ai.embedding.baseUrl)) && (
+        <SettingField label="API Key" description="本地模型可留空；Key 通过系统安全存储保存">
+          <DesktopApiKeyControl key={`${ai.embedding.protocol}|${ai.embedding.baseUrl}`} kind="embedding" configured={ai.embedding.apiKeyConfigured} label="Embedding API Key" />
         </SettingField>
       )}
       <SettingField label="Embedding 模型" description="将文本转为向量，用于知识库语义检索">
@@ -1051,6 +1050,7 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
         </SettingField>
       )}
       <SettingField label="搜索 API Key" description={isTauri() ? '同样通过系统安全存储保存' : '填写后在顶部选择保存方式'}>
+        {isTauri() ? <DesktopApiKeyControl key={`${webSearch.provider}|${webSearch.customUrl}`} kind="search" configured={webSearch.apiKeyConfigured} label="联网搜索 API Key" /> : (
         <ApiKeyInput
           ariaLabel="联网搜索 API Key"
           value={webSearch.apiKey}
@@ -1058,6 +1058,7 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
           placeholder={webSearch.provider === 'tavily' ? 'tvly-...' : webSearch.provider === 'custom' ? '可选，用于 Authorization 头' : '...'}
           disabled={!isTauri() && !webRuntimeSecrets.unlocked}
         />
+        )}
       </SettingField>
 
       {/* 测试连接 */}
@@ -1189,7 +1190,7 @@ function KnowledgeStats({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: ()
 
   const runEmbedding = async (retryFailed = false) => {
     setMessage(null)
-    if (!ai.embedding.apiKey && !isLocalApi(ai.embedding.baseUrl)) {
+    if (!hasApiCredential(ai.embedding) && !isLocalApi(ai.embedding.baseUrl)) {
       setMessage('请先配置 Embedding API Key')
       return
     }
