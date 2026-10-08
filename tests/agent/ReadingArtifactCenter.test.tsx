@@ -295,7 +295,9 @@ describe('ReadingArtifactCenter', () => {
     const annotationExpand = within(annotationCard!).getByRole('button', { name: '展开全文' })
     expect(highlightCard).toHaveTextContent('高亮原文第8行')
     expect(within(highlightCard!).getByRole('button', { name: 'A.md · 查看原文' })).toBeInTheDocument()
-    expect(within(highlightCard!).getByRole('button', { name: '删除' })).toBeInTheDocument()
+    fireEvent.click(within(highlightCard!).getByRole('button', { name: /成果操作/ }))
+    expect(screen.getByRole('button', { name: '删除成果' })).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
 
     fireEvent.click(annotationExpand)
     expect(screen.getAllByRole('button', { name: '收起' })).toHaveLength(1)

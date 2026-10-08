@@ -185,6 +185,16 @@ CREATE TABLE IF NOT EXISTS reading_marks (
 );
 
 -- Indexes
+CREATE TABLE IF NOT EXISTS reading_artifact_categories (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE CHECK (length(trim(name)) BETWEEN 1 AND 40)
+);
+CREATE TABLE IF NOT EXISTS reading_artifact_organization (
+  artifact_key TEXT PRIMARY KEY,
+  favorite INTEGER NOT NULL DEFAULT 0 CHECK (favorite IN (0, 1)),
+  category_ids TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(category_ids) AND json_type(category_ids) = 'array')
+);
+
 CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks(document_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_content_hash ON chunks(content_hash);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session_id);
@@ -291,7 +301,7 @@ export const DB_MIGRATIONS = [
   },
 ] as const
 
-export const CURRENT_DB_SCHEMA_VERSION = 3
+export const CURRENT_DB_SCHEMA_VERSION = 4
 
 export const DB_LEGACY_BACKFILL_STATEMENTS = [
   `WITH ordered_messages AS (
@@ -332,6 +342,12 @@ export const DB_POST_MIGRATION_STATEMENTS = [
     VALUES ('delete', old.rowid, old.content, old.heading, old.title_path);
     INSERT INTO chunks_fts(rowid, content, heading, title_path)
     VALUES (new.rowid, new.content, new.heading, new.title_path);
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS reading_mark_organization_delete AFTER DELETE ON reading_marks BEGIN
+    DELETE FROM reading_artifact_organization WHERE artifact_key = 'mark:' || old.id;
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS reading_ai_organization_delete AFTER DELETE ON reading_artifacts BEGIN
+    DELETE FROM reading_artifact_organization WHERE artifact_key = 'ai:' || old.id;
   END`,
   "INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')",
 ] as const

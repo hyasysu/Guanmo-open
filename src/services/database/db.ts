@@ -67,7 +67,9 @@ export async function initializeDatabaseSchema(database: SchemaDatabase): Promis
   const existingSchema = await hasApplicationSchema(database)
   await executeLatestSchema(database)
 
-  if (existingSchema) {
+  // Version 3 already contains the historical columns and chat backfill.
+  // Adding organization tables must not infer relationships in existing chats again.
+  if (existingSchema && version < 3) {
     for (const migration of DB_MIGRATIONS) {
       if (await hasColumn(database, migration.table, migration.column)) continue
       await database.execute(migration.sql)

@@ -30,3 +30,10 @@
 
 - `reading_marks` 为独立表，SQLite/Rust 命令提供按 ID、按文档、全量分页读取、upsert 与删除；Rust 校验枚举、路径与 offset，并由 Rust 刷新 `updated_at`、保留 `created_at`。
 - 备份 v1 的 `readingMarks` 为可选输入、导出始终包含；导入与现有会话、成果和提醒在同一事务中恢复，旧备份缺少该字段必须兼容为空数组。
+
+## 阅读成果收藏与分类
+
+- schema v4 的 `reading_artifact_organization` 按 `mark:<id>` / `ai:<id>` 保存收藏和分类 ID，`reading_artifact_categories` 保存分类名称；不复制成果内容。旧成果没有整理记录时默认未收藏、未分类。
+- 收藏与分类分别通过 Rust `set_reading_artifact_organization` 局部更新；Rust 事务校验成果和分类存在性。分类名称经 Rust 校验为 1–40 个字符，重名拒绝。
+- 删除分类在 Rust 同一事务中解除所有归属，保留收藏、成果和原文；删除成果通过 SQLite trigger 清理对应整理记录。
+- 整理筛选在 SQL 计数和分页之前应用，包含按文档的汇总查询。备份 v1 增加可选的 `artifactCategories` / `artifactOrganization`，导入仍与成果在同一事务中恢复，旧备份缺少字段时兼容。
