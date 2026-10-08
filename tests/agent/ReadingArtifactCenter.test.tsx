@@ -362,6 +362,29 @@ describe('ReadingArtifactCenter', () => {
     expect(screen.getByText('未记录原问题')).toBeInTheDocument()
   })
 
+  it('allows selecting card content without toggling the AI card on selection release', async () => {
+    render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
+    const toggle = await screen.findByRole('button', { name: /AI · AI 解读.*匿名问题/ })
+    const title = within(toggle).getByText('匿名问题')
+    expect(title.closest('.select-text')).toBeInTheDocument()
+    expect(screen.getByText('人工批注').closest('.select-text')).toBeInTheDocument()
+    const selection = window.getSelection()!
+    const range = document.createRange()
+    range.selectNodeContents(title)
+    selection.removeAllRanges()
+    selection.addRange(range)
+    fireEvent.click(toggle, { detail: 1 })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    selection.removeAllRanges()
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByLabelText('AI 回复正文').closest('.select-text')).toBeInTheDocument()
+    expect(screen.getAllByText('匿名问题').at(-1)?.closest('.select-text')).toBeInTheDocument()
+    const copyShortcut = new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true, cancelable: true })
+    screen.getByLabelText('AI 回复正文').dispatchEvent(copyShortcut)
+    expect(copyShortcut.defaultPrevented).toBe(false)
+  })
+
   it('expands long original questions independently and resets them when the AI card closes', async () => {
     const question = Array.from({ length: 9 }, (_, index) => `匿名代码问题第${index + 1}行`).join('\n')
     mocks.loadReadingArtifactsPage.mockResolvedValue({

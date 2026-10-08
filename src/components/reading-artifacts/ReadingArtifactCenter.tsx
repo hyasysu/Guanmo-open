@@ -229,6 +229,7 @@ export function ReadingArtifactCenter({
   const [focusError, setFocusError] = useState<string | null>(null)
   const organization = useArtifactOrganization()
   const organizationRevisionRef = useRef(0)
+  const dataRevisionRef = useRef({ marks: marksRevision, artifacts: artifactsRevision })
   const [organizationFilter, setOrganizationFilter] = useState<ArtifactOrganizationFilter>({ collection: 'all' })
   const organizationByKey = useMemo(() => new Map(organization.entries.map((entry) => [entry.artifactKey, entry])), [organization.entries])
 
@@ -260,8 +261,26 @@ export function ReadingArtifactCenter({
     setItemsError(null)
     let detailSnapshot: ReadingArtifactItem[] | null = null
     try {
+      // Refresh the loaded range in bounded pages so mutations do not collapse it.
+      const refreshCount = !append && quiet && view === 'recent'
+        ? Math.max(queryOptions.limit, loadedItemsRef.current.length)
+        : queryOptions.limit
       const result = await loadReadingArtifactCenterItemsPage({ ...queryOptions, offset })
       if (requestId !== requestSequenceRef.current) return
+      let fetched = result.marks.length + result.artifacts.length
+      while (fetched < refreshCount && result.hasMore) {
+        const page = await loadReadingArtifactCenterItemsPage({
+          ...queryOptions, offset: fetched, limit: Math.min(queryOptions.limit, refreshCount - fetched),
+        })
+        if (requestId !== requestSequenceRef.current) return
+        result.marks.push(...page.marks)
+        result.artifacts.push(...page.artifacts)
+        result.total = page.total
+        result.hasMore = page.hasMore
+        const count = page.marks.length + page.artifacts.length
+        if (count === 0) break
+        fetched += count
+      }
       const projected = buildReadingArtifactItems(
         result.marks,
         result.artifacts,
@@ -380,10 +399,12 @@ export function ReadingArtifactCenter({
   }, [organization.revision, loadDocuments, loadItems, view])
 
   useEffect(() => {
-    if (marksRevision === 0 && artifactsRevision === 0) return
+    const previous = dataRevisionRef.current
+    if (previous.marks === marksRevision && previous.artifacts === artifactsRevision) return
+    dataRevisionRef.current = { marks: marksRevision, artifacts: artifactsRevision }
     if (view === 'focus') return
     if (view === 'documents') void loadDocuments(false)
-    else void loadItems(false)
+    else void loadItems(false, true)
   }, [artifactsRevision, loadDocuments, loadItems, marksRevision, view])
 
   useEffect(() => {
@@ -963,7 +984,7 @@ function ArtifactCard({ renderActions, categoryLabels, item, availability, ancho
     {isUser ? (
       <div className="p-3.5 sm:p-4">
         <div className="flex items-center gap-2 border-b border-gm-border-subtle/80 pb-2.5"><span className={`h-2.5 w-2.5 rounded-full ${COLOR_STYLES[color]}`} /><span className="text-caption font-bold text-gm-text-secondary">{TYPE_LABELS[item.type]}</span><span className="ml-auto text-micro text-gm-text-tertiary">{new Date(item.createdAt).toLocaleDateString('zh-CN')}</span>{renderActions(remove)}</div>
-        {(item.quote || editing || item.content) && <div id={contentId} className="mt-3 space-y-3">
+        {(item.quote || editing || item.content) && <div id={contentId} className="mt-3 select-text space-y-3">
           {item.quote && <div className="relative pl-3.5"><span className={`absolute inset-y-1 left-0 w-1 rounded-full ${COLOR_RAIL_STYLES[color]}`} /><ExpandableText text={`“${item.quote}”`} lines={item.type === 'annotation' ? 3 : 6} expanded={contentExpanded || editing} reducedMotion={reducedMotion} onOverflowChange={(value) => updateContentOverflow('quote', value)} className="whitespace-pre-wrap break-words font-serif text-body leading-[1.65] text-gm-text" /></div>}
           {item.type === 'annotation' && <section className="rounded-xl border px-3 py-2.5" style={COLOR_NOTE_STYLES[color]}><h4 className="mb-1.5 text-micro font-bold tracking-wide text-gm-primary">我的批注</h4>{editing ? <div><textarea value={note} onChange={(event) => setNote(event.target.value)} className="min-h-24 w-full resize-y rounded-lg border border-gm-border-subtle bg-gm-canvas/65 p-2.5 text-caption leading-relaxed text-gm-text outline-none focus:border-gm-primary" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }} /><div className="mt-2 flex justify-end gap-2"><button type="button" onClick={() => { setNote(item.content ?? ''); setEditing(false) }} className="rounded-md px-2 py-1 text-micro text-gm-text-tertiary hover:bg-gm-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-primary/40">取消</button><button type="button" onClick={() => void onUpdateMark(undefined, note).then(() => setEditing(false))} className="rounded-md px-2 py-1 text-micro font-bold text-gm-primary hover:bg-gm-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-primary/40">保存</button></div></div> : item.content && <ExpandableText text={item.content} lines={5} expanded={contentExpanded} reducedMotion={reducedMotion} onOverflowChange={(value) => updateContentOverflow('note', value)} className="whitespace-pre-wrap break-words text-caption leading-[1.65] text-gm-text" />}</section>}
         </div>}
@@ -975,8 +996,13 @@ function ArtifactCard({ renderActions, categoryLabels, item, availability, ancho
       <>
         <div>
         <div className="flex items-start gap-1 px-3.5 pt-3.5"><span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 text-micro font-bold text-gm-text-secondary"><span className="h-2.5 w-2.5 shrink-0 rounded-full bg-gm-primary" /><span className="rounded-full bg-gm-primary-subtle px-1.5 py-0.5 text-[10px] font-bold tracking-[0.04em] text-gm-primary">AI · {TYPE_LABELS[item.type]}</span>{(refs.length + webReferences.length) > 0 && <span className="font-normal text-gm-text-tertiary">· {refs.length + webReferences.length} 个来源</span>}<span className="ml-auto shrink-0 text-micro font-normal text-gm-text-tertiary">{new Date(item.createdAt).toLocaleDateString('zh-CN')}</span></span>{renderActions(remove)}</div>
-        <button id={triggerId} type="button" aria-label={`AI · ${TYPE_LABELS[item.type]} ${collapsedTitle} ${expanded ? '收起' : '展开'}`} aria-expanded={expanded} aria-controls={contentId} onClick={() => { setQuestionExpanded(false); onToggleExpand?.() }} className="group/trigger flex w-full items-start gap-3 border-b border-gm-border-subtle/80 px-3.5 pb-3.5 pt-1 text-left outline-none transition-colors duration-150 hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover active:scale-[0.995]">
-          <span className="min-w-0 flex-1">
+        <button id={triggerId} type="button" aria-label={`AI · ${TYPE_LABELS[item.type]} ${collapsedTitle} ${expanded ? '收起' : '展开'}`} aria-expanded={expanded} aria-controls={contentId} onClick={(event) => {
+          const selection = window.getSelection()
+          if (event.detail > 0 && selection && !selection.isCollapsed && event.currentTarget.contains(selection.anchorNode)) return
+          setQuestionExpanded(false)
+          onToggleExpand?.()
+        }} className="group/trigger flex w-full items-start gap-3 border-b border-gm-border-subtle/80 px-3.5 pb-3.5 pt-1 text-left outline-none transition-colors duration-150 hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover active:scale-[0.995]">
+          <span className="min-w-0 flex-1 select-text">
             <span className="mt-3 line-clamp-2 max-h-[3.25em] whitespace-normal break-words text-caption font-bold leading-relaxed text-gm-text" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}>{collapsedTitle}</span>
             <span className="mt-1 block max-h-[1.625em] truncate text-micro leading-relaxed text-gm-text-tertiary" style={{ fontSize: 'var(--gm-ai-chat-meta-font-size)' }}>{replyPreview}</span>
           </span>
@@ -986,7 +1012,7 @@ function ArtifactCard({ renderActions, categoryLabels, item, availability, ancho
         {categoryLabels && <div className="px-3.5">{categoryLabels}</div>}
         <AnimatePresence initial={false}>
           {expanded && <motion.div key="details" id={contentId} role="region" aria-labelledby={triggerId} {...contentMotion} className="overflow-hidden">
-            <div className="px-3.5 pb-3.5 pt-3.5">
+            <div className="select-text px-3.5 pb-3.5 pt-3.5">
               <div className="space-y-3">
                 <section className="rounded-xl border px-3 py-2.5" style={AI_QUESTION_STYLES}>
                   <h4 className="mb-1.5 text-micro font-bold tracking-wide text-gm-primary">原问题</h4>
