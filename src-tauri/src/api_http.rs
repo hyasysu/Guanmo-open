@@ -15,7 +15,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{ipc::Channel, AppHandle, Manager, State};
 use tokio::{
@@ -33,6 +33,8 @@ const DEFAULT_TIMEOUT_MS: u64 = 60_000;
 const MAX_CONCURRENT_REQUESTS: usize = 8;
 const STREAM_BATCH_BYTES: usize = 64 * 1024;
 const STREAM_ACK_WINDOW: usize = 4;
+const UPDATE_RELEASES_URL: &str =
+    "https://api.github.com/repos/we-used-to-be/Guanmo-open/releases/";
 
 const BUILTIN_ORIGINS: &[&str] = &[
     "https://api.openai.com:443",
@@ -63,6 +65,7 @@ pub struct ApiOriginState {
     concurrency: Semaphore,
     cancellations: Mutex<HashMap<String, CancellationToken>>,
     stream_acks: Mutex<HashMap<String, Arc<Semaphore>>>,
+    usage: Mutex<crate::api_http_limits::ApiUsage>,
 }
 
 impl Default for ApiOriginState {
@@ -75,6 +78,7 @@ impl Default for ApiOriginState {
             concurrency: Semaphore::new(MAX_CONCURRENT_REQUESTS),
             cancellations: Mutex::new(HashMap::new()),
             stream_acks: Mutex::new(HashMap::new()),
+            usage: Mutex::new(crate::api_http_limits::ApiUsage::default()),
         }
     }
 }
@@ -106,7 +110,7 @@ impl ApiHttpError {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExternalHttpRequest {
     request_id: String,
     #[serde(default)]
@@ -120,6 +124,95 @@ pub struct ExternalHttpRequest {
     api: Option<BoundApiRequest>,
     #[serde(skip)]
     response_secret: String,
+}
+
+fn validate_update_request(request: &ExternalHttpRequest) -> Result<(), ApiHttpError> {
+    let allowed_path = request
+        .url
+        .strip_prefix(UPDATE_RELEASES_URL)
+        .is_some_and(|path| {
+            path == "latest"
+                || path.strip_prefix("tags/v").is_some_and(|tag| {
+                    let tag = tag.replace("%2B", "+");
+                    !tag.is_empty()
+                        && tag.len() <= 128
+                        && tag
+                            .bytes()
+                            .all(|c| c.is_ascii_alphanumeric() || b".-+_".contains(&c))
+                })
+        });
+    if !allowed_path
+        || !matches!(request.method.as_str(), "GET" | "get")
+        || request.body.is_some()
+        || request.headers.iter().any(|(name, _)| {
+            !matches!(
+                name.to_ascii_lowercase().as_str(),
+                "accept" | "user-agent" | "x-github-api-version" | "if-none-match"
+            )
+        })
+    {
+        return Err(ApiHttpError::new(
+            "OPERATION_NOT_ALLOWED",
+            "无鉴权代理仅允许本应用更新查询",
+        ));
+    }
+    Ok(())
+}
+
+fn usage_error(code: &'static str) -> ApiHttpError {
+    ApiHttpError::new(
+        code,
+        if code == "RATE_LIMIT_EXCEEDED" {
+            "API 请求过于频繁，请稍后重试（每配置120次/分钟，全应用240次/分钟）"
+        } else {
+            "本次应用会话已达到 API 使用上限（10000次请求或512 MiB响应），请求已停止"
+        },
+    )
+}
+
+fn admit_request(
+    state: &ApiOriginState,
+    request: &ExternalHttpRequest,
+) -> Result<(), ApiHttpError> {
+    let origin = normalize_origin(&request.url)?;
+    if !is_authorized(state, &origin)? {
+        return Err(ApiHttpError::unauthorized(origin));
+    }
+    if request.body.as_ref().map_or(0, Vec::len) > MAX_REQUEST_BODY_BYTES {
+        return Err(ApiHttpError::new(
+            "REQUEST_BODY_TOO_LARGE",
+            "请求体超过 2 MiB 限制",
+        ));
+    }
+    let configuration = request
+        .api
+        .as_ref()
+        .map(|api| api.config_id.as_str())
+        .unwrap_or("update");
+    state
+        .usage
+        .lock()
+        .map_err(|_| ApiHttpError::new("USAGE_STATE_UNAVAILABLE", "API 使用计数不可用"))?
+        .admit(configuration, Instant::now())
+        .map_err(usage_error)
+}
+
+fn count_response(state: &ApiOriginState, bytes: usize) -> Result<(), ApiHttpError> {
+    state
+        .usage
+        .lock()
+        .map_err(|_| ApiHttpError::new("USAGE_STATE_UNAVAILABLE", "API 使用计数不可用"))?
+        .receive(bytes)
+        .map_err(usage_error)
+}
+
+fn request_timeout(request: &ExternalHttpRequest) -> Duration {
+    Duration::from_millis(
+        request
+            .timeout_ms
+            .unwrap_or(DEFAULT_TIMEOUT_MS)
+            .clamp(1, MAX_TIMEOUT_MS),
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -136,6 +229,10 @@ fn bound_target(
     api: &BoundApiRequest,
 ) -> Result<(String, String, Vec<(String, String)>), ApiHttpError> {
     let connection = &record.connection;
+    connection
+        .clone()
+        .normalize()
+        .map_err(|_| ApiHttpError::new("INVALID_URL", "API 配置地址无效"))?;
     let (method, suffix) = match (
         connection.kind.as_str(),
         connection.protocol.as_str(),
@@ -158,6 +255,17 @@ fn bound_target(
     let mut url = Url::parse(&format!("{}{suffix}", connection.base_url))
         .map_err(|_| ApiHttpError::new("INVALID_URL", "API 配置地址无效"))?;
     if method == "GET" && api.operation == "search" {
+        if api
+            .query
+            .as_ref()
+            .is_none_or(|query| query.trim().is_empty() || query.len() > 8192)
+            || api.count.is_some_and(|count| count == 0 || count > 100)
+        {
+            return Err(ApiHttpError::new(
+                "INVALID_REQUEST",
+                "搜索参数无效（查询最多8192字节，结果1至100条）",
+            ));
+        }
         let existing: Vec<(String, String)> = url
             .query_pairs()
             .filter(|(name, _)| name != "q" && name != "count")
@@ -219,6 +327,8 @@ fn prepare_request(
             "HEADER_NOT_ALLOWED",
             "鉴权仅允许由安全配置生成",
         ));
+    } else {
+        validate_update_request(&request)?;
     }
     Ok(request)
 }
@@ -239,14 +349,14 @@ fn register_cancellation(
         return Err(ApiHttpError::new("INVALID_REQUEST_ID", "请求 ID 不能为空"));
     }
     let token = CancellationToken::new();
-    let replaced = state
+    let mut cancellations = state
         .cancellations
         .lock()
-        .map_err(|_| ApiHttpError::new("CANCELLATION_STATE_UNAVAILABLE", "请求取消状态不可用"))?
-        .insert(request_id.to_owned(), token.clone());
-    if let Some(previous) = replaced {
-        previous.cancel();
+        .map_err(|_| ApiHttpError::new("CANCELLATION_STATE_UNAVAILABLE", "请求取消状态不可用"))?;
+    if cancellations.contains_key(request_id) {
+        return Err(ApiHttpError::new("INVALID_REQUEST_ID", "请求 ID 已在使用"));
     }
+    cancellations.insert(request_id.to_owned(), token.clone());
     Ok(token)
 }
 
@@ -648,6 +758,13 @@ async fn send_request(
     request: &ExternalHttpRequest,
     cancellation: &CancellationToken,
 ) -> Result<Response, ApiHttpError> {
+    // Queued requests must not start after another response exhausts the session budget.
+    state
+        .usage
+        .lock()
+        .map_err(|_| ApiHttpError::new("USAGE_STATE_UNAVAILABLE", "API 使用计数不可用"))?
+        .ensure_output_capacity()
+        .map_err(usage_error)?;
     let method = parse_method(&request.method)?;
     let url = Url::parse(&request.url)
         .map_err(|_| ApiHttpError::new("INVALID_URL", "API 地址格式无效"))?;
@@ -700,7 +817,8 @@ pub fn cancel_external_http_request(
         .cancellations
         .lock()
         .map_err(|_| ApiHttpError::new("CANCELLATION_STATE_UNAVAILABLE", "请求取消状态不可用"))?
-        .remove(&request_id);
+        .get(&request_id)
+        .cloned();
     if let Some(token) = token {
         token.cancel();
         Ok(true)
@@ -828,9 +946,10 @@ pub async fn external_http_request(
 ) -> Result<ExternalHttpResponse, ApiHttpError> {
     ensure_loaded(&app, &state).await?;
     let request = prepare_request(&app, request)?;
+    admit_request(&state, &request)?;
     let request_id = request.request_id.clone();
     let cancellation = register_cancellation(&state, &request_id)?;
-    let result = async {
+    let result = tokio::time::timeout(request_timeout(&request), async {
         let _permit = tokio::select! {
             _ = cancellation.cancelled() => return Err(cancelled_error()),
             permit = state.concurrency.acquire() => permit
@@ -849,6 +968,7 @@ pub async fn external_http_request(
             let Some(chunk) = chunk else { break };
             let chunk = chunk
                 .map_err(|error| ApiHttpError::new("RESPONSE_READ_FAILED", error.to_string()))?;
+            count_response(&state, chunk.len())?;
             if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BODY_BYTES {
                 return Err(ApiHttpError::new(
                     "RESPONSE_BODY_TOO_LARGE",
@@ -863,8 +983,9 @@ pub async fn external_http_request(
             headers,
             body,
         })
-    }
-    .await;
+    })
+    .await
+    .unwrap_or_else(|_| Err(ApiHttpError::new("REQUEST_TIMEOUT", "API 请求超时")));
     cleanup_cancellation(&state, &request_id);
     result
 }
@@ -878,6 +999,7 @@ pub async fn external_http_stream(
 ) -> Result<(), ApiHttpError> {
     ensure_loaded(&app, &state).await?;
     let request = prepare_request(&app, request)?;
+    admit_request(&state, &request)?;
     let request_id = request.request_id.clone();
     let cancellation = register_cancellation(&state, &request_id)?;
     let ack_window = match register_stream_ack_window(&state, &request_id) {
@@ -890,7 +1012,7 @@ pub async fn external_http_stream(
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = app.state::<ApiOriginState>();
-        let result = async {
+        let result = tokio::time::timeout(request_timeout(&request), async {
             let _permit = tokio::select! {
                 _ = cancellation.cancelled() => return Err(cancelled_error()),
                 permit = state.concurrency.acquire() => permit
@@ -917,6 +1039,7 @@ pub async fn external_http_stream(
                 let chunk = chunk.transpose().map_err(|error| {
                     ApiHttpError::new("RESPONSE_READ_FAILED", error.to_string())
                 })?.unwrap_or_default();
+                count_response(&state, chunk.len())?;
                 received = received.saturating_add(chunk.len());
                 if received > MAX_RESPONSE_BODY_BYTES {
                     return Err(ApiHttpError::new(
@@ -945,8 +1068,7 @@ pub async fn external_http_stream(
             }
             let _ = on_event.send(ExternalHttpStreamEvent::End);
             Ok(())
-        }
-        .await;
+        }).await.unwrap_or_else(|_| Err(ApiHttpError::new("REQUEST_TIMEOUT", "API 请求超时")));
         if let Err(error) = result {
             let _ = on_event.send(ExternalHttpStreamEvent::Error { error });
         }
@@ -963,6 +1085,101 @@ mod tests {
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
+
+    #[test]
+    fn ordinary_proxy_only_accepts_exact_update_endpoints() {
+        let mut request = ExternalHttpRequest {
+            request_id: "anonymous".into(),
+            url: format!("{UPDATE_RELEASES_URL}latest"),
+            method: "GET".into(),
+            headers: vec![],
+            body: None,
+            timeout_ms: None,
+            api: None,
+            response_secret: String::new(),
+        };
+        validate_update_request(&request).unwrap();
+        request.url = format!("{UPDATE_RELEASES_URL}tags/v1.2.3-beta.1%2Bbuild");
+        validate_update_request(&request).unwrap();
+        for url in [
+            "https://api.github.com/user",
+            "https://custom.example/v1/models",
+            "https://api.github.com/repos/we-used-to-be/Guanmo-open/releases/latest?q=a",
+            "https://api.github.com/repos/we-used-to-be/Guanmo-open/releases/tags/v1%2fother",
+        ] {
+            request.url = url.into();
+            assert_eq!(
+                validate_update_request(&request).unwrap_err().code,
+                "OPERATION_NOT_ALLOWED"
+            );
+        }
+        request.url = format!("{UPDATE_RELEASES_URL}latest");
+        request.method = "POST".into();
+        assert!(validate_update_request(&request).is_err());
+        request.method = "GET".into();
+        request.headers.push(("x-other".into(), "anonymous".into()));
+        assert!(validate_update_request(&request).is_err());
+    }
+
+    #[test]
+    fn bound_endpoints_reject_encoded_paths_and_mismatched_operations() {
+        for base_url in [
+            "https://custom.example/v1/%2fadmin",
+            "https://custom.example/v1/../admin",
+            "https://custom.example/v1/%252e",
+        ] {
+            let record = crate::api_credentials::StoredConnection {
+                connection: crate::api_credentials::ApiConnection {
+                    kind: "chat".into(),
+                    protocol: "openai-chat".into(),
+                    base_url: base_url.into(),
+                },
+                key: "synthetic-key".into(),
+            };
+            let api = BoundApiRequest {
+                config_id: "anonymous".into(),
+                operation: "chat".into(),
+                query: None,
+                count: None,
+            };
+            assert!(bound_target(&record, &api).is_err());
+        }
+    }
+
+    #[test]
+    fn usage_counts_authorized_requests_and_duplicate_ids_cannot_replace_active_cleanup() {
+        let state = ApiOriginState::default();
+        let mut request = ExternalHttpRequest {
+            request_id: "anonymous".into(),
+            url: "https://custom.example/v1/models".into(),
+            method: "GET".into(),
+            headers: vec![],
+            body: None,
+            timeout_ms: None,
+            api: None,
+            response_secret: String::new(),
+        };
+        assert_eq!(
+            admit_request(&state, &request).unwrap_err().code,
+            "ORIGIN_NOT_AUTHORIZED"
+        );
+        request.url = format!("{UPDATE_RELEASES_URL}latest");
+        for _ in 0..crate::api_http_limits::CONFIG_REQUESTS_PER_MINUTE {
+            admit_request(&state, &request).unwrap();
+        }
+        assert_eq!(
+            admit_request(&state, &request).unwrap_err().code,
+            "RATE_LIMIT_EXCEEDED"
+        );
+        let original = register_cancellation(&state, "anonymous").unwrap();
+        assert_eq!(
+            register_cancellation(&state, "anonymous").unwrap_err().code,
+            "INVALID_REQUEST_ID"
+        );
+        assert!(!original.is_cancelled());
+        cleanup_cancellation(&state, "anonymous");
+        register_cancellation(&state, "anonymous").unwrap();
+    }
 
     #[test]
     fn credential_target_and_authentication_are_derived_from_the_record() {

@@ -58,6 +58,31 @@ impl ApiConnection {
         if self.base_url.len() > 2048 {
             return Err("API 地址过长".into());
         }
+        // Reject path encodings/dot traversal before URL parsing can normalize them away.
+        let raw_path = self
+            .base_url
+            .split_once("://")
+            .map(|(_, rest)| rest.split(['?', '#']).next().unwrap_or(""))
+            .and_then(|rest| rest.find('/').map(|index| &rest[index..]))
+            .unwrap_or("")
+            .split(['?', '#'])
+            .next()
+            .unwrap_or("");
+        let encoded_bypass = raw_path.as_bytes().windows(3).any(|bytes| {
+            if bytes[0] != b'%' {
+                return false;
+            }
+            let hex = std::str::from_utf8(&bytes[1..])
+                .ok()
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+            hex.is_none_or(|value| value < 32 || value == 127 || b"./\\%?#".contains(&value))
+        });
+        if encoded_bypass
+            || raw_path.contains('\\')
+            || raw_path.split('/').any(|part| part == "." || part == "..")
+        {
+            return Err("API 地址不允许编码路径或路径跳转".into());
+        }
         let mut url = Url::parse(&self.base_url).map_err(|_| "API 地址格式无效")?;
         if !matches!(url.scheme(), "https" | "http")
             || url.host_str().is_none()

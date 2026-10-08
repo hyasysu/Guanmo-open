@@ -11,6 +11,7 @@ import {
 import { canSkipDocumentIndex, canSkipDocumentIndexMetadata, reconcileDocumentChunks, type IndexUpdateStats } from './reconciler'
 import { vectorStore } from './vectorStore'
 import { getEmbeddingClient, getEmbeddingConfig, isEmbeddingReady } from '@/services/ai/aiClient'
+import { ExternalHttpError } from '@/services/externalHttp'
 import {
   loadDocumentByFilePath,
   loadDocumentById,
@@ -241,6 +242,7 @@ async function embedChunks(chunks: Chunk[], documentTitle = ''): Promise<EmbedRe
         recordVector(batch[j], embeddings[j])
       }
     } catch (err) {
+      if (err instanceof ExternalHttpError && ['RATE_LIMIT_EXCEEDED', 'SESSION_LIMIT_EXCEEDED'].includes(err.code)) throw err
       const msg = err instanceof Error ? err.message : String(err)
       // 网络错误（本地服务不可用等）直接抛出，不逐个重试
       if (msg.includes('连接失败') || msg.includes('Failed to fetch') || msg.includes('ECONNREFUSED') || msg.includes('timeout')) {
@@ -252,7 +254,8 @@ async function embedChunks(chunks: Chunk[], documentTitle = ''): Promise<EmbedRe
         try {
           const response = await client.embedding(item.text)
           recordVector(item, response.embedding)
-        } catch {
+        } catch (err) {
+          if (err instanceof ExternalHttpError && ['RATE_LIMIT_EXCEEDED', 'SESSION_LIMIT_EXCEEDED'].includes(err.code)) throw err
           recordFailure(item, 'embedding request failed')
         }
       }

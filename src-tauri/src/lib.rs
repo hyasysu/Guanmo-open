@@ -16,6 +16,7 @@ use tauri_plugin_fs::FsExt;
 
 mod api_credentials;
 mod api_http;
+mod api_http_limits;
 mod background_library;
 mod database_transactions;
 mod diagnostics;
