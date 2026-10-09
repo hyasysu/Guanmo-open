@@ -384,6 +384,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   isVisible = true,
   onFirstVisible,
   onRenderComplete,
+  onSearchModelChange,
   onPositionIntent,
   resource = 'preview',
   readingMarks = [],
@@ -406,6 +407,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const onBlockCommitRef = useRef(onBlockCommit)
   const onFirstVisibleRef = useRef(onFirstVisible)
   const onRenderCompleteRef = useRef(onRenderComplete)
+  const onSearchModelChangeRef = useRef(onSearchModelChange)
+  onSearchModelChangeRef.current = onSearchModelChange
   const firstVisibleRef = useRef(false)
   const lifecycleMetadataRef = useRef({ documentKey, resource })
   const previousDisplayedContentRef = useRef<string | null>(null)
@@ -472,7 +475,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const headingScrollCancelRef = useRef<(() => void) | null>(null)
   const sourceRevealTimerRef = useRef<number | null>(null)
   /** 未挂载搜索目标的精确定位校正任务：目标 Range 挂载后执行一次即清空 */
-  const pendingSearchCorrectionRef = useRef<{ from: number; to: number; blockId: string; appliedTop?: number; onApplied?: () => void } | null>(null)
+  const pendingSearchCorrectionRef = useRef<{ from: number; to: number; blockId: string; kind?: 'search'; appliedTop?: number; onApplied?: () => void } | null>(null)
   const blockRefs = useRef<Map<number, HTMLDivElement | null>>(new Map())
   const blockResizeObserverRef = useRef<ResizeObserver | null>(null)
   const measurementKeyRef = useRef<{
@@ -533,6 +536,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const modelRef = useRef(model)
   modelRef.current = model
   const searchStateRef = useRef<PreviewSearchState | null>(null)
+  const searchTargetIdentityRef = useRef<{ content: string; documentKey?: string; isVisible: boolean } | null>(null)
   /** 搜索结果按 blockId 建立的索引（查询 O(1)，避免块渲染时扫描全部匹配） */
   const searchMatchesByBlockRef = useRef<Map<string, Array<{ from: number; to: number }>> | null>(null)
   /** 归一化选区（from < to，全文源码 offset）；DOM 卸载不影响其存活 */
@@ -1010,6 +1014,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
 
   /** SearchOverlay 入口：基于可见文本投影全文搜索一次并按 blockId 建立匹配索引（O(1) 查询） */
   const setSearchStateImpl = useCallback((state: PreviewSearchState | null) => {
+    // 关闭/自动刷新同时取消旧匹配的虚拟补定位，保留其他定位意图。
+    if (pendingSearchCorrectionRef.current?.kind === 'search') pendingSearchCorrectionRef.current = null
     searchStateRef.current = state && state.query ? state : null
     const query = searchStateRef.current?.query
     const map = new Map<string, Array<{ from: number; to: number }>>()
@@ -1024,8 +1030,20 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       }
     }
     searchMatchesByBlockRef.current = query ? map : null
-    syncAllMountedBlocks({ search: true, selection: false })
+    syncAllMountedBlocks({ search: true, selection: false, sourceReveal: false, readingMarks: false })
   }, [syncAllMountedBlocks])
+
+  // 在虚拟块的 layout 补定位之前废弃旧搜索坐标；其他定位/选区仍由原生命周期管理。
+  useLayoutEffect(() => {
+    const previous = searchTargetIdentityRef.current
+    if (previous?.content === displayedContent && previous.documentKey === documentKey && previous.isVisible === isVisible) return
+    searchTargetIdentityRef.current = { content: displayedContent, documentKey, isVisible }
+    if (pendingSearchCorrectionRef.current?.kind === 'search') pendingSearchCorrectionRef.current = null
+    const hadSearch = searchStateRef.current !== null
+    searchStateRef.current = null
+    searchMatchesByBlockRef.current = null
+    if (hadSearch) syncAllMountedBlocks({ search: true, selection: false, sourceReveal: false, readingMarks: false })
+  }, [displayedContent, documentKey, isVisible, syncAllMountedBlocks])
 
   // 文档内容变化：旧 offset 全部失效，清除搜索索引与选区状态
   useEffect(() => {
@@ -1046,7 +1064,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       sourceRevealTimerRef.current = null
     }
     selectionAnchorRef.current = null
-    if (hadSearch) syncAllMountedBlocks({ search: true, selection: false })
+    if (hadSearch) syncAllMountedBlocks({ search: true, selection: false, sourceReveal: false, readingMarks: false })
     if (hadSelection) syncAllMountedBlocks({ search: false, selection: true })
     if (hadSourceReveal) syncAllMountedBlocks({ search: false, selection: false, sourceReveal: true, readingMarks: false })
     syncAllMountedBlocks({ search: false, selection: false, readingMarks: true })
@@ -1640,7 +1658,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       }
       const localSource = model.rawContent.slice(block.startOffset, Math.max(block.startOffset, offset))
       const line = block.startLine + (localSource.match(/\r\n|\r|\n/g)?.length ?? 0)
-      pendingSearchCorrectionRef.current = { from: offset, to, blockId: block.blockId }
+      pendingSearchCorrectionRef.current = { from: offset, to, blockId: block.blockId, kind: 'search' }
       const top = getEstimatedPreviewTopForLine(model, line, estimateBlockHeight, measuredHeightsRef.current)
       if (typeof top === 'number') container.scrollTo({ top: Math.max(0, top - 24) })
     },
@@ -1681,6 +1699,12 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       return applied
     },
   }), [cancelProgrammaticScroll, cancelPendingAnchorRestore, model, estimateBlockHeight, requiresWholeDocumentRender, scrollToLineInternal, revealSourceLinesInternal, setSearchStateImpl, applySelection, navigateToReadingMarkInternal, onPositionIntent])
+
+  // 在旧索引清理 effect 与 handle 安装之后通知搜索框；隐藏实例不提供搜索目标。
+  useEffect(() => {
+    onSearchModelChangeRef.current?.(isVisible ? { documentKey, content: displayedContent } : null)
+    return () => onSearchModelChangeRef.current?.(null)
+  }, [displayedContent, documentKey, isVisible, setSearchStateImpl])
 
   // Visible range
   const visible = useMemo(

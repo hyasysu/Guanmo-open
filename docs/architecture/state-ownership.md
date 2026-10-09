@@ -72,7 +72,7 @@ UI 展示顺序、标签栏渲染、预览切换掩码 `previewSwitchingTabId`�
 
 ### Invariants
 
-- 模式切换是纯视图状态变化：不得顺手修改 Tab 内容、阅读位置或搜索状态（见第 1 节 Invariants）。
+- 模式切换是纯视图状态变化：不得修改 Tab 内容或阅读位置；搜索输入保留，派生匹配按实际可见目标失效并重建（见第 5 节）。
 - 模式切换后旧实例释放遵守 `modePerformancePolicy`；有未提交编辑草稿时不得直接卸载（见 `docs/agent-contracts/markdown-editor.md`）。
 
 ## 4. 预览文档模型与 DOM
@@ -101,8 +101,8 @@ UI 展示顺序、标签栏渲染、预览切换掩码 `previewSwitchingTabId`�
 
 ### Source of Truth
 
-- 搜索输入状态（query、active match）：`SearchOverlay` 组件持有。
-- 文档级匹配结果：`MarkdownPreview` 的 `searchMatchesByBlockRef`（按 blockId 索引的 `{from, to}` 全局源码 offset 列表），由 `setSearchStateImpl` 基于 `model.rawContent` 全文计算。
+- 搜索输入状态（query、替换文本）与本轮主动搜索请求：`SearchOverlay` 组件持有，不随文档/模式/实例自动刷新而重置。
+- 文档级匹配快照与活动项：`SearchOverlay` 从当前 EditorView.doc 或已提交预览模型的可见文本投影派生，绑定目标文档、正文、实例及双栏来源；`MarkdownPreview.searchMatchesByBlockRef` 是同一投影语义的块级高亮索引。
 
 ### Derived State
 
@@ -110,8 +110,9 @@ UI 展示顺序、标签栏渲染、预览切换掩码 `previewSwitchingTabId`�
 
 ### Ownership
 
-- 匹配计算只发生在 `setSearchStateImpl`（输入变化时一次全文扫描）。
-- 高亮注册/注销只发生在 `MarkdownPreview` 的块同步逻辑与 `SearchOverlay` 卸载清理。
+- `CodeMirrorEditor.onViewChange` 通知实际实例创建/释放；搜索框在该实例安装可解除的搜索能力，doc transaction 使旧坐标立即失效，提交后刷新，不等待 Store 输入防抖。
+- `MarkdownPreview.onSearchModelChange` 在全文模型提交、旧索引清理之后通知就绪；未就绪或隐藏目标不回退源码扫描。匹配与高亮仍基于全文模型，不等待所有虚拟块挂载。
+- 高亮注册/注销由 `MarkdownPreview` 的块同步与搜索框的精确目标清理管理；关闭只清搜索层与搜索补定位，不清普通选区、来源定位或 ReadingMark。
 
 ### Forbidden Dependencies
 
@@ -120,9 +121,11 @@ UI 展示顺序、标签栏渲染、预览切换掩码 `previewSwitchingTabId`�
 
 ### Invariants
 
-- 搜索匹配基于完整 `rawContent`，与哪些块当前挂载无关。
+- 编辑搜索基于完整源码；预览搜索基于完整 `rawContent` 的可见文本投影，与哪些块当前挂载无关。
 - 虚拟块卸载只移除对应 DOM Range（`removeBlock` / `removeBlocksNotIn`），匹配索引与输入状态不丢失；块重新挂载时高亮自动恢复。
 - 文档内容变化（key/version 变化）使旧 offset 全部失效：搜索索引与选区状态必须整体清除，不得复用旧 offset。
+- 文件、模式、目标实例或双栏来源变化也使旧匹配失效；自动刷新只重建计数/高亮，不滚动、不抢焦点、不重播旧 Ctrl+F 锚点。无可见目标（Diff/最后 Tab 关闭）暂停搜索，初始请求等实际目标就绪后消费一次。
+- 显式导航/替换必须校验当前目标与正文快照；自动刷新后的首次导航按当前光标/视口和方向选取，替换后重算坐标，不能将旧 offset 用于新正文。
 - 高亮注册表生命周期：虚拟块卸载 / 批量卸载只移除对应 DOM Range，不影响其他块与其他文档实例；重新挂载自动恢复；搜索关闭不破坏选区高亮（契约测试：`tests/services/previewHighlightRegistry.test.ts`）。
 - 契约测试：`tests/editor/SearchOverlay.preview.test.tsx`（未挂载内容匹配统计）。
 

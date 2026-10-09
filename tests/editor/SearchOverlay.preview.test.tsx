@@ -2,12 +2,18 @@ import { createRef } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { SearchOverlay } from '@/components/editor/SearchOverlay'
+import { createMarkdownPreviewModel, searchVisibleText } from '@/services/markdownPreviewModel'
+
+function visibleSearch(content: string) {
+  const model = createMarkdownPreviewModel(content)
+  return (query: string) => searchVisibleText(model, query).map(({ from, to }) => ({ from, to }))
+}
 
 describe('SearchOverlay 预览全文搜索', () => {
   it('使用 Ctrl+F 请求的初始选区文本并定位到该选区匹配', () => {
     const paneRef = createRef<HTMLDivElement>()
     const scrollToOffset = vi.fn()
-    const previewRef = { current: { scrollToOffset } }
+    const previewRef = { current: { scrollToOffset, searchVisible: (query: string) => visibleSearch(content)(query) } }
     const content = '目标一\n\n目标二'
 
     render(
@@ -34,7 +40,7 @@ describe('SearchOverlay 预览全文搜索', () => {
   it('父组件重渲染后不重复消费 Ctrl+F 初始锚点', () => {
     const paneRef = createRef<HTMLDivElement>()
     const scrollToOffset = vi.fn()
-    const previewRef = { current: { scrollToOffset } }
+    const previewRef = { current: { scrollToOffset, searchVisible: (query: string) => visibleSearch(content)(query) } }
     const content = '目标一\n\n目标二'
     const searchRequest = {
       requestId: 1,
@@ -70,7 +76,7 @@ describe('SearchOverlay 预览全文搜索', () => {
   it('统计未挂载内容并按匹配 offset 请求虚拟预览定位', () => {
     const paneRef = createRef<HTMLDivElement>()
     const scrollToOffset = vi.fn()
-    const previewRef = { current: { scrollToOffset } }
+    const previewRef = { current: { scrollToOffset, searchVisible: (query: string) => visibleSearch(content)(query) } }
     const content = '首屏内容\n\n隐藏目标\n\n再次出现隐藏目标'
 
     render(
@@ -100,6 +106,7 @@ describe('SearchOverlay 预览全文搜索', () => {
     const previewRef = {
       current: {
         scrollToOffset,
+        searchVisible: (query: string) => visibleSearch(content)(query),
         // 视口停在第二个匹配之后：首个匹配 offset 0，第二个在 offset 13
         getViewportOffset: () => 20,
       },

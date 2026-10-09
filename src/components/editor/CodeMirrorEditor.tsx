@@ -26,6 +26,7 @@ interface CodeMirrorEditorProps {
   onSave?: () => void
   onImageFiles?: (files: File[], insertAt?: number) => void
   viewRef?: React.MutableRefObject<EditorView | null>
+  onViewChange?: (view: EditorView | null, documentKey?: string | null) => void
   documentKey?: string | null
   tabId?: string | null
   initialScrollTop?: number
@@ -152,7 +153,7 @@ const saveKeymap = keymap.of([
   },
 ])
 
-export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, viewRef: externalViewRef, documentKey, tabId, initialScrollTop, initialCursor, initialSelection, initialRanges, initialMainIndex, onBeforeDestroy, resource = 'editor' }: CodeMirrorEditorProps) {
+export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, viewRef: externalViewRef, onViewChange, documentKey, tabId, initialScrollTop, initialCursor, initialSelection, initialRanges, initialMainIndex, onBeforeDestroy, resource = 'editor' }: CodeMirrorEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const internalViewRef = useRef<EditorView | null>(null)
   const viewRef = externalViewRef || internalViewRef
@@ -168,6 +169,8 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
   onImageFilesRef.current = onImageFiles
   const onBeforeDestroyRef = useRef(onBeforeDestroy)
   onBeforeDestroyRef.current = onBeforeDestroy
+  const onViewChangeRef = useRef(onViewChange)
+  onViewChangeRef.current = onViewChange
 
   // Read editor settings from store
   const editorSettings = useSettingsStore((s) => s.editor)
@@ -336,6 +339,8 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
     setCanUndo(false)
     setCanRedo(false)
 
+    onViewChangeRef.current?.(view, documentKey)
+
     // 行号槽在 .cm-scroller 布局流中占据宽度，会把正文推向右侧；将其宽度暴露为 CSS 变量，
     // 供全屏分屏布局在外侧留白中扣除，保证编辑栏与预览栏文本列等宽（见 global.css 分屏补偿规则）
     const guttersEl = view.dom.querySelector<HTMLElement>('.cm-gutters')
@@ -361,6 +366,7 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
       inputBuffer.dispose()
       if (inputBufferRef.current === inputBuffer) inputBufferRef.current = null
       onBeforeDestroyRef.current?.(documentKey, view)
+      onViewChangeRef.current?.(null, documentKey)
       view.destroy()
       eventMarker.mark('model-dispose', { editor: 'codemirror', resource, documentKey })
       eventMarker.mark('editor-dispose', { editor: 'codemirror', resource, documentKey })
