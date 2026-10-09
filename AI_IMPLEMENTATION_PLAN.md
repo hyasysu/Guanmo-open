@@ -4,24 +4,24 @@
 
 ## 当前状态
 
-- 当前阶段：阶段 4｜Rust 代理操作约束与滥用限额。
-- 阶段状态：进行中；实现与非桌面机器检查完成，Tauri Rust 编译/代理定向测试及真实原生验收暂缓，不能标记已完成。
-- 当前授权：2026-10-08 用户要求提交阶段4修改并写详细中文说明；仅本地提交，桌面验收继续暂缓，不推送或推进阶段5。
-- 上次执行结果：阶段4端点约束、会话限额、取消/超时清理、Embedding限额终止及直接验证/契约/交接纳入本次本地提交；提交号以git log核实。
-- 验证结果：独立 Rust 计数测试5/5、Embedding测试15/15、前端HTTP、typecheck、改动文件ESLint、privacy、Smoke8/8、rustfmt及diff检查 PASS；详见最新历史。
-- 本阶段剩余：编译完整 Tauri crate、运行 api_http/api_credentials 定向测试；合成本地服务验证精确端点/鉴权、原生超限/SSE/取消/超时与资源释放，新鲜桌面产物验收 NOT TESTED。
-- 本阶段允许修改：api_http、窄的 api_http_limits 与注册、api_credentials 路径校验、直接测试/脚本/契约和本文件；必要扩展仅 pipeline 的限额错误终止。保存、Agent执行、DB、依赖与CSP不改。
-- 待验收：阶段 1/3 保持进行中，原生验收暂缓；阶段 2 已完成；阶段 5–7 未实施。
-- 技术决策：滑动60秒每配置120次/应用240次；进程会话10000次/512 MiB响应，重试计费于计数、取消失败不退还。重启重置，不提供日预算或供应商账单保证；既有单请求资源上限保留。
-- 工作区基线：阶段2/3与阶段7计划已提交于 `271c26e8190c0e3b2cbbc89d84646a64d28ed949`；阶段4九文件纳入本次本地提交，恢复时核实git log/status。两个既有未跟踪目录原样保留。
-- 阻塞问题：无实施阻塞；原生验证为主动暂缓。独立rustc计数测试不替代Tauri编译或真实网络验收。
-- 下一阶段：阶段 5｜CSP、不可信渲染与 Tauri 权限加固；未开始，需后续明确授权。
-- 新增待办：阶段 7｜搜索会话失效、实例绑定与导航一致性；未开始，无阶段 3–6 代码依赖，默认追加队尾，不自动抢占当前阶段。
-- 会话建议：建议新开窗口；阶段5转入渲染/CSP/ACL新范围，阶段4状态与恢复点已记录。
+- 当前阶段：阶段 5｜CSP、不可信渲染与 Tauri 权限加固。
+- 阶段状态：进行中；实现、前端机器门禁和真实本地 Web 验收通过；Rust ACL 编译、新鲜桌面 Release 与线上部署验收 NOT TESTED。
+- 当前授权：2026-10-09 用户要求提交阶段5修改并写详细中文描述；仅本地提交，原生验收继续暂缓，不推送、tag、Release、PR或推进下一阶段。
+- 上次执行结果：Desktop/Web CSP、主 WebView 的精确 command ACL、ECharts HTML 入口限制及直接测试/契约已落地；复用现有 Markdown/SVG 清洗与 Mermaid strict，没有重写预览。
+- 验证结果：渲染/CSP/ACL定向40/40、最终受影响配置/图表21/21、typecheck、改动ESLint、privacy、Smoke8/8、两种前端build/bundle、rustfmt、真实Web开发/生产攻击及安全内容探针 PASS；详见最新历史。
+- 本阶段剩余：Rust权限清单实际生成/编译；Desktop开发及Release的启动hash/IPC/ACL/正常渲染/资源与本地模型；线上Web部署CSP。原生暂缓不阻止下一窗口实施阶段6，但不将阶段5标记完成。
+- 本阶段允许修改：tauri.conf/build.rs/capabilities/permissions；vite及窄Web CSP helper；ECharts解析/渲染；直接测试、三份契约和本文件。保存、Agent、DB、依赖、启动时序不改。
+- 待验收：阶段1/3/4/5保持进行中；阶段2已完成；阶段6/7未开始。
+- 技术决策：Web仅授权既有启动脚本hash；Desktop由Tauri注入hash/nonce；style unsafe-inline保留。Web保留http:兼容IPv6回环，不能宣称CSP只允许回环；tooltip为Canvas文本，启用HTML dataView拒绝。
+- 工作区基线：提交前HEAD为`9cb64f2`；阶段5十五文件纳入本次本地提交，实际提交号以git log核实。其他任务文档改动保持未提交；`.workbuddy/`和`src-tauri/target-reading-position-baseline/`原样保留。
+- 阻塞问题：无实施阻塞；Rust/桌面原生为主动暂缓，线上部署未授权。静态ACL测试不替代真实权限拒绝。
+- 下一阶段：阶段 6｜Agent 按需上下文超限恢复；新窗口先执行本阶段详细任务，不重复阶段5实现，沿用原生暂缓约束。
+- 后续阶段：阶段7搜索边界修复仍未开始，不抢占阶段6。
+- 会话建议：建议新开窗口；阶段6转入Agent消息/重试/流式新范围，阶段5实现与残余验收已完整交接。
 
 ## 项目目标与评估结论
 
-本计划包含保存可靠性、API 密钥与 XSS 安全加固、Agent 超限恢复、搜索边界修复四项；以下保存成功标准仅适用于阶段 1，安全专项标准见阶段 2–5，搜索标准见阶段 7。阶段 2 已完成，阶段 3/4 实现与非桌面检查完成但原生验收暂缓，阶段 5–7 未开始；源码核实不等于安全验收或漏洞已复现。
+本计划包含保存可靠性、API 密钥与 XSS 安全加固、Agent 超限恢复、搜索边界修复四项；以下保存成功标准仅适用于阶段 1，安全专项标准见阶段 2–5，搜索标准见阶段 7。阶段2已完成，阶段3/4实现与非桌面检查完成但原生验收暂缓；阶段5实现与本地Web验收通过，原生/线上验收仍暂缺；阶段6/7未开始。源码核实不等于安全验收或漏洞已复现。
 
 值得修改。写前快照校验只能淘汰尚未启动的旧任务，无法给已经发出的异步保存建立顺序；应由应用级、按文件身份分组的协调器串行写入，并统一处理保存确认、失败重试和索引调度。
 
@@ -98,7 +98,7 @@
 
 ### 阶段 5｜CSP、不可信渲染与 Tauri 权限加固
 
-- 状态：未开始；初步 HIGH → L3，涉及脚本执行边界、渲染和 IPC 权限。
+- 状态：进行中；实现、前端门禁及真实本地Web验收通过，Rust ACL编译/桌面Release/线上部署 NOT TESTED；HIGH → L3。
 - 目标：收紧实际不必要的 CSP 与权限，复用现有清洗能力覆盖真实不可信渲染入口。
 - 范围与验收：见下方详细任务；保留受支持的安全 Markdown、公式、图表、图片和本地模型。
 
@@ -284,7 +284,7 @@ git diff --check
 
 ### 安全专项共同交付边界
 
-- 阶段 2 已完成真实 Web 核实；阶段 3/4 实现与非桌面机器门禁完成，Tauri Rust编译/代理定向测试和原生迁移/鉴权/超限验收 NOT TESTED；阶段 5 仍仅规划。独立Rust计数测试仅验证纯策略，不能替代代理验收；桌面暂缓不等于已完成。
+- 阶段2已完成真实Web核实；阶段3/4实现与非桌面机器门禁完成，Tauri Rust编译/代理定向测试和原生迁移/鉴权/超限验收NOT TESTED；阶段5实现/前端门禁/真实本地Web通过，Rust ACL编译与原生/线上验收NOT TESTED。独立Rust计数测试仅验证纯策略，静态ACL检查仅验证配置，不替代代理/权限运行时验收；桌面暂缓不等于已完成。
 - HIGH 阶段建议 L3 验收模型；用户明确调用 `ai-code-review` 后才做模型 Review，复用已有门禁，最多一次 Fix → Re-review。提示词：`使用 ai-code-review Skill 审查当前安全阶段 diff，重点检查密钥不返回前端、目标绑定、旧数据兼容、Rust 操作/限额及实际 XSS/IPC 边界；仅检查有调用链证据的影响范围。`
 - 不读取真实用户密钥做自动测试，不在日志、错误、截图或测试结果中显示 Key；不清空旧数据、不静默明文回退、不新增远程中转服务、不改变 Web 存储模式与既有业务权限。远程部署仍需项目安全门禁与二次确认。
 
@@ -403,7 +403,20 @@ git diff --check
 
 ## 当前阶段详细任务与明确下一步
 
-阶段4实现与非桌面门禁已接通，本轮停止在阶段4；阶段1/3/4原生验收继续暂缓，不把计数测试写成完整安全验收。
+阶段5实现与前端门禁、本地Web验收已接通，本轮停止在需要新窗口的边界；阶段1/3/4/5原生验收继续暂缓，阶段6/7尚未实施。
+
+1. 新窗口先核实git status/HEAD，读取阶段6详细任务及对应Agent/AI/状态契约。用户已授权向后实施；若继续沿用原生暂缓，直接从阶段6未完成项实施，不重复已验证阶段5，也不强行跑Rust/打包。
+2. 阶段5唯一新增运行期边界是ECharts解析副本；不改Tab.content、保存、预览全文模型、Store、DB、依赖或动态加载时序。HTML/SVG复用markdownHtml清洗，Mermaid现有strict和库内DOMPurify已在真实页核实，不能新增第二套renderer。
+3. Web CSP在Vite最终HTML中加meta/hash，保持index.html原有启动脚本；Desktop由Tauri自身注入hash/nonce。不要机械删除style unsafe-inline，否则CodeMirror动态样式可能被阻止；不要将Web策略注入Desktop。Web的http:是Chromium不接受IPv6 host-source的兼容例外，JS请求校验不是恶意脚本的网络隔离保证；meta不支持frame-ancestors，线上服务器如可配置应另补响应头。
+4. main.toml显式列出65个当前command的精确allow清单（提交前与最新HEAD核对一致）；AppManifest自动读permissions并启用应用ACL，不需要生成每命令重复文件。capability只用webviews=[main]、local=true；不要再加windows=[main]（会扩大同窗口子WebView匹配）。dialog confirm保留给插件重写的window.confirm，通知走现有Rust命令，FS/Origin/凭据后端校验保持。
+5. ECharts tooltip固定richText，未配置时show=false；拒绝启用dataView的HTML surface、危险协议、协议相对/远程资源及SVG data URL，保留禁用dataView与安全栅格data图像。固定解析/渲染错误不含原始配置值。兼容取舍：原有HTML tooltip变为文本，HTML数据视图改用图表/Markdown表格，不清空用户文档。
+6. 可复用本轮PASS，具体文件/命令/产物在阶段5历史。新鲜Desktop Release、Rust ACL生成/编译、运行时未知命令/非main/远程WebView拒绝、正常dialog confirm/SQL/文件/通知/全屏、asset与本地模型仍NOT TESTED；恢复原生验收时用合成配置与临时文档，核实进程/工作区/HEAD，不用Web dist替代Desktop。
+7. 阶段6先建立mock Provider实际入口失败回归，区分真正user轮次与工具反馈，覆盖工具循环/无工具回复/最终流式回答，超限仅一次压缩重试；正常路径消息完全不裁剪，不重复工具、不改变授权或持久化。阶段7留到后续，不在阶段6顺带修搜索。
+8. HIGH→L3；未执行独立模型Review。提示词：`使用 ai-code-review Skill 审查阶段5 diff，重点检查CSP/hash兼容、ECharts HTML入口、主WebView ACL及正常功能回归；复用机器证据，原生/线上维持NOT TESTED，不扫描无关模块。`
+
+### 阶段4参考恢复点（保留未验收依赖）
+
+阶段4实现与非桌面门禁已接通，源码已提交；以下为暂缓原生验收的参考，不是本轮新增范围。
 
 1. 恢复先读当前状态、阶段4详细任务、external-http契约及最新历史；核实git status/git log。阶段4九文件已按用户要求纳入本次本地提交，保留两个既有未跟踪目录；不自动追加提交、推送或推进阶段5。
 2. 计数唯一所有者是Rust ApiOriginState.usage，短Mutex原子处理滑动窗口/会话累计；临时状态不持久化。授权后、排队前计数；所有收到字节均计数，已排队请求发送前再检查输出余额。现有2/16 MiB、并发8保持，timeout覆盖队列和ACK，取消保留requestId到最终清理。
@@ -535,3 +548,26 @@ git diff --check
 - 精确范围：阶段4九文件（含新增api_http_limits.rs及本计划）；排除并保留.workbuddy/与src-tauri/target-reading-position-baseline/。
 - 验证：复用本轮已经执行的机器PASS，提交前核实精确暂存范围并执行git diff --cached --check；不重跑桌面构建或扩大回归。
 - 状态：阶段4仍为进行中，阶段1/3原生验收与阶段4Tauri编译/真实代理验收继续NOT TESTED；本地提交不等于完成验收。实际提交号以git log为准，不自动推进阶段5。
+
+### 2026-10-08｜阶段5防注入、CSP与主WebView权限
+
+- 状态：进行中；实现、前端机器门禁、真实本地Web开发/生产验证已通过。Rust ACL生成/编译、Desktop开发/Release和线上部署NOT TESTED，沿用原生暂缓，不宣称完整安全闭环已验收。阶段6/7未实施；下一阶段Agent消息/重试是新范围，建议新窗口。
+- 已核实链路：MarkdownPreview、全屏/分屏共用markdownHtml清洗（rehypeRaw→SVG修复/作用域化→sanitize→安全SVG引用）；Mermaid strict且库内DOMPurify清洗最终SVG，没有bindFunctions回调执行。两条既有链路保留。ECharts string formatter进入TooltipHTMLContent、dataView title/lang进入innerHTML；新增失败回归8项先FAIL，修复后PASS。这是入口/隔离证据，未在旧安装版复现脚本执行，不据此声称真实用户曾受攻击。
+- Blast Radius/风险：HIGH→L3。直接影响Desktop/Web CSP、Web HTML转换、自定义command ACL和ECharts派生option；间接影响启动主题/点位、动态样式、公式字体、图片/本地资源、图表/全屏、正常网络、dialog/SQL/通知/窗口操作。正文与权限参数所有权不变；不改Store、保存、AI/RAG、DB、依赖、预热或组件生命周期时序。预览/EditorArea/index.html均未修改，不宣称性能收益。
+- 实现：Desktop script unsafe-inline移除，connect仅self/IPC，devCsp另加1420 HMR；Web最终HTML meta授权四个既有启动脚本hash，开发React preamble也按实际HTML授权。两端保留style unsafe-inline和安全图片/字体，拒绝iframe/object/base/form。main.toml精确允许62个已注册command，build.rs显式AppManifest读取；capability只匹配本地main WebView，不给remote或窗口通配。移除重复dialog/sql defaults、未使用的JS通知/set-title权限，保留原生confirm。后端FsAccessState、凭据绑定、Origin和SQL边界未更改。
+- ECharts：tooltip强制Canvas richText，缺少配置时show=false，保留格式模板文本；拒绝启用HTML dataView、危险/混淆协议、image://远程、协议相对资源、SVG data URL，保留安全栅格data URL和显式禁用dataView。解析/渲染提示使用固定错误。文档源码不改，不清配置/历史数据；HTML tooltip和HTML数据视图的兼容取舍已记录。
+- 修改15文件（全部未提交）：src-tauri/{build.rs,tauri.conf.json,capabilities/default.json,permissions/main.toml}；vite.config.ts、scripts/webCsp.ts；src/services/echartsOption.ts、src/components/editor/EChartsBlock.tsx；tests/services/{echartsOption,renderingSecurity}.test.ts、tests/markdown-preview-prototype/html-sanitize.test.tsx；docs/agent-contracts/{markdown-editor,desktop-services}.md、docs/web-deploy.md；本计划。HEAD为25df3987c21f6b51c90acf731bec6130eea31935；两个既有未跟踪目录保持原样。output/.playwright-cli证据为已忽略临时文件，不纳入提交。
+- PASS：`npx vitest run tests/services/echartsOption.test.ts tests/services/renderingSecurity.test.ts tests/markdown-preview-prototype/html-sanitize.test.tsx tests/markdown-preview-prototype/svg-sanitize.test.tsx --maxWorkers=1`（40项）；最后解析/CSP/ACL受影响回归21/21，补充无tooltip不新增提示的断言后图表18/18；`npm run typecheck`；七个改动TS/TSX文件ESLint；`npm run test:privacy-logs`；`npm run test:smoke`（2文件8项）；`rustfmt --edition 2021 --check src-tauri/build.rs`；`git diff --check`。ACL测试仅静态清单/配置一致性，rustfmt仅格式/解析，均不是运行时授权PASS。
+- PASS：`npm run build:desktop`（前端，不含Rust）及bundle gate，入口1,153,542 bytes、JS总6,907,011 bytes、101 chunks；`npm run build`及Web bundle gate，入口1,170,291 bytes、JS总6,629,970 bytes、86 chunks。仅有既有大chunk提示，不放宽预算；证据D:\temp\guanmo-stage5-desktop-frontend.txt与guanmo-stage5-web-frontend.txt。当前dist是Web，恢复Tauri验收必须重新构建Desktop前端，不复用。
+- 真实本地Web PASS：Playwright CLI独立非持久Edge会话，Vite Web开发15010及最终Web静态预览15011；通过真实新建文档、CodeMirror输入匿名fixture、预览按钮进入。HTML/SVG script、事件、javascript链接、iframe清除；尝试Mermaid init切loose和click脚本未执行；开发页实际ECharts实例showTip验证richText，生产页hover/图表/公式/图片/安全链接/SVG/Mermaid/全屏及退出正常。额外插入inline script及onclick触发script-src-elem/attr拒绝，attack=0、ipc=false；HTTPS与[::1]HTTP的合成route请求通过，不发供应商请求。截图output/playwright/stage5-web-production.png已查看，fixture在同目录stage5-attack.md。生产favicon 404是既有无图标请求，两条CSP错误是主动攻击探针预期，普通运行无CSP错误。
+- 失败/避坑：Chromium忽略http://[::1]:*/ws://[::1]:*来源；Web使用http:保留现有IPv6模型并显式记录较宽兼容例外，不能宣称恶意脚本只能连接回环。meta不支持frame-ancestors，线上防嵌入仍需响应头。Lint拒绝含控制字符的regex，改按字符码过滤且保持混淆协议回归。PowerShell npx.ps1动态参数和npx.cmd的HTML参数转义失败，改直接node调用已安装CLI JS入口；不为探针改业务。读取实际dialog init发现window.confirm→plugin:dialog|confirm，补保留对应精确权限，禁止误删。
+- 自审：当前diff及实际依赖入口检查，过期知识图只辅助定位（未重建）；没有已确认的本次P0/P1阻断项，未自动调用独立模型Review。NOT TESTED：Rust ACL生成/编译、真正未知/非main/远程command拒绝、Desktop启动hash/IPC/样式/asset/网络/文件/SQL/通知/原生confirm，以及线上GitHub Pages的部署CSP。Web页面没有IPC只证明Web产物，不证明桌面攻击权限隔离。
+- 明确下一步：新窗口从阶段6详细任务和当前恢复点开始，保持正常请求原样、明确超限才压缩、真实当前轮次/授权/引用保留、每请求一次重试、流式复位与取消、工具副作用不重复；保留阶段1/3/4/5暂缓项，不顺手改阶段7。使用ai-code-review独立验收阶段5时建议L3强模型，调用词见顶部恢复点。未提交、推送、tag、Release或PR。
+
+### 2026-10-09｜阶段5本地提交授权
+
+- 用户要求：提交阶段5修改，中文描述详细；只做本地提交，不执行远程操作或推进阶段6。
+- 精确范围：阶段5十五文件，包含CSP/主WebView ACL、图表防注入、直接测试、三份契约及本计划的阶段5状态/历史。阶段8/9追加计划仅保留在工作区，不纳入本提交；两个既有未跟踪目录和临时验证产物均排除。
+- 验证：复用本会话已执行的阶段5机器与本地Web PASS；提交前检查精确暂存清单及git diff --cached --check，不重复构建/测试，也不把其他已提交阅读成果改动夹入。
+- 提交前漂移核实：当前HEAD新增的阅读成果整理命令已有对应ACL条目，精确清单共65个，与generate_handler一致；保留这些必要权限，不夹入此前已提交的Rust/DB业务源码。历史阶段5实施时的62个命令记录保持原始证据。
+- 状态：阶段5仍进行中，Rust ACL编译、新鲜桌面Release和线上部署维持NOT TESTED；本地提交不等于完整安全验收。恢复阶段6前核实工作区与提交记录，保留暂缓项。

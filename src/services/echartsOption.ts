@@ -29,9 +29,8 @@ export function parseEChartsOption(source: string): EChartsOptionParseResult {
   let parsed: unknown
   try {
     parsed = JSON.parse(source)
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : '语法错误'
-    return { ok: false, message: `JSON 配置格式无效：${detail}` }
+  } catch {
+    return { ok: false, message: 'JSON 配置格式无效' }
   }
 
   if (!isPlainObject(parsed)) return { ok: false, message: 'ECharts 配置必须是 JSON 对象' }
@@ -40,20 +39,38 @@ export function parseEChartsOption(source: string): EChartsOptionParseResult {
   if (unsafeValue) return { ok: false, message: unsafeValue }
 
   const remoteValue = findRemoteUrl(parsed, 0)
-  if (remoteValue) return { ok: false, message: `不允许加载远程资源：${remoteValue}` }
+  if (remoteValue) return { ok: false, message: '不允许加载远程资源或危险 URL' }
 
   const executableString = findExecutableString(parsed, 0)
-  if (executableString) return { ok: false, message: `不允许执行脚本表达式：${executableString}` }
+  if (executableString) return { ok: false, message: '不允许执行脚本表达式' }
+
+  const toolboxes = Array.isArray(parsed.toolbox) ? parsed.toolbox : [parsed.toolbox]
+  for (const toolbox of toolboxes) {
+    if (!isPlainObject(toolbox) || !isPlainObject(toolbox.feature)) continue
+    const dataView = toolbox.feature.dataView
+    if (isPlainObject(dataView) && dataView.show !== false) {
+      return { ok: false, message: '不支持 HTML 数据视图，请使用图表或 Markdown 表格' }
+    }
+  }
 
   const series = parsed.series
   const seriesItems = Array.isArray(series) ? series : series ? [series] : []
   for (const item of seriesItems) {
     if (!isPlainObject(item) || item.type === undefined) continue
     if (typeof item.type !== 'string' || !supportedSeries.has(item.type)) {
-      return { ok: false, message: `不支持的图表类型：${String(item.type)}` }
+      return { ok: false, message: '不支持的图表类型' }
     }
   }
 
+  // ECharts 的字符串 formatter 会进入 HTML tooltip；固定使用 Canvas 文本。
+  const safeTooltip = (tooltip: unknown) => ({
+    ...(!isPlainObject(tooltip) ? { show: false } : {}),
+    ...(isPlainObject(tooltip) ? tooltip : {}),
+    renderMode: 'richText',
+  })
+  parsed.tooltip = Array.isArray(parsed.tooltip)
+    ? parsed.tooltip.map(safeTooltip)
+    : safeTooltip(parsed.tooltip)
   return { ok: true, option: parsed as EChartsOption }
 }
 
@@ -84,8 +101,11 @@ function findUnsafeValue(value: unknown, depth: number): string | null {
 function findRemoteUrl(value: unknown, depth: number): string | null {
   if (depth > 64) return null
   if (typeof value === 'string') {
-    const trimmed = value.trim()
-    return /^https?:\/\//i.test(trimmed) ? value : null
+    const trimmed = [...value].filter((char) => char.charCodeAt(0) > 32 && char.charCodeAt(0) !== 127)
+      .join('').replace(/^image:\/\//i, '')
+    return /^(?:https?:|\/\/|javascript:|vbscript:|file:|asset:|blob:)/i.test(trimmed)
+      || (/^data:/i.test(trimmed) && !/^data:image\/(?:png|jpeg|gif|webp);base64,/i.test(trimmed))
+      ? value : null
   }
   if (Array.isArray(value)) {
     for (const item of value) {

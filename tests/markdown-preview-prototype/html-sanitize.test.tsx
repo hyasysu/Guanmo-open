@@ -5,6 +5,21 @@ import { MarkdownPreview } from '@/components/editor/MarkdownPreview'
 import { MARKDOWN_HTML_REHYPE_PLUGINS } from '@/services/markdownHtml'
 
 describe('Markdown HTML sanitization', () => {
+  it('真实预览移除脚本、事件属性、危险链接及嵌入页面，保留安全内容', async () => {
+    const { container } = render(<MarkdownPreview content={`
+<script>window.__attack=1</script>
+<iframe srcdoc="<script>window.__attack=1</script>"></iframe>
+<object data="javascript:window.__attack=1"></object>
+<img src="https://example.test/safe.png" alt="safe attack fixture" onerror="window.__attack=1" />
+<a href="javascript:window.__attack=1" onclick="window.__attack=1">unsafe link</a>
+<p>safe paragraph</p>
+`} />)
+    await screen.findByText('safe paragraph')
+    expect(container.querySelector('script, iframe, object, embed')).toBeNull()
+    expect(container.innerHTML).not.toMatch(/onerror=|onclick=|href="javascript:/i)
+    expect(screen.getByAltText('safe attack fixture')).toBeInTheDocument()
+  })
+
   it('preserves supported paragraph alignment for GitHub-style README badges', () => {
     render(
       <ReactMarkdown rehypePlugins={MARKDOWN_HTML_REHYPE_PLUGINS}>

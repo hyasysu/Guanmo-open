@@ -4,6 +4,10 @@
 
 ## 桌面壳命令
 
+- `src-tauri/permissions/main.toml` 显式列出已注册自定义 command；`build.rs` 的 AppManifest 读取该清单并启用应用 ACL。主 capability 仅匹配本地 `main` WebView，无窗口通配或 remote URL 授权；新增 command 必须同步权限清单，不能依赖默认允许。ACL 不替代 `FsAccessState`、凭据绑定、Origin 和后端参数校验，也不隔离同一主 WebView 内已经执行的恶意脚本。
+- 插件只保留已使用的 dialog open/save/message/confirm、SQL、窗口操作和 shell open；`window.confirm` 由 dialog 插件转为原生 confirm，不能删除其权限。通知使用现有 Rust 命令，不开放未使用的前端通知插件命令。
+- Desktop Release CSP 不开放前端供应商连接，仅保留 self/IPC；开发额外保留 localhost:1420/127.0.0.1:1420 的 HMR WebSocket。Tauri 自身给内联启动脚本注入 nonce/hash，保留现有启动时序及样式兼容。配置和 rustfmt 检查不替代新鲜桌面产物的 hash/IPC/资源实际验收。
+
 - `reveal_file_in_folder(path: string): Result<void, string>`：校验路径已获 `FsAccessState` 授权且文件存在后，调用 Windows 资源管理器定位选中文件。
 
 ## 应用更新检查

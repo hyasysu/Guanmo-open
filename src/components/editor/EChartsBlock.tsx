@@ -74,8 +74,8 @@ export function EChartsBlock({ code, startLine, endLine }: { code: string; start
       const isDark = document.documentElement.dataset.theme === 'dark'
       chart = echarts.init(element, isDark ? 'dark' : undefined, { renderer: 'canvas' })
       chartRef.current = chart
-    } catch (initError) {
-      if (!cancelled) setError(initError instanceof Error ? initError.message : String(initError))
+    } catch {
+      if (!cancelled) setError('图表初始化失败')
       return undefined
     }
 
@@ -87,11 +87,11 @@ export function EChartsBlock({ code, startLine, endLine }: { code: string; start
       }
       chart.setOption(option, { notMerge: true })
       setError(null)
-    } catch (renderError) {
+    } catch {
       if (chartRef.current === chart) chartRef.current = null
       chart.dispose()
       if (!cancelled) {
-        setError(renderError instanceof Error ? renderError.message : String(renderError))
+        setError('图表配置无法渲染')
       }
       return undefined
     }
