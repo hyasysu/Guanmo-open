@@ -9,6 +9,7 @@ import type { AgentResult } from '@/services/agent/types'
 import type { ContextTag } from '@/types/contextTag'
 import { CONTEXT_BLOCK_PREFIX } from '@/services/contextBuilder'
 import { buildSystemMessages, buildUntrustedContextMessage, type AiAnswerMode } from '@/services/ai/systemPrompts'
+import { markCurrentTurnStart } from '@/services/ai/contextBudget'
 
 export function resolveAiAnswerMode(selectionRequestKind: 'none' | 'fast' | 'context' | 'explicit_lookup', useAgentMode: boolean): AiAnswerMode | undefined {
   return selectionRequestKind === 'fast' && !useAgentMode ? 'selection_direct' : undefined
@@ -105,6 +106,7 @@ export function buildMessagesForModel(options: {
     options.supplementalContext?.trim(),
   ].filter(Boolean).join('\n\n')
   const contextMessage = buildUntrustedContextMessage(contextText)
+  markCurrentTurnStart(contextMessage || latestUserMessage)
 
   return [
     ...buildSystemMessages(options.customPreferencePrompt, options.answerMode),

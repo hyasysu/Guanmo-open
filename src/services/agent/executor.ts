@@ -39,7 +39,7 @@ import {
   LOCAL_RESEARCH_ANSWER_PROMPT,
   WEB_COMPARISON_ANSWER_PROMPT,
 } from './answerInstructions'
-import { dropOldestCompleteTurns, isModelContextOverflowError } from '@/services/ai/contextBudget'
+import { markCurrentTurnStart, withContextOverflowRecovery } from '@/services/ai/contextBudget'
 import { extractReadingArtifactReferences, mergeReadingArtifactReferences } from './readingArtifactReferences'
 import {
   finishAgentTrace,
@@ -942,13 +942,14 @@ async function runAgentInternal({
   const llmTools = candidateTools.length > 0 ? getToolsForLLM(activeToolNames) : []
 
   const contextMessage = buildUntrustedContextMessage(untrustedContext || '')
-  const messages: ChatMessage[] = [
+  let messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
     ...chatHistory,
     ...(contextMessage ? [contextMessage] : []),
     ...(answerInstruction ? [{ role: 'user' as const, content: answerInstruction }] : []),
     { role: 'user', content: query },
   ]
+  markCurrentTurnStart(messages[1 + chatHistory.length])
 
   const steps: AgentStep[] = []
   let toolCalls = 0
@@ -1008,7 +1009,9 @@ async function runAgentInternal({
   })
 
   const requestAgentCompletion = async () => {
+    let hasPublishedContent = false
     const send = async (currentMessages: ChatMessage[]) => {
+      if (signal?.aborted) throw new DOMException('Agent cancelled', 'AbortError')
       if (remainingDeadlineMs() <= 0) throw new DOMException('Agent deadline exceeded', 'TimeoutError')
       const canStreamAnswer = checkRequiredCapabilities(mergedRequired, calledToolNames).length === 0
       const modelSpanId = startAgentTraceSpan(diagnosticRunId, 'model_request', {
@@ -1050,7 +1053,10 @@ async function runAgentInternal({
           }
           if (chunk.content) {
             content += chunk.content
-            if (canStreamAnswer) onStreamContent?.(content)
+            if (canStreamAnswer && !signal?.aborted) {
+              hasPublishedContent = true
+              onStreamContent?.(content)
+            }
           }
           if (chunk.done) break
         }
@@ -1081,13 +1087,14 @@ async function runAgentInternal({
       }
     }
 
-    try {
-      return await send(messages)
-    } catch (error) {
-      if (!isModelContextOverflowError(error) || signal?.aborted) throw error
-      console.warn('[Agent context] provider reported context overflow; retrying after dropping oldest turn')
-      return send(dropOldestCompleteTurns(messages))
-    }
+    return withContextOverflowRecovery(messages, send, {
+      isCancelled: () => Boolean(signal?.aborted) || remainingDeadlineMs() <= 0,
+      onRetry: (reduced) => {
+        messages = reduced
+        if (hasPublishedContent) onStreamContent?.('')
+        hasPublishedContent = false
+      },
+    })
   }
 
   const repairUnmetReadCapabilities = async (): Promise<boolean> => {
@@ -1175,26 +1182,20 @@ async function runAgentInternal({
     })
 
     try {
-      let response
-      try {
-        response = await client.chat({
-          messages,
+      const response = await withContextOverflowRecovery(messages, async (currentMessages) => {
+        if (signal?.aborted) throw new DOMException('Agent cancelled', 'AbortError')
+        if (remainingDeadlineMs() <= 0) throw new DOMException('Agent deadline exceeded', 'TimeoutError')
+        return client.chat({
+          messages: currentMessages,
           signal,
           temperature,
           tools: [],
           toolChoice: 'none',
         })
-      } catch (error) {
-        if (!isModelContextOverflowError(error) || signal?.aborted) throw error
-        console.warn('[Agent context] provider reported context overflow; retrying after dropping oldest turn')
-        response = await client.chat({
-          messages: dropOldestCompleteTurns(messages),
-          signal,
-          temperature,
-          tools: [],
-          toolChoice: 'none',
-        })
-      }
+      }, {
+        isCancelled: () => Boolean(signal?.aborted) || remainingDeadlineMs() <= 0,
+        onRetry: (reduced) => { messages = reduced },
+      })
 
       return {
         answer: response.content,

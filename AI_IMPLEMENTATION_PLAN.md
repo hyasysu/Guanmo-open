@@ -4,24 +4,23 @@
 
 ## 当前状态
 
-- 当前阶段：阶段 5｜CSP、不可信渲染与 Tauri 权限加固。
-- 阶段状态：进行中；实现、前端机器门禁和真实本地 Web 验收通过；Rust ACL 编译、新鲜桌面 Release 与线上部署验收 NOT TESTED。
-- 当前授权：2026-10-09 用户要求提交阶段5修改并写详细中文描述；仅本地提交，原生验收继续暂缓，不推送、tag、Release、PR或推进下一阶段。
-- 上次执行结果：Desktop/Web CSP、主 WebView 的精确 command ACL、ECharts HTML 入口限制及直接测试/契约已落地；复用现有 Markdown/SVG 清洗与 Mermaid strict，没有重写预览。
-- 验证结果：渲染/CSP/ACL定向40/40、最终受影响配置/图表21/21、typecheck、改动ESLint、privacy、Smoke8/8、两种前端build/bundle、rustfmt、真实Web开发/生产攻击及安全内容探针 PASS；详见最新历史。
-- 本阶段剩余：Rust权限清单实际生成/编译；Desktop开发及Release的启动hash/IPC/ACL/正常渲染/资源与本地模型；线上Web部署CSP。原生暂缓不阻止下一窗口实施阶段6，但不将阶段5标记完成。
-- 本阶段允许修改：tauri.conf/build.rs/capabilities/permissions；vite及窄Web CSP helper；ECharts解析/渲染；直接测试、三份契约和本文件。保存、Agent、DB、依赖、启动时序不改。
-- 待验收：阶段1/3/4/5保持进行中；阶段2已完成；阶段6/7未开始。
-- 技术决策：Web仅授权既有启动脚本hash；Desktop由Tauri注入hash/nonce；style unsafe-inline保留。Web保留http:兼容IPv6回环，不能宣称CSP只允许回环；tooltip为Canvas文本，启用HTML dataView拒绝。
-- 工作区基线：提交前HEAD为`9cb64f2`；阶段5十五文件纳入本次本地提交，实际提交号以git log核实。其他任务文档改动保持未提交；`.workbuddy/`和`src-tauri/target-reading-position-baseline/`原样保留。
-- 阻塞问题：无实施阻塞；Rust/桌面原生为主动暂缓，线上部署未授权。静态ACL测试不替代真实权限拒绝。
-- 下一阶段：阶段 6｜Agent 按需上下文超限恢复；新窗口先执行本阶段详细任务，不重复阶段5实现，沿用原生暂缓约束。
-- 后续阶段：阶段7搜索边界修复仍未开始，不抢占阶段6。
-- 会话建议：建议新开窗口；阶段6转入Agent消息/重试/流式新范围，阶段5实现与残余验收已完整交接。
-
+- 当前阶段：阶段 6｜Agent 按需上下文超限恢复。
+- 阶段状态：进行中；代码与非桌面机器门禁完成，真实 Provider 超限与原生验收 NOT TESTED。
+- 当前授权：2026-10-09 用户明确执行阶段6后要求提交；仅本地提交阶段6六文件，不执行远程操作，不顺带实施阶段7/8/9；原生验收继续暂缓。
+- 上次执行结果：统一明确超限后的单次恢复；请求副本标记本轮真实边界，多轮完整历史移除、完全相同工具结果成组去重；保护问题/授权/来源/确认，压缩结果复用于后续工具循环，流式重试先复位当前输出。
+- 验证结果：6文件定向73/73、补充错误分类后的受影响3文件41/41、typecheck、改动ESLint（2条既有warning）、Smoke8/8、git diff --check PASS；累计覆盖76项，详见阶段6历史。
+- 本阶段剩余：在新鲜Tauri产物和匿名可控Provider中验收正常与明确超限、取消/流式复位/确认/来源；mock结果不替代原生或真实模型效果。
+- 本阶段允许修改：executor.ts、contextBudget.ts、aiChatFlow.ts、aiChatMessages.ts及直接测试、本计划；useAiChat未修改。保存、工具执行/权限、Store、DB、Rust、设置、依赖与启动时序不改。
+- 待验收：阶段1/3/4/5/6保持进行中；阶段2已完成；阶段7/8/9未开始，既有暂缓项仍有效。
+- 技术决策：WeakSet只标记请求副本对象身份，消息字段和持久化格式不变；仅超限时删除完整旧问答，不同证据/JSON/来源不截断、不重编号；唯一结果过大则明确建议缩小范围，不猜模型窗口。
+- 工作区基线：提交前HEAD=`0d9781ce7c52f6623e1b677f1ccd15c13714f44b`；本次4业务文件、1新增回归、本计划的阶段6更新纳入本地提交，实际提交号以git log核实。阶段8/9追加规划保持未提交；`.workbuddy/`和`src-tauri/target-reading-position-baseline/`原样保留。
+- 阻塞问题：无实施阻塞；原生暂缓，不能将阶段6标记已完成。
+- 下一阶段：阶段 7｜搜索会话失效、实例绑定与导航一致性；用户指定后按阶段7详细任务实施，不重复本阶段实现。
+- 后续阶段：阶段8/9只有追加计划，不继承阶段6实施授权；阶段5恢复信息及原生暂缓事项见下方参考恢复点。
+- 会话建议：建议新开窗口；阶段7转入编辑器/预览搜索实例新范围，阶段6实现和待验收已完整交接。
 ## 项目目标与评估结论
 
-本计划包含保存可靠性、API 密钥与 XSS 安全加固、Agent 超限恢复、搜索边界修复四项；以下保存成功标准仅适用于阶段 1，安全专项标准见阶段 2–5，搜索标准见阶段 7。阶段2已完成，阶段3/4实现与非桌面检查完成但原生验收暂缓；阶段5实现与本地Web验收通过，原生/线上验收仍暂缺；阶段6/7未开始。源码核实不等于安全验收或漏洞已复现。
+本计划包含保存可靠性、API 密钥与 XSS 安全加固、Agent 超限恢复、搜索边界修复四项；以下保存成功标准仅适用于阶段 1，安全专项标准见阶段 2–5，搜索标准见阶段 7。阶段2已完成，阶段3/4实现与非桌面检查完成但原生验收暂缓；阶段5实现与本地Web验收通过，原生/线上验收仍暂缺；阶段6实现与机器检查完成但原生验收暂缓，阶段7未开始。源码核实不等于安全验收或漏洞已复现。
 
 值得修改。写前快照校验只能淘汰尚未启动的旧任务，无法给已经发出的异步保存建立顺序；应由应用级、按文件身份分组的协调器串行写入，并统一处理保存确认、失败重试和索引调度。
 
@@ -104,7 +103,7 @@
 
 ### 阶段 6｜Agent 按需上下文超限恢复
 
-- 状态：未开始；原阶段 2，完整目标、范围与验收见下方“阶段 6 详细任务”。
+- 状态：进行中；代码与机器检查完成，原生验收暂缓；MEDIUM → L2。完整目标、范围与验收见下方“阶段 6 详细任务”。
 - 目标：正常请求直接发送，仅 Provider 明确返回上下文超限后进行确定性压缩与有界重试；不恢复默认总预算。
 - 实施顺序：核实错误与请求入口 → 建立最小超限复现 → 压缩与重试接入 → 定向回归与桌面验收。
 - 初步风险：MEDIUM；涉及 Agent 请求消息、异步取消、引用和重试边界。若实际修改触及工具写入执行语义，重新评估，不默认为此授权。
@@ -326,12 +325,12 @@ git diff --check
 
 ### 验收标准与检查
 
-- [ ] 日常成功请求与修改前发送内容一致，请求次数不增加，无主动总量裁剪、摘要或预算配置。
-- [ ] 长历史及累计工具结果场景：首次明确超限后有效减少请求，最多重试一次；保护当前真实问题与授权，后续请求不重新塞回被剔除材料。
-- [ ] 普通错误、取消、deadline 均不触发超限恢复；再次超限或无法压缩时有明确终止结果。
-- [ ] Agent 工具循环、无候选工具回复及最终回答均覆盖流式/非流式适用分支；部分流式失败不重复显示或污染其他请求。
-- [ ] 超限重试不重复任何工具副作用、不重置执行预算；来源编号、必要证据和待确认编辑保持有效，不改原始聊天记录或持久化格式。
-- [ ] 用 mock Provider 的实际生产入口回归上述不变量；类型检查、改动文件 ESLint、定向 Smoke 和 diff 检查通过。
+- [x] 日常成功请求与修改前发送内容一致，请求次数不增加，无主动总量裁剪、摘要或预算配置。
+- [x] 长历史及累计工具结果场景：首次明确超限后有效减少请求，最多重试一次；保护当前真实问题与授权，后续请求不重新塞回被剔除材料。
+- [x] 普通错误、取消、deadline 均不触发超限恢复；再次超限或无法压缩时有明确终止结果。
+- [x] Agent 工具循环、无候选工具回复及最终回答均覆盖流式/非流式适用分支；部分流式失败不重复显示或污染其他请求。
+- [x] 超限重试不重复任何工具副作用、不重置执行预算；来源编号、必要证据和待确认编辑保持有效，不改原始聊天记录或持久化格式。
+- [x] 用 mock Provider 的实际生产入口回归上述不变量；类型检查、改动文件 ESLint、定向 Smoke 和 diff 检查通过。
 - [ ] 原生 Tauri 验收日常请求与可控的明确超限恢复；核实运行产物、工作区与 HEAD。缺少真实超限条件时此项记 NOT TESTED，不把 mock 结果当原生验收。
 
 实施时先核实并选择实际受影响的测试文件，例如 `tests/agent/agentContextContinuation.test.ts`、`aiChatFlowContext.test.ts`；工具计数和流式前置条件仅在受影响时补跑 `agentExecutionBudget.test.ts`、`agentStreamPrerequisite.test.ts`。新增测试按实际文件名更新，不批量读取测试目录。
@@ -346,7 +345,7 @@ git diff --check
 
 - 按实际风险执行项目要求的最小定向 Smoke；未改传输层不默认运行 test:ai-http，未改 Rust 不编译 Rust，不执行全量测试、构建或发布门禁。
 - 初步 MEDIUM → L2 验收模型；用户明确要求模型 Review 后，复用已有 Machine Gate。建议提示词：`使用 ai-code-review Skill 审查 Agent 超限恢复阶段 diff，重点检查当前轮次保护、错误分类、重试副作用、流式取消和引用完整性，不扫描无关代码。`
-- 当前验证：仅源码核实；本阶段功能测试、模型实测与原生验收均 NOT TESTED，业务代码未修改。
+- 当前验证：生产入口mock回归、typecheck、改动ESLint和Smoke PASS；真实Provider模型效果与原生验收 NOT TESTED。新增实际回归为 `tests/agent/contextOverflowRecovery.test.ts`；最终命令/结果见阶段6历史。
 
 ## 阶段 7 详细任务｜搜索边界修复
 
@@ -403,15 +402,28 @@ git diff --check
 
 ## 当前阶段详细任务与明确下一步
 
-阶段5实现与前端门禁、本地Web验收已接通，本轮停止在需要新窗口的边界；阶段1/3/4/5原生验收继续暂缓，阶段6/7尚未实施。
+阶段6代码与非桌面机器门禁已完成，阶段状态保持进行中，原生验收暂缓；本轮不实施阶段7。
 
-1. 新窗口先核实git status/HEAD，读取阶段6详细任务及对应Agent/AI/状态契约。用户已授权向后实施；若继续沿用原生暂缓，直接从阶段6未完成项实施，不重复已验证阶段5，也不强行跑Rust/打包。
+1. 恢复先核实git status/HEAD，只读取阶段6相关实际diff、下方最新历史与Agent/AI契约，不重复已完成实现。现有阶段8/9文档内容及两个未跟踪目录必须保留。
+2. `markCurrentTurnStart` 标记Agent系统消息+历史之后的首条本轮消息；直答在 `buildMessagesForModel` 标记本轮参考资料或问题。WeakSet按对象身份保存运行时边界，Provider发送内容不变；最终回答两层构造均保留对象引用，不能以后改成克隆却遗漏边界转移。
+3. `withContextOverflowRecovery` 首次请求原样发送；仅明确上下文错误、未取消/超时且消息减少时重试一次。压缩移除所有旧完整问答与完全相同的生成工具结果组；system、本轮问题/参考资料/授权/确认/独立工具证据/来源ID与最终指令保持。不恢复固定总预算，不截断JSON，不将模型材料升级为授权。
+4. executor把压缩数组作为本轮后续请求真相；不清步骤、缓存或工具预算，不重跑工具。流式与最终回答在重试前仅清本请求已经发布的部分文本，旧帧已flush/取消；信号取消、deadline与普通错误不重试。无安全压缩或二次超限统一提示缩小范围。
+5. 模拟Provider实际入口覆盖普通成功、有工具流式/非流式、无候选工具回复、最终回答、来源保留、重复读缓存、确认卡片、普通错误、取消、deadline与部分流式复位。测试夹具需声明允许工具参数；注册parameters=[]再传targetId/newText会被原有权限规则拒绝，不能为夹具放宽生产校验。
+6. 剩余下一步：用户恢复原生验收后，使用新鲜匹配工作区/HEAD的Tauri产物和匿名可控服务验收正常请求、明确超限、再次超限、无法压缩、取消、流式展示、确认与来源；不得读取真实Key或把mock PASS写成原生PASS。当前不编译Rust/打包，不重试此前环境失败的构建。
+7. MEDIUM→L2中等模型；未调用独立模型Review。提示词：`使用 ai-code-review Skill 审查阶段6 diff，重点核查真实轮次边界、错误分类、重试副作用、流式取消与引用完整性；复用机器证据，原生维持NOT TESTED，不扫描无关模块。`
+8. 阶段7是编辑器/预览搜索实例的新范围；用户指定后新窗口从阶段7详细任务的失败回归开始，不在本阶段继续搜索、阶段8/9或旧安全实施。
+
+### 阶段5参考恢复点（保留未验收依赖）
+
+阶段5实现与前端门禁、本地Web验收已接通；阶段1/3/4/5原生验收继续暂缓。以下仅保留阶段5待验收信息；阶段6实现已完成，恢复按上方当前阶段说明。
+
+1. 用户恢复阶段5原生验收后，先核实git status/HEAD及新鲜产物，复用阶段5已通过机器证据，只补下列未验收项；继续暂缓时不强行跑Rust/打包。
 2. 阶段5唯一新增运行期边界是ECharts解析副本；不改Tab.content、保存、预览全文模型、Store、DB、依赖或动态加载时序。HTML/SVG复用markdownHtml清洗，Mermaid现有strict和库内DOMPurify已在真实页核实，不能新增第二套renderer。
 3. Web CSP在Vite最终HTML中加meta/hash，保持index.html原有启动脚本；Desktop由Tauri自身注入hash/nonce。不要机械删除style unsafe-inline，否则CodeMirror动态样式可能被阻止；不要将Web策略注入Desktop。Web的http:是Chromium不接受IPv6 host-source的兼容例外，JS请求校验不是恶意脚本的网络隔离保证；meta不支持frame-ancestors，线上服务器如可配置应另补响应头。
 4. main.toml显式列出65个当前command的精确allow清单（提交前与最新HEAD核对一致）；AppManifest自动读permissions并启用应用ACL，不需要生成每命令重复文件。capability只用webviews=[main]、local=true；不要再加windows=[main]（会扩大同窗口子WebView匹配）。dialog confirm保留给插件重写的window.confirm，通知走现有Rust命令，FS/Origin/凭据后端校验保持。
 5. ECharts tooltip固定richText，未配置时show=false；拒绝启用dataView的HTML surface、危险协议、协议相对/远程资源及SVG data URL，保留禁用dataView与安全栅格data图像。固定解析/渲染错误不含原始配置值。兼容取舍：原有HTML tooltip变为文本，HTML数据视图改用图表/Markdown表格，不清空用户文档。
 6. 可复用本轮PASS，具体文件/命令/产物在阶段5历史。新鲜Desktop Release、Rust ACL生成/编译、运行时未知命令/非main/远程WebView拒绝、正常dialog confirm/SQL/文件/通知/全屏、asset与本地模型仍NOT TESTED；恢复原生验收时用合成配置与临时文档，核实进程/工作区/HEAD，不用Web dist替代Desktop。
-7. 阶段6先建立mock Provider实际入口失败回归，区分真正user轮次与工具反馈，覆盖工具循环/无工具回复/最终流式回答，超限仅一次压缩重试；正常路径消息完全不裁剪，不重复工具、不改变授权或持久化。阶段7留到后续，不在阶段6顺带修搜索。
+7. 阶段6生产入口mock回归与实现已完成，恢复点见上方，不重复旧任务；阶段7等待明确指定，不顺带修搜索。
 8. HIGH→L3；未执行独立模型Review。提示词：`使用 ai-code-review Skill 审查阶段5 diff，重点检查CSP/hash兼容、ECharts HTML入口、主WebView ACL及正常功能回归；复用机器证据，原生/线上维持NOT TESTED，不扫描无关模块。`
 
 ### 阶段4参考恢复点（保留未验收依赖）
@@ -571,3 +583,23 @@ git diff --check
 - 验证：复用本会话已执行的阶段5机器与本地Web PASS；提交前检查精确暂存清单及git diff --cached --check，不重复构建/测试，也不把其他已提交阅读成果改动夹入。
 - 提交前漂移核实：当前HEAD新增的阅读成果整理命令已有对应ACL条目，精确清单共65个，与generate_handler一致；保留这些必要权限，不夹入此前已提交的Rust/DB业务源码。历史阶段5实施时的62个命令记录保持原始证据。
 - 状态：阶段5仍进行中，Rust ACL编译、新鲜桌面Release和线上部署维持NOT TESTED；本地提交不等于完整安全验收。恢复阶段6前核实工作区与提交记录，保留暂缓项。
+
+### 2026-10-09｜阶段6实施与非桌面验收
+
+- 状态：进行中；实现和机器验证完成，真实Provider超限/原生验收暂缓为NOT TESTED。阶段1/3/4/5暂缓不变，阶段7/8/9未实施。
+- Blast Radius：MEDIUM→L2。真相仍是聊天Store/持久化消息、当前授权scope和执行器步骤/工具缓存；仅模型请求副本拥有本轮边界与压缩数组。直接影响executor、contextBudget、aiChatFlow、aiChatMessages；useAiChat间接消费最终回答、流式与来源。异步取消/重试是风险信号；不得改变工具权限/执行顺序、预算/deadline、原始会话、确认、引用ID、Store/DB/Rust、配置或启动时序。
+- 修改：4业务文件 `src/services/agent/executor.ts`、`src/services/ai/contextBudget.ts`、`src/services/aiChatFlow.ts`、`src/services/aiChatMessages.ts`，新增 `tests/agent/contextOverflowRecovery.test.ts` 及本计划；均未提交。保留阶段8/9既有未提交文档和两个未跟踪目录；HEAD基线0d9781ce7c52f6623e1b677f1ccd15c13714f44b。
+- 实现：请求消息对象WeakSet标记当前真实轮次起点，不增加消息字段/持久化；首次请求不裁剪。仅上下文错误触发统一单次恢复，保留结构化code/状态与必要文本兼容，排除网络/鉴权/限流/服务异常/取消；删除多轮完整旧历史与完全相同的生成工具结果组，不截断或压缩独立证据，不改来源映射。压缩数组后续复用，不重执行工具或重置预算；失败明确建议缩小范围。唯一当前材料超大时不保证能恢复。
+- 流式：Agent模型响应与最终streamFinalAnswer重试先清当前已发布部分文本，旧帧flush/取消后重新累计；每次重试前重新检查取消/deadline，取消后不发布迟到内容。不清其他消息或时间线。无候选工具分支沿用原有非流式chat实际实现，不借任务改变其正常行为。
+- 失败复现：新增生产入口回归在修改前10项中9项FAIL，证实只删一轮/不复用、原样重试、错误分类过宽、终止提示缺失；未声称原生用户会话已复现。初次新增最终指令断言误把附加范围说明当最终指令，改为分别检查两条原有消息；确认mock未声明参数被既有校验拒绝，修正夹具；typecheck不支持findLastIndex，改普通循环，不升级TS配置。
+- PASS：`npx vitest run tests/agent/contextOverflowRecovery.test.ts tests/agent/aiChatFlowContext.test.ts tests/agent/modelContextBudget.test.ts tests/agent/agentContextContinuation.test.ts tests/agent/agentExecutionBudget.test.ts tests/agent/agentStreamPrerequisite.test.ts --maxWorkers=1`（6文件73项）。最后补充401/500/文本频率错误排除后，仅重跑前3个实际受影响文件，41/41 PASS；合计覆盖76项，不把两次重复用例相加。
+- PASS：`npm run typecheck`；四业务文件及新增测试ESLint（0 error，executor原有两条未使用import warning）；`npm run test:smoke`（2文件8项）；`git diff --check`。未运行全量测试、构建、Rust、发布门禁或独立模型Review。
+- 自审：当前diff及真实调用入口核实，没有已确认的本次P0/P1阻断项；知识图detect_changes仅辅助定位，图HEAD不匹配且漏报动态入口测试，不据其test gap否定已执行的生产回归，不重建图。实际结果/源码为准。
+- NOT TESTED：新鲜Tauri产物、真实Provider超限条件/恢复效果、原生流式/确认/来源展示。原生暂缓使阶段不能标已完成。建议L2独立验收调用词见本阶段恢复点；建议下一阶段新窗口。
+
+### 2026-10-09｜阶段6本地提交授权
+
+- 用户要求：提交阶段6；只做本地提交，不推送、tag、Release、PR或推进阶段7。
+- 精确范围：四业务文件、一个新增超限恢复回归及本计划的阶段6状态/历史；阶段8/9既有追加规划仅留工作区，两个未跟踪目录排除。
+- 验证：复用本会话定向回归、typecheck、改动ESLint及Smoke PASS；提交前核查精确暂存清单、计划快照不含阶段8/9追加章节及git diff --cached --check，不重复构建或测试。
+- 状态：阶段6仍进行中，真实Provider与原生验收NOT TESTED；提交不等于原生验收完成。
