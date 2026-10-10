@@ -256,6 +256,7 @@ export function ReadingArtifactCenter({
 
   const loadItems = useCallback(async (append: boolean, quiet = false) => {
     const offset = append ? loadedItemsRef.current.length : 0
+    const limit = !append && view === 'recent' ? 10 : queryOptions.limit
     const requestId = ++requestSequenceRef.current
     if (append) setItemsLoadingMore(true)
     else if (!quiet) setItemsLoading(true)
@@ -264,9 +265,9 @@ export function ReadingArtifactCenter({
     try {
       // Refresh the loaded range in bounded pages so mutations do not collapse it.
       const refreshCount = !append && quiet && view === 'recent'
-        ? Math.max(queryOptions.limit, loadedItemsRef.current.length)
-        : queryOptions.limit
-      const result = await loadReadingArtifactCenterItemsPage({ ...queryOptions, offset })
+        ? Math.max(limit, loadedItemsRef.current.length)
+        : limit
+      const result = await loadReadingArtifactCenterItemsPage({ ...queryOptions, offset, limit })
       if (requestId !== requestSequenceRef.current) return
       let fetched = result.marks.length + result.artifacts.length
       while (fetched < refreshCount && result.hasMore) {
