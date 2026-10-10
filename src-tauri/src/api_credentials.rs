@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Mutex};
 use tauri::AppHandle;
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use url::Url;
 
 // All updates (including legacy migration) share one file lock.
@@ -160,50 +159,13 @@ pub async fn configure_api_connection(
 ) -> Result<ApiConnectionStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let path = super::secret_file_path(&app)?;
-        let binding_confirmed = needs_legacy_binding(&path, &request)?;
-        if binding_confirmed {
-            let connection = request.connection.clone().normalize()?;
-            let origin = Url::parse(&connection.base_url).map_err(|_| "API 地址格式无效")?.origin().ascii_serialization();
-            let label = match connection.kind.as_str() { "chat" => "对话", "embedding" => "Embedding", _ => "联网搜索" };
-            // A legacy DPAPI slot has no trusted target. Only a native user confirmation may bind it.
-            if !app.dialog().message(format!("将旧版 {label} API Key 迁移并绑定到以下地址？\n{origin}\n取消将保留旧密钥，不发送请求。"))
-                .title("确认旧密钥目标").buttons(MessageDialogButtons::OkCancel).blocking_show()
-            { return Err("旧密钥迁移已取消，原数据已保留".into()); }
-        }
-        configure_at_path(&path, request, binding_confirmed)
+        configure_at_path(&path, request)
     }).await.map_err(|_| "安全配置任务失败".to_owned())?
-}
-
-fn needs_legacy_binding(path: &PathBuf, request: &ConfigureApiConnection) -> Result<bool, String> {
-    if !request.migrate_legacy
-        || request.remove
-        || request
-            .value
-            .as_ref()
-            .is_some_and(|value| !value.is_empty())
-    {
-        return Ok(false);
-    }
-    let connection = request.connection.clone().normalize()?;
-    let _lock = SECRET_LOCK.lock().map_err(|_| "安全存储不可用")?;
-    let secrets = super::read_secret_map(path)?;
-    if !secrets.contains_key(connection.legacy_key()) {
-        return Ok(false);
-    }
-    if let Some(encrypted) = secrets.get(&connection.id()) {
-        let record: StoredConnection = serde_json::from_str(&super::unprotect_secret(encrypted)?)
-            .map_err(|_| "安全配置格式无效")?;
-        if !record.key.is_empty() {
-            return Ok(false);
-        }
-    }
-    Ok(true)
 }
 
 fn configure_at_path(
     path: &PathBuf,
     request: ConfigureApiConnection,
-    binding_confirmed: bool,
 ) -> Result<ApiConnectionStatus, String> {
     let _lock = SECRET_LOCK.lock().map_err(|_| "安全存储不可用")?;
     let connection = request.connection.normalize()?;
@@ -245,9 +207,6 @@ fn configure_at_path(
         && !request.remove
         && request.value.as_ref().is_none_or(|value| value.is_empty())
         && existing.as_ref().is_none_or(|record| record.key.is_empty());
-    if bind_legacy && secrets.contains_key(legacy_key) && !binding_confirmed {
-        return Err("旧密钥目标需要原生确认，请重试".into());
-    }
     let legacy = if bind_legacy {
         secrets
             .get(legacy_key)
@@ -373,12 +332,16 @@ mod tests {
             migrate_legacy,
             import_legacy: false,
         };
-        assert!(needs_legacy_binding(&path, &make(None, false, true)).unwrap());
+        let temporary = path.with_extension("json.tmp");
         let original_legacy = std::fs::read(&path).unwrap();
-        assert!(configure_at_path(&path, make(None, false, true), false).is_err());
+        std::fs::create_dir(&temporary).unwrap();
+        assert!(configure_at_path(&path, make(None, false, true)).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), original_legacy);
-        let status = configure_at_path(&path, make(None, false, true), true).unwrap();
-        assert!(!needs_legacy_binding(&path, &make(None, false, true)).unwrap());
+        std::fs::remove_dir(&temporary).unwrap();
+        let status = configure_at_path(&path, make(None, false, true)).unwrap();
+        assert!(configure_at_path(&path, make(None, false, true))
+            .unwrap()
+            .configured);
         assert!(status.configured);
         let persisted = super::super::read_secret_map(&path).unwrap();
         assert!(!persisted.contains_key("ai.apiKey"));
@@ -386,30 +349,28 @@ mod tests {
             .unwrap()
             .contains("synthetic-legacy"));
         assert!(
-            configure_at_path(&path, make(Some(""), false, false), true)
+            configure_at_path(&path, make(Some(""), false, false))
                 .unwrap()
                 .configured
         );
         assert!(
             configure_at_path(
                 &path,
-                make(Some("synthetic-replacement"), false, false),
-                true
+                make(Some("synthetic-replacement"), false, false)
             )
             .unwrap()
             .configured
         );
         let original = std::fs::read(&path).unwrap();
         // Force a temporary-file write failure; the committed file must remain intact.
-        let temporary = path.with_extension("json.tmp");
         std::fs::create_dir(&temporary).unwrap();
         assert!(
-            configure_at_path(&path, make(Some("synthetic-failed"), false, false), true).is_err()
+            configure_at_path(&path, make(Some("synthetic-failed"), false, false)).is_err()
         );
         assert_eq!(std::fs::read(&path).unwrap(), original);
         std::fs::remove_dir(&temporary).unwrap();
         assert!(
-            !configure_at_path(&path, make(None, true, false), true)
+            !configure_at_path(&path, make(None, true, false))
                 .unwrap()
                 .configured
         );

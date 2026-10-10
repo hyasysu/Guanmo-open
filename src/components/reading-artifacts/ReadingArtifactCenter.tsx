@@ -1,4 +1,5 @@
-import { Check, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, FileText, Filter } from 'lucide-react'
+import { ArtifactFilterMenu } from './ArtifactFilterMenu'
+import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, FileText, Filter } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import ReactMarkdown from 'react-markdown'
@@ -678,14 +679,13 @@ export function ReadingArtifactCenter({
             </motion.div>
           )}
 
-          {view !== 'focus' && <ArtifactOrganizationToolbar organization={organization} filter={organizationFilter} onFilter={setOrganizationFilter} />}
+          {view !== 'focus' && <ArtifactOrganizationToolbar organization={organization} filter={organizationFilter} onFilter={setOrganizationFilter}>
+            {view === 'detail' && selectedDocument && <SortMenu value={detailSort} onChange={changeDetailSort} />}
+          </ArtifactOrganizationToolbar>}
           {view === 'detail' && (
             <DetailControls
-              independent={!selectedDocument}
               filter={detailFilter}
-              sort={detailSort}
               onFilter={changeDetailFilter}
-              onSort={changeDetailSort}
               reducedMotion={reducedMotion}
             />
           )}
@@ -758,7 +758,7 @@ function DocumentView({ summaries, availability, onOpen }: { summaries: ReturnTy
   })}</div>
 }
 
-function DetailControls({ independent, filter, sort, onFilter, onSort, reducedMotion }: { independent: boolean; filter: DetailFilter; sort: 'source' | 'time'; onFilter: (value: DetailFilter) => void; onSort: (value: 'source' | 'time') => void; reducedMotion: boolean }) {
+function DetailControls({ filter, onFilter, reducedMotion }: { filter: DetailFilter; onFilter: (value: DetailFilter) => void; reducedMotion: boolean }) {
   return (
     <div className="mb-3 flex min-h-8 flex-wrap items-start gap-2">
       <nav aria-label="成果分类" role="tablist" className="flex min-w-0 flex-[1_1_12rem] flex-wrap items-center gap-1">
@@ -776,7 +776,6 @@ function DetailControls({ independent, filter, sort, onFilter, onSort, reducedMo
           </button>
         ))}
       </nav>
-      {!independent && <SortMenu value={sort} onChange={onSort} />}
     </div>
   )
 }
@@ -803,72 +802,10 @@ function DetailView({ reducedMotion, contentPending, contentVersion, positioned,
 }
 
 function SortMenu({ value, onChange }: { value: 'source' | 'time'; onChange: (value: 'source' | 'time') => void }) {
-  const [open, setOpen] = useState(false)
-  const rootRef = useRef<HTMLDivElement>(null)
-  const triggerRef = useRef<HTMLButtonElement>(null)
   const label = value === 'source' ? '原文顺序' : '时间顺序'
-
-  useEffect(() => {
-    if (!open) return
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      setOpen(false)
-      triggerRef.current?.focus()
-    }
-    document.addEventListener('pointerdown', closeOnOutsidePointer)
-    document.addEventListener('keydown', closeOnEscape)
-    return () => {
-      document.removeEventListener('pointerdown', closeOnOutsidePointer)
-      document.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [open])
-
-  const select = (next: 'source' | 'time') => {
-    onChange(next)
-    setOpen(false)
-    triggerRef.current?.focus()
-  }
-
-  return (
-    <div ref={rootRef} className="relative ml-auto shrink-0">
-      <button
-        ref={triggerRef}
-        type="button"
-        aria-label={`排序：${label}`}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-        className="flex h-8 items-center gap-1.5 rounded-md border border-gm-border bg-gm-surface px-2.5 text-micro font-bold text-gm-text-secondary outline-none transition-colors hover:bg-gm-surface-hover focus-visible:border-gm-primary focus-visible:ring-1 focus-visible:ring-gm-primary/30"
-      >
-        <span>{label}</span>
-        <ChevronDown size={14} strokeWidth={1.8} className={`transition-transform duration-150 ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
-      </button>
-      {open && (
-        <div role="menu" aria-label="排序方式" className="absolute right-0 top-full z-30 mt-1 min-w-full whitespace-nowrap rounded-lg border border-gm-border bg-gm-surface-elevated p-1 shadow-lg">
-          {(['source', 'time'] as const).map((option) => {
-            const optionLabel = option === 'source' ? '原文顺序' : '时间顺序'
-            const selected = value === option
-            return (
-              <button
-                key={option}
-                type="button"
-                role="menuitemradio"
-                aria-checked={selected}
-                onClick={() => select(option)}
-                className={`flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-micro outline-none transition-colors hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover ${selected ? 'font-bold text-gm-primary' : 'text-gm-text-secondary'}`}
-              >
-                <span>{optionLabel}</span>
-                <Check size={13} strokeWidth={2} className={selected ? 'opacity-100' : 'opacity-0'} aria-hidden="true" />
-              </button>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
+  return <ArtifactFilterMenu value={value} label={label} ariaLabel={`排序：${label}`} menuLabel="排序方式"
+    options={[{ value: 'source', label: '原文顺序' }, { value: 'time', label: '时间顺序' }]}
+    onChange={(next) => onChange(next as 'source' | 'time')} />
 }
 
 function ExpandableText({

@@ -1,3 +1,5 @@
+import { ArtifactFilterMenu } from './ArtifactFilterMenu'
+import { ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { MoreHorizontal, Star, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
@@ -49,14 +51,14 @@ export function useArtifactOrganization() {
 
 type Organization = ReturnType<typeof useArtifactOrganization>
 type PopupAnchor = { x: number; y: number; trigger: HTMLElement }
-function anchorFor(trigger: HTMLElement): PopupAnchor {
+function anchorFor(trigger: HTMLElement, width = 260): PopupAnchor {
   const rect = trigger.getBoundingClientRect()
-  return { x: rect.right - 260, y: rect.bottom + 4, trigger }
+  return { x: rect.right - width, y: rect.bottom + 4, trigger }
 }
 const fieldClass = 'min-w-0 rounded-md border border-gm-border bg-gm-surface px-2 py-1.5 text-micro text-gm-text-secondary outline-none focus:border-gm-primary'
 const actionClass = 'rounded-md px-2 py-1.5 text-micro text-gm-text-secondary hover:bg-gm-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-primary disabled:opacity-50'
 
-function OrganizationPopup({ anchor, label, onClose, children }: { anchor: PopupAnchor; label: string; onClose: () => void; children: ReactNode }) {
+function OrganizationPopup({ anchor, label, onClose, children, compact = false }: { anchor: PopupAnchor; label: string; onClose: () => void; children: ReactNode; compact?: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState({ x: anchor.x, y: anchor.y })
   useLayoutEffect(() => {
@@ -82,7 +84,7 @@ function OrganizationPopup({ anchor, label, onClose, children }: { anchor: Popup
       window.removeEventListener('resize', onClose)
     }
   }, [anchor, onClose])
-  return createPortal(<div ref={ref} role="dialog" aria-label={label} className="fixed z-[1100] max-h-[70vh] w-[260px] max-w-[calc(100vw-16px)] overflow-y-auto rounded-xl border border-gm-border bg-gm-surface-elevated p-2 shadow-lg" style={{ left: position.x, top: position.y }}>{children}</div>, document.body)
+  return createPortal(<div ref={ref} role="dialog" aria-label={label} className={`fixed z-[1100] max-h-[70vh] max-w-[calc(100vw-16px)] overflow-y-auto rounded-xl border border-gm-border shadow-lg ${compact ? 'w-44 bg-gm-surface py-1.5 animate-context-menu-in' : 'w-[260px] bg-gm-surface-elevated p-2'}`} style={{ left: position.x, top: position.y }}>{children}</div>, document.body)
 }
 
 function CategoryEditor({ organization, selected, onSave, onClose }: { organization: Organization; selected?: string[]; onSave?: (ids: string[]) => Promise<boolean>; onClose: () => void }) {
@@ -115,15 +117,26 @@ function CategoryEditor({ organization, selected, onSave, onClose }: { organizat
   </>
 }
 
-export function ArtifactOrganizationToolbar({ organization, filter, onFilter }: { organization: Organization; filter: ArtifactOrganizationFilter; onFilter: (filter: ArtifactOrganizationFilter) => void }) {
+export function ArtifactOrganizationToolbar({ organization, filter, onFilter, children }: { organization: Organization; filter: ArtifactOrganizationFilter; onFilter: (filter: ArtifactOrganizationFilter) => void; children?: ReactNode }) {
   const [anchor, setAnchor] = useState<PopupAnchor | null>(null)
   const close = useCallback(() => setAnchor(null), [])
   useEffect(() => {
     if (filter.categoryId && !organization.categories.some((category) => category.id === filter.categoryId) && !organization.busy) onFilter({ ...filter, categoryId: undefined })
   }, [filter, onFilter, organization.busy, organization.categories])
   return <div className="mb-3 flex flex-wrap items-center gap-2" aria-label="成果整理筛选">
-    <select aria-label="收藏与分类范围" value={filter.collection ?? 'all'} onChange={(event) => onFilter({ ...filter, collection: event.target.value as ArtifactOrganizationFilter['collection'], categoryId: event.target.value === 'unclassified' ? undefined : filter.categoryId })} className={fieldClass}><option value="all">全部成果</option><option value="favorites">收藏</option><option value="unclassified">未分类</option></select>
-    <select aria-label="按自定义分类筛选" value={filter.categoryId ?? ''} disabled={organization.busy} onChange={(event) => { if (event.target.value === '__manage__') setAnchor(anchorFor(event.currentTarget)); else onFilter({ ...filter, collection: event.target.value && filter.collection === 'unclassified' ? 'all' : filter.collection, categoryId: event.target.value || undefined }) }} className={`${fieldClass} max-w-[160px]`}><option value="">全部分类</option>{organization.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}<option value="__manage__">管理分类…</option></select>
+    <ArtifactFilterMenu value={filter.collection === 'favorites' ? 'favorites' : 'all'}
+      label={filter.collection === 'favorites' ? '收藏：仅收藏' : '收藏：不限'} ariaLabel="收藏筛选" menuLabel="收藏范围"
+      options={[{ value: 'all', label: '不限收藏状态' }, { value: 'favorites', label: '仅收藏' }]}
+      onChange={(value) => onFilter({ ...filter, collection: value as ArtifactOrganizationFilter['collection'] })} />
+    <ArtifactFilterMenu value={filter.collection === 'unclassified' ? '__unclassified__' : filter.categoryId ?? ''}
+      label={`分类：${filter.collection === 'unclassified' ? '未分类' : organization.categories.find((category) => category.id === filter.categoryId)?.name ?? '不限'}`}
+      ariaLabel="分类筛选" menuLabel="分类范围" disabled={organization.busy}
+      options={[{ value: '', label: '不限分类' }, { value: '__unclassified__', label: '未分类' }, ...organization.categories.map((category) => ({ value: category.id, label: category.name })), { value: '__manage__', label: '管理分类…' }]}
+      onChange={(value, trigger) => {
+        if (value === '__manage__') setAnchor(anchorFor(trigger))
+        else onFilter({ ...filter, collection: value === '__unclassified__' ? 'unclassified' : filter.collection === 'unclassified' ? 'all' : filter.collection, categoryId: value === '__unclassified__' ? undefined : value || undefined })
+      }} />
+    {children}
     {anchor && <OrganizationPopup anchor={anchor} label="管理分类" onClose={close}><CategoryEditor organization={organization} onClose={close} /></OrganizationPopup>}
   </div>
 }
@@ -133,12 +146,12 @@ export function ArtifactOrganizationActions({ artifactKey, title, organization, 
   const close = useCallback(() => setPopup(null), [])
   return <div className="flex shrink-0 items-center gap-0.5">
     <button type="button" aria-label={`${entry?.favorite ? '取消收藏' : '收藏'} ${title}`} aria-pressed={entry?.favorite ?? false} disabled={organization.busy} onClick={() => void organization.update(artifactKey, { favorite: !entry?.favorite })} className={`${actionClass} px-1.5 ${entry?.favorite ? 'text-gm-accent' : 'text-gm-text-tertiary'}`}><Star size={14} fill={entry?.favorite ? 'currentColor' : 'none'} strokeWidth={1.7} /></button>
-    <button type="button" aria-label={`成果操作 ${title}`} aria-expanded={!!popup} aria-haspopup="dialog" onClick={(event) => { const anchor = anchorFor(event.currentTarget); setPopup((current) => current ? null : { anchor, mode: 'menu' }) }} className={`${actionClass} px-1.5 text-gm-text-tertiary`}><MoreHorizontal size={15} /></button>
-    {popup && <OrganizationPopup anchor={popup.anchor} label={popup.mode === 'menu' ? '成果操作' : '设置分类'} onClose={close}>{popup.mode === 'categories' ? <CategoryEditor organization={organization} selected={entry?.categoryIds} onSave={(ids) => organization.update(artifactKey, { categoryIds: ids })} onClose={close} /> : <>
-      <button type="button" disabled={organization.busy} className={`${actionClass} w-full text-left`} onClick={() => setPopup({ ...popup, mode: 'categories' })}>设置分类</button>
-      {categoryId && <button type="button" disabled={organization.busy} className={`${actionClass} w-full text-left`} onClick={() => void organization.update(artifactKey, { categoryIds: (entry?.categoryIds ?? []).filter((id) => id !== categoryId) }).then((saved) => { if (saved) close() })}>移出当前分类</button>}
-      <div className="my-1 border-t border-gm-border-subtle" />
-      <button type="button" className={`${actionClass} w-full text-left text-gm-error`} onClick={() => { close(); onDelete() }}>删除成果</button>
+    <button type="button" aria-label={`成果操作 ${title}`} aria-expanded={!!popup} aria-haspopup="dialog" onClick={(event) => { const anchor = anchorFor(event.currentTarget, 176); setPopup((current) => current ? null : { anchor, mode: 'menu' }) }} className={`${actionClass} px-1.5 text-gm-text-tertiary`}><MoreHorizontal size={15} /></button>
+    {popup && <OrganizationPopup compact={popup.mode === 'menu'} anchor={popup.anchor} label={popup.mode === 'menu' ? '成果操作' : '设置分类'} onClose={close}>{popup.mode === 'categories' ? <CategoryEditor organization={organization} selected={entry?.categoryIds} onSave={(ids) => organization.update(artifactKey, { categoryIds: ids })} onClose={close} /> : <>
+      <ContextMenuItem disabled={organization.busy} onClick={() => setPopup({ anchor: anchorFor(popup.anchor.trigger), mode: 'categories' })}>设置分类</ContextMenuItem>
+      {categoryId && <ContextMenuItem disabled={organization.busy} onClick={() => void organization.update(artifactKey, { categoryIds: (entry?.categoryIds ?? []).filter((id) => id !== categoryId) }).then((saved) => { if (saved) close() })}>移出当前分类</ContextMenuItem>}
+      <ContextMenuSeparator />
+      <ContextMenuItem onClick={() => { close(); onDelete() }}><span className="text-gm-error">删除成果</span></ContextMenuItem>
     </>}</OrganizationPopup>}
   </div>
 }

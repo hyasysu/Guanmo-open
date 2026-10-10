@@ -21,6 +21,13 @@
   pointer-events: none;
 }
 
+.gm-layout-ai-panel:not(.gm-layout-ai-panel--fullscreen) > .gm-layout-sidebar-content {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+}
+
 .gm-layout-ai-panel--fullscreen {
   transition:
     opacity 140ms ease-out,
