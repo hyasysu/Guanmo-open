@@ -110,14 +110,14 @@ interface PreviewViewportAnchor {
 
 interface PendingPreviewAnchorRestore extends PreviewViewportAnchor {
   container: HTMLElement
-  documentKey: string
+  documentKey?: string
   generation: number
 }
 
 interface PendingPreviewPatch {
   previousModel: MarkdownPreviewModel
   nextContent: string
-  documentKey: string
+  documentKey?: string
   editedBlockId: string
   replacementStart: number
   replacementEnd: number
@@ -242,13 +242,13 @@ function mapSourceOffsetThroughReplacement(
 }
 
 /**
- * 找出一次块编辑后仍可复用的前缀/后缀区块。
+ * 找出内容更新后仍可复用的前缀/后缀区块。
  * 中间区域可能发生拆分、合并或语义变化，必须让虚拟列表重新测量。
  */
 function buildIncrementalBlockMapping(
   previousModel: MarkdownPreviewModel,
   nextModel: MarkdownPreviewModel,
-  editedBlockId: string,
+  editedBlockId?: string,
 ): Map<number, number> | null {
   if (
     previousModel.requiresWholeDocumentRender
@@ -259,13 +259,16 @@ function buildIncrementalBlockMapping(
 
   const oldBlocks = previousModel.blocks
   const newBlocks = nextModel.blocks
-  const editedIndex = oldBlocks.findIndex((block) => block.blockId === editedBlockId)
-  if (editedIndex < 0) return null
+  const editedIndex = editedBlockId
+    ? oldBlocks.findIndex((block) => block.blockId === editedBlockId)
+    : oldBlocks.findIndex((block, index) => !samePreviewBlock(block, newBlocks[index]))
+  if (editedBlockId && editedIndex < 0) return null
+  const prefixEnd = editedIndex < 0 ? oldBlocks.length : editedIndex
 
   const mapping = new Map<number, number>()
   let oldIndex = 0
   let newIndex = 0
-  while (oldIndex < editedIndex) {
+  while (oldIndex < prefixEnd) {
     if (!samePreviewBlock(oldBlocks[oldIndex], newBlocks[newIndex])) return null
     mapping.set(oldIndex, newIndex)
     oldIndex += 1
@@ -274,12 +277,52 @@ function buildIncrementalBlockMapping(
 
   let oldTail = oldBlocks.length - 1
   let newTail = newBlocks.length - 1
-  while (oldTail > editedIndex && newTail >= newIndex && samePreviewBlock(oldBlocks[oldTail], newBlocks[newTail])) {
+  while (oldTail >= newIndex && newTail >= newIndex && samePreviewBlock(oldBlocks[oldTail], newBlocks[newTail])) {
     mapping.set(oldTail, newTail)
     oldTail -= 1
     newTail -= 1
   }
   return mapping
+}
+
+function readPreviewViewportAnchor(
+  model: MarkdownPreviewModel,
+  container: HTMLElement | null,
+  root: HTMLElement | null,
+  blockElements: Map<number, HTMLDivElement | null>,
+  heights: Map<string, number>,
+  estimate: (block: PreviewBlock) => number,
+): PreviewViewportAnchor | null {
+  if (!container || model.blocks.length === 0) return null
+  const fallbackScrollTop = container.scrollTop
+  const visible = computeVisibleRange(model, fallbackScrollTop, fallbackScrollTop + container.clientHeight, heights, estimate, 0)
+  const line = getMountedPreviewLineForTop(model, root, container, fallbackScrollTop)
+  const sourceOffset = typeof line === 'number' ? getSourceOffsetForLine(model, line) : undefined
+  const sourceBlockIndex = typeof sourceOffset === 'number' ? findBlockIndexByOffset(model, sourceOffset) : -1
+  const blockIndex = sourceBlockIndex >= 0 ? sourceBlockIndex : visible.startIndex
+  const block = model.blocks[blockIndex]
+  if (!block) return null
+  const element = blockElements.get(blockIndex)
+  const blockTop = element
+    ? element.getBoundingClientRect().top - container.getBoundingClientRect().top + fallbackScrollTop
+    : visible.blockTops[blockIndex]
+  const exactTop = element && typeof sourceOffset === 'number'
+    ? getMountedSourceRangeTop(element, container, sourceOffset, Math.min(block.endOffset, sourceOffset + 1))
+    : undefined
+  return {
+    blockId: block.blockId, blockIndex, sourceOffset,
+    viewportOffset: fallbackScrollTop - (typeof exactTop === 'number' ? exactTop : blockTop),
+    fallbackScrollTop,
+  }
+}
+
+function getContentReplacement(previous: string, next: string) {
+  let start = 0
+  while (start < previous.length && start < next.length && previous[start] === next[start]) start += 1
+  let end = previous.length
+  let nextEnd = next.length
+  while (end > start && nextEnd > start && previous[end - 1] === next[nextEnd - 1]) { end -= 1; nextEnd -= 1 }
+  return { replacementStart: start, replacementEnd: end, replacementLength: nextEnd - start }
 }
 
 interface StableMarkdownContentProps {
@@ -480,6 +523,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const blockResizeObserverRef = useRef<ResizeObserver | null>(null)
   const measurementKeyRef = useRef<{
     content: string
+    documentKey?: string
     fontSize: number
     lineHeight: number
     fontFamily: string
@@ -577,6 +621,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const measurementKey = measurementKeyRef.current
   const layoutChanged = Boolean(
     !measurementKey
+    || measurementKey.documentKey !== documentKey
     || measurementKey.fontSize !== fontSize
     || measurementKey.lineHeight !== lineHeight
     || measurementKey.fontFamily !== fontFamily
@@ -592,7 +637,17 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   } else if (contentChanged) {
     pendingObservedHeightsRef.current.clear()
     const previousModel = previousModelRef.current
-    const patch = pendingPreviewPatchRef.current
+    const inlinePatch = pendingPreviewPatchRef.current
+    const patch = inlinePatch ?? (previousModel ? {
+      previousModel,
+      nextContent: displayedContent,
+      documentKey,
+      editedBlockId: undefined,
+      ...getContentReplacement(previousModel.rawContent, displayedContent),
+      anchor: readPreviewViewportAnchor(previousModel, scrollContainerRef.current, rootRef.current, blockRefs.current,
+        measuredHeightsRef.current, (block) => estimatePreviewBlockHeight(block, fontSize, lineHeight)),
+      generation: scrollAnchorGenerationRef.current,
+    } : null)
     const mapping = previousModel && patch
       && patch.documentKey === documentKey
       && patch.nextContent === displayedContent
@@ -609,23 +664,18 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       }
       measuredHeightsRef.current = nextHeights
       const anchor = patch.anchor
+      const mappedSourceOffset = anchor
+        ? mapSourceOffsetThroughReplacement(anchor.sourceOffset ?? previousModel.blocks[anchor.blockIndex].startOffset,
+          patch.replacementStart, patch.replacementEnd, patch.replacementLength)
+        : undefined
+      const mappedSourceBlock = typeof mappedSourceOffset === 'number' ? findBlockIndexByOffset(model, mappedSourceOffset) : -1
       const anchorNewIndex = anchor
-        ? mapping.get(anchor.blockIndex)
+        ? (!inlinePatch && mappedSourceBlock >= 0 ? mappedSourceBlock : mapping.get(anchor.blockIndex))
           ?? [...mapping.entries()].find(([oldIndex]) => oldIndex > anchor.blockIndex)?.[1]
           ?? [...mapping.entries()].reverse().find(([oldIndex]) => oldIndex < anchor.blockIndex)?.[1]
         : undefined
       const anchorBlock = typeof anchorNewIndex === 'number' ? model.blocks[anchorNewIndex] : undefined
       const anchorContainer = scrollContainerRef.current
-      const mappedSourceOffset = anchor
-        && typeof anchor.sourceOffset === 'number'
-        && anchorNewIndex === mapping.get(anchor.blockIndex)
-        ? mapSourceOffsetThroughReplacement(
-            anchor.sourceOffset,
-            patch.replacementStart,
-            patch.replacementEnd,
-            patch.replacementLength,
-          )
-        : undefined
       pendingAnchorRestoreRef.current = anchor
         && typeof anchorNewIndex === 'number'
         && anchorBlock
@@ -635,7 +685,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
             ...anchor,
             blockId: anchorBlock.blockId,
             blockIndex: anchorNewIndex,
-            sourceOffset: mappedSourceOffset,
+            sourceOffset: typeof anchor.sourceOffset === 'number' && (!inlinePatch || anchorNewIndex === mapping.get(anchor.blockIndex))
+              ? mappedSourceOffset : undefined,
             container: anchorContainer,
             documentKey: patch.documentKey,
             generation: patch.generation,
@@ -647,7 +698,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     }
     pendingPreviewPatchRef.current = null
   }
-  measurementKeyRef.current = { content: displayedContent, fontSize, lineHeight, fontFamily, wordWrap, theme: themeId }
+  measurementKeyRef.current = { content: displayedContent, documentKey, fontSize, lineHeight, fontFamily, wordWrap, theme: themeId }
   previousModelRef.current = model
 
   // 交互 HTML 瞬时状态失效：文档内容或文档身份变化即整体清除（渲染期执行，
@@ -1125,7 +1176,12 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     const domBlockTop = element
       ? element.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
       : undefined
-    const blockTop = projected.blockTops[pending.blockIndex]
+    const rootRect = rootRef.current?.getBoundingClientRect()
+    const rootOffset = rootRect && rootRect.height > 0
+      ? rootRect.top - container.getBoundingClientRect().top + container.scrollTop
+      : 0
+    const projectedTop = projected.blockTops[pending.blockIndex]
+    const blockTop = (typeof projectedTop === 'number' ? projectedTop + rootOffset : undefined)
       ?? domBlockTop
       ?? getEstimatedPreviewTopForLine(
           model,
@@ -1383,37 +1439,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   )
 
   const captureViewportAnchor = useCallback((): PreviewViewportAnchor | null => {
-    const container = scrollContainerRef.current
-    if (!container || model.blocks.length === 0) return null
-    const fallbackScrollTop = container.scrollTop
-    const visibleAtTop = computeVisibleRange(
-      model,
-      fallbackScrollTop,
-      fallbackScrollTop + container.clientHeight,
-      measuredHeightsRef.current,
-      estimateBlockHeight,
-      0,
-    )
-    const blockIndex = visibleAtTop.startIndex
-    const block = model.blocks[blockIndex]
-    if (!block) return null
-    const element = blockRefs.current.get(blockIndex)
-    const blockTop = element
-      ? element.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
-      : visibleAtTop.blockTops[blockIndex]
-    const line = getMountedPreviewLineForTop(model, rootRef.current, container, fallbackScrollTop)
-    const sourceOffset = typeof line === 'number' ? getSourceOffsetForLine(model, line) : undefined
-    const exactTop = element && typeof sourceOffset === 'number'
-      ? getMountedSourceRangeTop(element, container, sourceOffset, Math.min(block.endOffset, sourceOffset + 1))
-      : undefined
-    const anchorTop = typeof exactTop === 'number' ? exactTop : blockTop
-    return {
-      blockId: block.blockId,
-      blockIndex,
-      sourceOffset,
-      viewportOffset: fallbackScrollTop - anchorTop,
-      fallbackScrollTop,
-    }
+    return readPreviewViewportAnchor(model, scrollContainerRef.current, rootRef.current, blockRefs.current, measuredHeightsRef.current, estimateBlockHeight)
   }, [estimateBlockHeight, model])
 
   // 编辑与预览共用同一套目录滚动：短距离平滑滚动，长距离渐隐后瞬移并在渐显前校正。

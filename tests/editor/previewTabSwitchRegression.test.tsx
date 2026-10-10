@@ -1455,6 +1455,23 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
       })
     })
 
+    it('does not replay file position restoration on same-document content updates', async () => {
+      const tab = anonymousTab('tab-a', '# 匿名文档\n\n编辑内容')
+      setupEditor([tab], 'tab-a', 'edit-preview', { syncScroll: true })
+      const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+      render(<EditorArea />)
+      await settleLazyEditorModules()
+      act(() => vi.advanceTimersByTime(2_000))
+      info.mockClear()
+
+      act(() => {
+        useEditorStore.getState().updateTabContent('tab-a', tab.content + '输入')
+        vi.advanceTimersByTime(350)
+      })
+
+      expect(info.mock.calls.some(([tag, data]) => tag === '[阅读位置][预览恢复]' && data?.phase === '初始定位')).toBe(false)
+    })
+
     it('preview render-induced scroll and content update never move the left editor', async () => {
       const longContent = '# 左侧稳定测试\n\n' + Array.from({ length: 160 }, (_, i) => `段落 ${i + 1}\n第二行 ${i + 1}`).join('\n\n')
       const tab = anonymousTab('tab-a', longContent)

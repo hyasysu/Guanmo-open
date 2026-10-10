@@ -613,23 +613,31 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
     && restoredPreviewKeysRef.current.right !== getPreviewRestoreKey(rightTab.id, viewMode)
   )
 
-  // 预览内容更新（版本变化）只恢复预览自身位置，保证右侧渲染稳定；
-  // 绝不在内容更新时反向恢复编辑器位置——否则右侧渲染会把左侧视口拉走
-  // （编辑左侧时每次预览刷新都可能导致左侧跳动）。
+  // 文件/模式切换恢复阅读位置；同文档刷新由 MarkdownPreview 保持当前视口，
+  // 不重播旧位置，也取消上一轮恢复留下的迟到布局校正。
   useLayoutEffect(() => {
     if (!activeTab?.id) return
     const restoreStartedAt = import.meta.env.DEV ? performance.now() : 0
     if (viewMode === 'preview' || viewMode === 'edit-preview' || viewMode === 'dual-preview') {
-      restorePreviewReadingPosition(activeTab.id, leftPreviewRef.current, 'left')
+      if (restoredPreviewKeysRef.current.left === getPreviewRestoreKey(activeTab.id, viewMode)) {
+        allowPreviewPositionUpdates(activeTab.id, 'left')
+      } else {
+        restorePreviewReadingPosition(activeTab.id, leftPreviewRef.current, 'left')
+      }
     }
     if (viewMode === 'dual-preview' && rightTab?.id) {
-      restorePreviewReadingPosition(rightTab.id, rightPreviewRef.current, 'right')
+      if (restoredPreviewKeysRef.current.right === getPreviewRestoreKey(rightTab.id, viewMode)) {
+        allowPreviewPositionUpdates(rightTab.id, 'right')
+      } else {
+        restorePreviewReadingPosition(rightTab.id, rightPreviewRef.current, 'right')
+      }
     }
     if (leftPreviewVisible) {
       reportPreviewSwitchPerformance(activeTab.id, restoreStartedAt)
     }
   }, [
     activePreview.version,
+    allowPreviewPositionUpdates,
     activeTab?.id,
     restorePreviewReadingPosition,
     rightPreview.version,
