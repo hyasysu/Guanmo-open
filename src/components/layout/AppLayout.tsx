@@ -6,6 +6,7 @@ import { useFileOperations } from '@/hooks/useFileOperations'
 import { Modal } from 'animal-island-ui'
 import { exportMarkdownAsHtml } from '@/services/markdownExport'
 import { Sidebar } from './Sidebar'
+import { useSidebarContent } from './useSidebarContent'
 import './layoutMotion.css'
 import { StatusBar } from './StatusBar'
 import { TitleBar } from './TitleBar'
@@ -146,6 +147,10 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
   const setViewMode = useEditorStore((s) => s.setViewMode)
   const { handleNewFile, handleOpenFile, handleSaveFile } = useFileOperations()
   const { isFullscreen, toggleFullscreen, enterFullscreen, exitFullscreen } = useFullscreen()
+  const { contentRef: sidebarAiContentRef, present: sidebarAiPresent } = useSidebarContent(
+    aiPanelOpen && !isFullscreen,
+    'button[aria-label^="打开 AI 助手"]',
+  )
   const customCursorEnabled = useSettingsStore((s) => s.appearance.customCursorEnabled)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [commandPaletteMode, setCommandPaletteMode] = useState<'commands' | 'files'>('commands')
@@ -730,18 +735,22 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
           <div
             data-product-tour={aiPanelOpen ? 'ai-panel' : undefined}
             aria-hidden={!aiPanelOpen}
-            className={`gm-layout-ai-panel flex-shrink-0 relative ${aiPanelOpen ? 'border-l border-gm-border' : 'gm-layout-ai-panel--closed'}`}
+            className={`gm-layout-ai-panel flex-shrink-0 relative ${aiPanelOpen ? '' : 'gm-layout-ai-panel--closed'}`}
             style={{ width: aiPanelOpen ? aiPanelWidth : 0, contain: 'layout' }}
           >
-            {aiPanelOpen && (
-              <>
+            {sidebarAiPresent && (
+              <div
+                ref={sidebarAiContentRef}
+                className="gm-layout-sidebar-content relative h-full border-l border-gm-border"
+                style={{ width: aiPanelWidth, pointerEvents: aiPanelOpen ? undefined : 'none' }}
+              >
                 {/* Resize handle */}
                 <div
                   className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize z-10 hover:bg-gm-primary/30 transition-colors"
                   onMouseDown={handleResizeStart}
                 />
                 <Suspense fallback={<AiPanelFallback />}><AiPanel /></Suspense>
-              </>
+              </div>
             )}
           </div>
         )}

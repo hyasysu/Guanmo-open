@@ -21,6 +21,7 @@ import { readMarkdownFileForOpen, readRememberedMarkdownFileForOpen } from '@/se
 import { TruncatedText } from '@/components/common/Tooltip'
 import { useFileRename } from '@/hooks/useFileRename'
 import { Settings } from 'lucide-react'
+import { useSidebarContent } from './useSidebarContent'
 
 interface SidebarProps {
   collapsed: boolean
@@ -31,6 +32,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpenSearch }: SidebarProps) {
+  const { contentRef, present } = useSidebarContent(!collapsed, '[data-product-tour="sidebar-toggle"]')
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
   const sidebarSectionExpanded = useAppStore((s) => s.sidebarSectionExpanded)
   const setSidebarSectionExpanded = useAppStore((s) => s.setSidebarSectionExpanded)
@@ -132,11 +134,15 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
     window.dispatchEvent(new Event('guanmo:workspace-refresh'))
   }, [])
 
-  if (collapsed) {
-    return (
+  return (
+    <div
+      className="animal-cursor gm-instant-color gm-layout-sidebar relative flex-shrink-0 overflow-hidden bg-gm-surface border-r border-gm-border"
+      style={{ width: collapsed ? 56 : width }}
+    >
+      {collapsed && (
       <div
-        className="animal-cursor gm-instant-color gm-layout-sidebar flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col items-center py-3 gap-2"
-        style={{ width: collapsed ? 56 : width }}
+        className="absolute inset-y-0 left-0 z-30 bg-gm-surface flex flex-col items-center py-3 gap-2"
+        style={{ width: 55 }}
       >
           <SidebarIcon label="展开侧边栏" onClick={toggleSidebar} tourTarget="sidebar-toggle">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
@@ -172,21 +178,21 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
             <Settings size={20} strokeWidth={1.5} />
           </SidebarIcon>
       </div>
-    )
-  }
-
-  return (
+      )}
+      {present && (
     <div
-      data-product-tour="sidebar-panel"
-      className="animal-cursor gm-instant-color gm-layout-sidebar relative flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col overflow-hidden"
-      style={{ width }}
+      ref={contentRef}
+      aria-hidden={collapsed}
+      data-product-tour={collapsed ? undefined : 'sidebar-panel'}
+      className="gm-layout-sidebar-content relative h-full flex flex-col overflow-hidden"
+      style={{ width: width - 1, pointerEvents: collapsed ? 'none' : undefined }}
     >
       <div
         className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize z-10 hover:bg-gm-primary/30 transition-colors"
         onMouseDown={onResizeStart}
       />
       {/* Header */}
-      <div className="gm-layout-sidebar-fade-in h-11 flex items-center px-4 border-b border-gm-border-subtle">
+      <div className="h-11 flex items-center px-4 border-b border-gm-border-subtle">
         <span className="text-body font-bold text-gm-text tracking-wide">
           文件侧边栏
         </span>
@@ -207,7 +213,6 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
       {/* File Sections with Collapse */}
       <div className="flex-1 overflow-y-auto p-3 pb-16 space-y-2">
         <Collapse
-          className="gm-layout-sidebar-fade-in"
           question="最近文件"
           expanded={sidebarSectionExpanded.recentFiles}
           onExpandedChange={(expanded) => setSidebarSectionExpanded('recentFiles', expanded)}
@@ -216,7 +221,6 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
           }
         />
         <Collapse
-          className="gm-layout-sidebar-fade-in"
           question="收藏"
           expanded={sidebarSectionExpanded.favorites}
           onExpandedChange={(expanded) => setSidebarSectionExpanded('favorites', expanded)}
@@ -231,7 +235,6 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
           }
         />
         <Collapse
-          className="gm-layout-sidebar-fade-in"
           question="工作区"
           expanded={sidebarSectionExpanded.workspace}
           onExpandedChange={(expanded) => setSidebarSectionExpanded('workspace', expanded)}
@@ -242,7 +245,7 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
       </div>
 
       {/* Bottom Actions */}
-      <div className="gm-layout-sidebar-fade-in absolute bottom-0 left-0 right-0 z-20 bg-gm-surface/70 shadow-[0_-8px_24px_0_rgba(61,52,40,0.08)] backdrop-blur-xl">
+      <div className="absolute bottom-0 left-0 right-0 z-20 bg-gm-surface/70 shadow-[0_-8px_24px_0_rgba(61,52,40,0.08)] backdrop-blur-xl">
         <Divider type="line-brown" />
         <div className="flex items-center gap-1 p-2">
           <div data-product-tour="open-file">
@@ -276,6 +279,8 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
             icon={<Settings size={16} strokeWidth={1.5} />} />
         </div>
       </div>
+    </div>
+      )}
     </div>
   )
 }
