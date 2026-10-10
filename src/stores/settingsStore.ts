@@ -589,21 +589,28 @@ export function desktopConnection(kind: ApiConnection['kind']): ApiConnection {
 
 const credentialQueues = new Map<ApiConnection['kind'], Promise<unknown>>()
 const credentialRevisions = { chat: 0, embedding: 0, search: 0 }
+// A newer metadata probe must still invalidate clients after a queued key write.
+const pendingCredentialChanges = new Set<ApiConnection['kind']>()
 
 export function syncDesktopCredential(
   kind: ApiConnection['kind'],
   change: { value?: string; remove?: boolean; migrateLegacy?: boolean } = {},
-): Promise<void> {
+): Promise<boolean> {
   const connection = desktopConnection(kind)
   let validAddress = false
   try { validAddress = Boolean(new URL(connection.baseUrl).hostname) } catch { /* Address may still be being edited. */ }
   if (!validAddress) return change.value || change.remove
-    ? Promise.reject(new Error('请先配置 API 地址')) : Promise.resolve()
+    ? Promise.reject(new Error('请先配置 API 地址')) : Promise.resolve(false)
   const identity = connectionIdentity(connection)
   const revision = ++credentialRevisions[kind]
   const task = (credentialQueues.get(kind) || Promise.resolve()).catch(() => undefined).then(async () => {
     const status = await configureApiConnection(connection, change)
-    if (revision !== credentialRevisions[kind] || identity !== connectionIdentity(desktopConnection(kind))) return
+    if (identity !== connectionIdentity(desktopConnection(kind))) return false
+    if (change.value || change.remove || change.migrateLegacy) pendingCredentialChanges.add(kind)
+    if (revision !== credentialRevisions[kind]) return false
+    const current = useSettingsStore.getState()
+    const metadata = kind === 'chat' ? current.ai : kind === 'embedding' ? current.ai.embedding : current.webSearch
+    if (!pendingCredentialChanges.has(kind) && metadata.credentialVersion !== undefined && metadata.apiKeyConfigured === status.configured) return true
     if (kind !== 'search') resetAiClient(kind)
     useSettingsStore.setState((state) => {
       const metadata = { apiKey: '', apiKeyConfigured: status.configured, credentialVersion: revision }
@@ -613,6 +620,8 @@ export function syncDesktopCredential(
       updateSearchConfig(webSearch)
       return { webSearch }
     })
+    pendingCredentialChanges.delete(kind)
+    return true
   })
   credentialQueues.set(kind, task)
   return task

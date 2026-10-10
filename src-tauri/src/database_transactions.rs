@@ -3,7 +3,7 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     Row, Sqlite, SqlitePool, Transaction,
 };
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 use tauri::{AppHandle, Manager};
 
 #[derive(Clone, Debug, Deserialize)]
@@ -966,20 +966,41 @@ async fn import_backup_rows(
         .await?;
     }
 
+    let mut category_ids = HashMap::new();
     for category in &payload.artifact_categories {
         validate_category(category).map_err(sqlx::Error::Protocol)?;
-        sqlx::query("INSERT INTO reading_artifact_categories (id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name")
-            .bind(&category.id)
-            .bind(category.name.trim())
-            .execute(&mut **transaction)
-            .await?;
+        // Name takes precedence during backup merging; retain the local category identity.
+        let existing_id: Option<String> =
+            sqlx::query_scalar("SELECT id FROM reading_artifact_categories WHERE name = ?")
+                .bind(category.name.trim())
+                .fetch_optional(&mut **transaction)
+                .await?;
+        let id = if let Some(id) = existing_id {
+            id
+        } else {
+            // An existing ID keeps its local name, so earlier mappings cannot be renamed.
+            sqlx::query("INSERT INTO reading_artifact_categories (id, name) VALUES (?, ?) ON CONFLICT(id) DO NOTHING")
+                .bind(&category.id)
+                .bind(category.name.trim())
+                .execute(&mut **transaction)
+                .await?;
+            category.id.clone()
+        };
+        category_ids.insert(category.id.clone(), id);
     }
     for organization in &payload.artifact_organization {
+        let mut mapped_ids = Vec::new();
+        for id in &organization.category_ids {
+            let mapped = category_ids.get(id).unwrap_or(id);
+            if !mapped_ids.contains(mapped) {
+                mapped_ids.push(mapped.clone());
+            }
+        }
         write_artifact_organization(
             transaction,
             &organization.artifact_key,
             Some(organization.favorite),
-            Some(&organization.category_ids),
+            Some(&mapped_ids),
         )
         .await
         .map_err(sqlx::Error::Protocol)?;
@@ -1328,6 +1349,85 @@ mod tests {
         .await
         .is_err());
         tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn backup_import_merges_category_names_and_remaps_references() {
+        for (categories, expected_ids) in [
+            (vec![("backup-a", "主题A")], vec!["local-a"]),
+            (vec![("local-a", "主题A")], vec!["local-a"]),
+            (vec![("local-a", "新名称")], vec!["local-a"]),
+            (vec![("local-a", "主题B")], vec!["local-b"]),
+            (
+                vec![("local-a", "主题B"), ("local-b", "主题A")],
+                vec!["local-b", "local-a"],
+            ),
+            (
+                vec![("backup-a", "主题A"), ("backup-b", "主题A")],
+                vec!["local-a"],
+            ),
+            (
+                vec![("backup-a", "主题A"), ("local-a", "新名称")],
+                vec!["local-a"],
+            ),
+        ] {
+            let pool = test_pool().await;
+            for (id, name) in [("local-a", "主题A"), ("local-b", "主题B")] {
+                sqlx::query("INSERT INTO reading_artifact_categories (id, name) VALUES (?, ?)")
+                    .bind(id)
+                    .bind(name)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+            // Repeated imports must remain idempotent and keep local category rows.
+            for _ in 0..2 {
+                let mut payload = backup_with_artifact();
+                payload.artifact_categories = categories
+                    .iter()
+                    .map(|(id, name)| ArtifactCategoryInput {
+                        id: (*id).into(),
+                        name: (*name).into(),
+                    })
+                    .collect();
+                payload.artifact_organization = vec![ArtifactOrganizationInput {
+                    artifact_key: "ai:artifact-1".into(),
+                    favorite: true,
+                    category_ids: categories.iter().map(|(id, _)| (*id).into()).collect(),
+                }];
+                let summary = run_import_backup(&pool, payload).await.unwrap();
+                assert_eq!(summary.artifacts, 1);
+                let (favorite, ids): (i64, String) = sqlx::query_as(
+                    "SELECT favorite, category_ids FROM reading_artifact_organization WHERE artifact_key = 'ai:artifact-1'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(favorite, 1);
+                assert_eq!(
+                    serde_json::from_str::<Vec<String>>(&ids).unwrap(),
+                    expected_ids
+                );
+                let count: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM reading_artifact_categories")
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(count, 2);
+                let names: Vec<(String, String)> =
+                    sqlx::query_as("SELECT id, name FROM reading_artifact_categories ORDER BY id")
+                        .fetch_all(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(
+                    names,
+                    vec![
+                        ("local-a".into(), "主题A".into()),
+                        ("local-b".into(), "主题B".into())
+                    ]
+                );
+            }
+        }
     }
 
     #[tokio::test]
