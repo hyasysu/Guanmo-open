@@ -32,8 +32,8 @@ describe('Markdown 写作补全', () => {
       return view
     }
     let view = open()
-    await vi.waitFor(() => expect(currentCompletions(view.state)).toHaveLength(8))
-    expect(view.dom.querySelectorAll('.cm-tooltip-autocomplete li')).toHaveLength(8)
+    await vi.waitFor(() => expect(currentCompletions(view.state)).toHaveLength(9))
+    expect(view.dom.querySelectorAll('.cm-tooltip-autocomplete li')).toHaveLength(9)
     expect(view.dom.querySelector('.cm-completionListIncompleteBottom')).toBeNull()
 
     const doc = Array.from({ length: 125 }, (_, index) => `# 标题${index}`).join('\n\n') + '\n\n[跳转](#'
@@ -46,9 +46,11 @@ describe('Markdown 写作补全', () => {
 
   it('行首触发模板，支持英文及中文筛选，正文和路径保持安静', async () => {
     expect((await complete('/table'))?.options.map((item) => item.label)).toEqual(['/table'])
+    expect((await complete('/file'))?.options.map((item) => item.label)).toEqual(['/file'])
+    expect((await complete('/文件'))?.options.map((item) => item.label)).toEqual(['/file'])
     expect((await complete('/表'))?.options.map((item) => item.label)).toEqual(['/table', '/task', '/list'])
     expect((await complete(''))?.options).toBeUndefined()
-    expect((await complete('', 0, true))?.options).toHaveLength(8)
+    expect((await complete('', 0, true))?.options).toHaveLength(9)
     for (const text of ['普通中文', '正文 /table', 'https://example.com/', '/usr/local', '    /table', '`/table`']) {
       expect(await complete(text)).toBeNull()
     }
@@ -79,25 +81,28 @@ describe('Markdown 写作补全', () => {
     expect(markdownCompletionSource(new CompletionContext(state, 6, true))).toBeNull()
   })
 
-  it('真实编辑器接受模板后沿原链路更新，一次撤销，并在切换文件后使用新标题', async () => {
+  it.each([
+    ['/table', '| 列一 | 列二 |', '列一', '列二'],
+    ['/file', '[文字](./文件.md)', '文字', '文件.md'],
+  ])('真实编辑器接受 %s 后沿原链路更新，一次撤销，并在切换文件后使用新标题', async (command, inserted, firstField, secondField) => {
     const viewRef = { current: null as EditorView | null }
     const onChange = vi.fn()
     const { rerender } = render(<CodeMirrorEditor content="" documentKey="A" viewRef={viewRef} onChange={onChange} />)
     const view = viewRef.current!
     act(() => {
       view.focus()
-      view.dispatch({ changes: { from: 0, insert: '/table' }, selection: { anchor: 6 }, userEvent: 'input.type' })
+      view.dispatch({ changes: { from: 0, insert: command }, selection: { anchor: command.length }, userEvent: 'input.type' })
     })
-    await vi.waitFor(() => expect(currentCompletions(view.state).some((item) => item.label === '/table')).toBe(true))
+    await vi.waitFor(() => expect(currentCompletions(view.state).some((item) => item.label === command)).toBe(true))
     await new Promise((resolve) => setTimeout(resolve, 100))
     fireEvent.keyDown(view.contentDOM, { key: 'Enter', code: 'Enter' })
-    expect(view.state.doc.toString()).toContain('| 列一 | 列二 |')
-    expect(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)).toBe('列一')
+    expect(view.state.doc.toString()).toContain(inserted)
+    expect(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)).toBe(firstField)
     fireEvent.keyDown(view.contentDOM, { key: 'Tab', code: 'Tab' })
-    expect(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)).toBe('列二')
+    expect(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)).toBe(secondField)
     await vi.waitFor(() => expect(onChange).toHaveBeenCalledWith(view.state.doc.toString()))
     act(() => { undo(view) })
-    expect(view.state.doc.toString()).toBe('/table')
+    expect(view.state.doc.toString()).toBe(command)
     rerender(<CodeMirrorEditor content={'# 新标题\n[跳转](#'} documentKey="B" viewRef={viewRef} onChange={onChange} />)
     const nextView = viewRef.current!
     act(() => {

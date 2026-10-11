@@ -9,6 +9,7 @@ const templates = [
   { key: 'task', name: '任务列表', text: '- [ ] ${任务}' },
   { key: 'code', name: '代码块', text: '```${语言}\n${代码}\n```' },
   { key: 'link', name: '链接', text: '[${文字}](${地址})' },
+  { key: 'file', name: '文件跳转', text: '[${文字}](./${文件.md})' },
   { key: 'image', name: '图片', text: '![${描述}](${地址})' },
   { key: 'quote', name: '引用', text: '> ${引用内容}' },
   { key: 'list', name: '无序列表', text: '- ${内容}' },

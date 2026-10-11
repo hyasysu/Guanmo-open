@@ -47,6 +47,30 @@ describe('Markdown desktop link actions', () => {
     expect(useEditorStore.getState().tabs[0].savedContent).toBe('saved content')
     expect(useEditorStore.getState().activeTabId).toBe(original.id)
   })
+  it.each(['preview', 'edit-preview', 'dual-preview'] as const)('preserves drafts and reading positions when following a link in %s', async (viewMode) => {
+    const initial = useEditorStore.getState()
+    initial.addTab('E:/notes/target.md', 'target.md', 'saved target')
+    const targetId = useEditorStore.getState().activeTabId!
+    initial.updateTabContent(targetId, 'unsaved target')
+    initial.addTab('E:/notes/source.md', 'source.md', 'saved source')
+    const sourceId = useEditorStore.getState().activeTabId!
+    initial.updateTabContent(sourceId, '[target](target.md)')
+    initial.setViewMode(viewMode)
+    initial.flushReadingPositions({
+      [sourceId]: { previewScrollTop: 120, topLine: 5 },
+      [targetId]: { previewScrollTop: 340, topLine: 12 },
+    })
+    const before = useEditorStore.getState()
+    render(createElement(MarkdownPreview, { content: '[target](target.md)', filePath: 'E:/notes/source.md' }))
+    fireEvent.click(screen.getByRole('link', { name: 'target' }))
+    await waitFor(() => expect(useEditorStore.getState().activeTabId).toBe(targetId))
+    const after = useEditorStore.getState()
+    expect(after.viewMode).toBe(viewMode)
+    expect(after.tabs).toEqual(before.tabs)
+    expect(after.readingPositions).toEqual(before.readingPositions)
+    expect(after.pendingReveal).toBeNull()
+    expect(mocks.read).not.toHaveBeenCalled()
+  })
   it('deduplicates simultaneous reads and creates only one tab', async () => {
     let finish!: (content: string) => void
     mocks.read.mockReturnValue(new Promise((resolve) => { finish = resolve }))
