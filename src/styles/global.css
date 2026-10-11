@@ -1054,8 +1054,13 @@ html[data-fullscreen-transition-phase='focusing'] #root {
 }
 
 @keyframes gmStreamingCaret {
-  0%, 48% { opacity: 1; transform: scaleY(1); }
-  49%, 100% { opacity: .25; transform: scaleY(.86); }
+  0%, 48% { opacity: 1; }
+  49%, 100% { opacity: 0; }
+}
+
+@keyframes gmStreamingWord {
+  from { opacity: 0; filter: blur(4px); }
+  to { opacity: 1; filter: blur(0); }
 }
 
 @keyframes gmTypingDot {
@@ -1232,16 +1237,21 @@ html[data-fullscreen-transition-phase='focusing'] #root {
   z-index: 1;
 }
 
+.gm-streaming-word {
+  display: inline-block;
+  max-width: 100%;
+  animation: gmStreamingWord 280ms ease-out both;
+}
+
 .gm-streaming-caret {
   display: inline-block;
-  width: 6px;
-  height: 1.15em;
+  width: 2px;
+  height: 1em;
   margin-left: 2px;
-  border-radius: 9999px;
+  border-radius: 1px;
   background: var(--gm-primary);
-  vertical-align: -0.18em;
-  transform-origin: center;
-  animation: gmStreamingCaret 1.05s ease-in-out infinite;
+  vertical-align: -0.12em;
+  animation: gmStreamingCaret 1s steps(1, end) infinite;
 }
 
 .gm-typing-loader {
@@ -1265,6 +1275,7 @@ html[data-fullscreen-transition-phase='focusing'] #root {
 @media (prefers-reduced-motion: reduce) {
   .gm-streaming-bubble::after,
   .gm-streaming-caret,
+  .gm-streaming-word,
   .gm-typing-loader span {
     animation: none;
   }
