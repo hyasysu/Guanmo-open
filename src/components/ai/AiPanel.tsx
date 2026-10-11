@@ -1,5 +1,5 @@
 import { memo, useState, useRef, useEffect, useCallback, useMemo, type CSSProperties, type PointerEventHandler } from 'react'
-import { createPortal } from 'react-dom'
+import { createPortal, flushSync } from 'react-dom'
 import { motion } from 'motion/react'
 import { useAppStore } from '@/stores/appStore'
 import { useChatStore } from '@/stores/chatStore'
@@ -180,6 +180,8 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const [reasoningMode, setReasoningMode] = useState<'off' | 'on'>('off')
   const [resetManualToggle, setResetManualToggle] = useState(0)
   const [panelView, setPanelView] = useState<AiPanelView>('chat')
+  const [artifactsVisited, setArtifactsVisited] = useState(false)
+  useEffect(() => { if (panelView === 'artifacts') setArtifactsVisited(true) }, [panelView])
   useEffect(() => { reportAiPanelView(panelView) }, [panelView])
   const [artifactFocusKey, setArtifactFocusKey] = useState<string | null>(null)
   const [reminders, setReminders] = useState<ReadingReminder[]>([])
@@ -295,12 +297,12 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
       if (navigation.view === 'artifacts' && !databaseEnabled) return
       if (navigation.mode === 'open') {
         setPanelView(navigation.view)
-        setArtifactFocusKey(navigation.view === 'artifacts' ? navigation.artifactKey ?? null : null)
+        if (navigation.view === 'artifacts' && navigation.artifactKey) setArtifactFocusKey(navigation.artifactKey)
       } else if (panelView === navigation.view) {
         useAppStore.getState().closeAiPanel()
       } else {
         setPanelView(navigation.view)
-        setArtifactFocusKey(navigation.view === 'artifacts' ? navigation.artifactKey ?? null : null)
+        if (navigation.view === 'artifacts' && navigation.artifactKey) setArtifactFocusKey(navigation.artifactKey)
       }
     }
     const handleNavigation = (fallback: { mode: 'open' | 'toggle'; view: AiPanelView }) => {
@@ -618,19 +620,23 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   }, [clearSendAnimation, reasoningMode, sendMessage, sendMessageAnimationEnabled, setDraftInput, updateSendAnimation, visibleMessages.length])
 
   useEffect(() => {
-    const handleShortcutSubmit = () => handleSend()
+    const handleShortcutSubmit = () => {
+      if (panelView !== 'chat') flushSync(() => setPanelView('chat'))
+      handleSend()
+    }
     window.addEventListener(AI_SHORTCUT_SUBMIT_EVENT, handleShortcutSubmit)
     return () => window.removeEventListener(AI_SHORTCUT_SUBMIT_EVENT, handleShortcutSubmit)
-  }, [handleSend])
+  }, [handleSend, panelView])
 
   // 挂载时检查是否有待发送的快捷提问（解决首次使用时事件监听器未注册的问题）
   useEffect(() => {
     const chatState = useChatStore.getState()
     if (chatState.draftInput.trim() && useSettingsStore.getState().editor.autoSendAiShortcut) {
       // 延迟发送，确保事件监听器已注册
-      window.setTimeout(() => {
+      const timer = window.setTimeout(() => {
         window.dispatchEvent(new Event(AI_SHORTCUT_SUBMIT_EVENT))
       }, 100)
+      return () => window.clearTimeout(timer)
     }
   }, [])
 
@@ -730,7 +736,6 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     streamScrollInterruptedRef.current = false
     shouldScrollAfterReturnRef.current = true
     setPanelView('chat')
-    setArtifactFocusKey(null)
   }, [])
 
   const handleSaveAssistantAsMarkdown = useCallback(async (
@@ -883,7 +888,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
             type={panelView === 'artifacts' ? 'default' : 'text'}
             size="small"
             disabled={!databaseEnabled}
-            onClick={() => { if (databaseEnabled) { setArtifactFocusKey(null); setPanelView('artifacts') } }}
+            onClick={() => { if (databaseEnabled) setPanelView('artifacts') }}
             title={databaseEnabled ? '阅读成果' : '阅读成果仅桌面版可用'}
             icon={<BookOpen size={15} strokeWidth={1.7} aria-hidden="true" />}
           />
@@ -941,11 +946,15 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
 
       {panelView === 'chat' && <AgentTimeline timeline={timeline} />}
 
-      {/* Chat Content - 聊天保持外层滚动，阅读成果由页面内部接管滚动 */}
-      <div ref={chatContainerRef} className={`flex-1 min-h-0 ${panelView === 'artifacts' ? 'overflow-hidden' : 'overflow-y-auto'} overflow-x-hidden min-w-0 bg-gm-surface ${panelView === 'chat' ? 'pb-32' : 'pb-0'}`}>
-        {panelView === 'artifacts' ? (
+      {(artifactsVisited || panelView === 'artifacts') && (
+        <div hidden={panelView !== 'artifacts'} className={panelView === 'artifacts' ? 'flex-1 min-h-0 overflow-hidden min-w-0 bg-gm-surface' : 'hidden'}>
           <ReadingArtifactCenter onOpenAiSource={handleOpenArtifactSource} focusKey={artifactFocusKey} onCloseFocus={() => setArtifactFocusKey(null)} />
-        ) : panelView === 'reminders' ? (
+        </div>
+      )}
+
+      {/* Chat Content - 聊天保持外层滚动，阅读成果由页面内部接管滚动 */}
+      <div ref={chatContainerRef} hidden={panelView === 'artifacts'} className={`flex-1 min-h-0 ${panelView === 'artifacts' ? 'hidden' : 'overflow-y-auto'} overflow-x-hidden min-w-0 bg-gm-surface ${panelView === 'chat' ? 'pb-32' : 'pb-0'}`}>
+        {panelView === 'artifacts' ? null : panelView === 'reminders' ? (
           READING_REMINDER_FEATURE_AVAILABLE ? (
             <ReadingRemindersPanel
               reminders={reminders}

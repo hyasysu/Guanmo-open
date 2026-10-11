@@ -907,6 +907,8 @@ function ExpandableText({
   const measure = useCallback(() => {
     const element = textRef.current
     if (!element) return
+    // Retained pages have no layout while hidden; keep the last visible measurement.
+    if (element.closest('[hidden]')) return
     const computed = window.getComputedStyle(element)
     const fontSize = Number.parseFloat(computed.fontSize) || 14
     const lineHeight = Number.parseFloat(computed.lineHeight) || fontSize * 1.5

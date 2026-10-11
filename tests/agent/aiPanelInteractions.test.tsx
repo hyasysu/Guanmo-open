@@ -3,11 +3,13 @@ import type { ChatMessage } from '@/services/ai/types'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AiPanel } from '@/components/ai/AiPanel'
 import { StatusBar } from '@/components/layout/StatusBar'
+import { useSidebarContent } from '@/components/layout/useSidebarContent'
 import { consumePendingPanelNavigation, requestOpenReadingArtifacts } from '@/services/aiPanelNavigation'
 import type { TimelineItem } from '@/stores/chatStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useAppStore } from '@/stores/appStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { AI_SHORTCUT_SUBMIT_EVENT, setAiShortcutPrompt } from '@/services/aiContext'
 
 const aiChat = vi.hoisted(() => ({
   messages: [
@@ -73,6 +75,12 @@ const readingArtifacts = vi.hoisted(() => ({
 
 const artifactFixture = readingArtifacts.artifacts[0]
 
+function RetainedAiPanel() {
+  const open = useAppStore((state) => state.aiPanelOpen)
+  const { contentRef, present } = useSidebarContent(open, 'button[aria-label^="打开 AI 助手"]', { keepMounted: true })
+  return present ? <div ref={contentRef} aria-hidden={!open}><AiPanel /></div> : null
+}
+
 vi.mock('@/hooks/useAiChat', () => ({
   useAiChat: () => aiChat,
 }))
@@ -96,6 +104,9 @@ describe('AI 面板视图返回', () => {
     ]
     aiChat.sendMessage.mockReset()
     aiChat.cancelStream.mockReset()
+    useChatStore.getState().setDraftInput('')
+    useChatStore.getState().clearContextTags()
+    useSettingsStore.getState().updateEditorSettings({ autoSendAiShortcut: false })
     readingArtifacts.artifacts = [artifactFixture]
     readingArtifacts.loading = false
     readingArtifacts.filter = 'all'
@@ -146,6 +157,85 @@ describe('AI 面板视图返回', () => {
     expect(screen.getByText('Agent 状态链路：')).toBeInTheDocument()
     fireEvent.click(screen.getByTitle('阅读成果'))
     expect(screen.queryByText('Agent 状态链路：')).not.toBeInTheDocument()
+  })
+
+  it('阅读成果首次访问后切换聊天和提醒仍保留页面与滚动位置', () => {
+    render(<AiPanel />)
+    expect(screen.queryByRole('region', { name: '阅读成果内容', hidden: true })).toBeNull()
+    fireEvent.click(screen.getByTitle('阅读成果'))
+    const region = screen.getByRole('region', { name: '阅读成果内容' })
+    region.scrollTop = 420
+    fireEvent.click(screen.getByTitle('返回'))
+    expect(region).toBeInTheDocument()
+    expect(region).not.toBeVisible()
+    fireEvent.click(screen.getByTitle('阅读提醒（功能开发中）'))
+    expect(region).toBeInTheDocument()
+    fireEvent.click(screen.getByTitle('阅读成果'))
+    expect(screen.getByRole('region', { name: '阅读成果内容' })).toBe(region)
+    expect(region.scrollTop).toBe(420)
+    expect(region).toBeVisible()
+  })
+
+  it('快捷提问发送前先渲染聊天界面，并保留阅读成果', () => {
+    render(<AiPanel />)
+    fireEvent.click(screen.getByTitle('阅读成果'))
+    const region = screen.getByRole('region', { name: '阅读成果内容' })
+    useChatStore.getState().setDraftInput('解释选中文本')
+    aiChat.sendMessage.mockImplementationOnce(() => {
+      expect(screen.getByText('AI 助手')).toBeVisible()
+      expect(screen.getByPlaceholderText('输入消息... (Enter 发送)')).toBeVisible()
+      expect(region).not.toBeVisible()
+    })
+    act(() => window.dispatchEvent(new Event(AI_SHORTCUT_SUBMIT_EVENT)))
+    expect(aiChat.sendMessage).toHaveBeenCalledTimes(1)
+    expect(aiChat.sendMessage).toHaveBeenCalledWith('解释选中文本', undefined, undefined, undefined, 'off')
+    expect(region).toBeInTheDocument()
+  })
+
+  it('关闭自动发送时快捷提问也会切到聊天并保留草稿', () => {
+    vi.useFakeTimers()
+    useSettingsStore.getState().updateEditorSettings({ autoSendAiShortcut: false })
+    render(<AiPanel />)
+    fireEvent.click(screen.getByTitle('阅读成果'))
+    act(() => setAiShortcutPrompt('解释选中文本'))
+    act(() => vi.runOnlyPendingTimers())
+    expect(screen.getByText('AI 助手')).toBeVisible()
+    expect(useChatStore.getState().draftInput).toBe('解释选中文本')
+    expect(aiChat.sendMessage).not.toHaveBeenCalled()
+    useChatStore.getState().setDraftInput('')
+  })
+
+  it('关闭面板后从底部重开阅读成果仍使用同一页面和滚动位置', () => {
+    vi.useFakeTimers()
+    useAppStore.getState().closeAiPanel()
+    render(<><StatusBar /><RetainedAiPanel /></>)
+    expect(screen.queryByText('AI 助手')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '打开阅读成果' }))
+    act(() => vi.runOnlyPendingTimers())
+    const region = screen.getByRole('region', { name: '阅读成果内容' })
+    region.scrollTop = 520
+    fireEvent.click(screen.getByTitle('关闭面板'))
+    act(() => vi.advanceTimersByTime(300))
+    expect(region).toBeInTheDocument()
+    expect(region.closest('[aria-hidden="true"]')).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '打开阅读成果' }))
+    act(() => vi.runOnlyPendingTimers())
+    expect(screen.getByRole('region', { name: '阅读成果内容' })).toBe(region)
+    expect(region.scrollTop).toBe(520)
+  })
+
+  it('开启自动发送时快捷提问从阅读成果切到聊天且只发送一次', () => {
+    vi.useFakeTimers()
+    useSettingsStore.getState().updateEditorSettings({ autoSendAiShortcut: true })
+    render(<AiPanel />)
+    fireEvent.click(screen.getByTitle('阅读成果'))
+    act(() => setAiShortcutPrompt('解释选中文本'))
+    act(() => vi.runOnlyPendingTimers())
+    expect(screen.getByText('AI 助手')).toBeVisible()
+    expect(aiChat.sendMessage).toHaveBeenCalledTimes(1)
+    act(() => vi.advanceTimersByTime(150))
+    expect(aiChat.sendMessage).toHaveBeenCalledTimes(1)
+    expect(useChatStore.getState().draftInput).toBe('')
   })
 
   it('底部 AI 与阅读成果入口按当前页面切换或收起侧边栏', () => {

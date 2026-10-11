@@ -150,6 +150,12 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
   const { contentRef: sidebarAiContentRef, present: sidebarAiPresent } = useSidebarContent(
     aiPanelOpen && !isFullscreen,
     'button[aria-label^="打开 AI 助手"]',
+    { keepMounted: true, active: !isFullscreen },
+  )
+  const { contentRef: fullscreenAiContentRef, present: fullscreenAiPresent } = useSidebarContent(
+    aiPanelOpen && isFullscreen,
+    'button[title="切换 AI 助手"]',
+    { keepMounted: true, active: isFullscreen },
   )
   const customCursorEnabled = useSettingsStore((s) => s.appearance.customCursorEnabled)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
@@ -789,9 +795,9 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
             contain: 'layout',
           }}
         >
-          {aiPanelOpen && (
+          {fullscreenAiPresent && (
             <>
-              <div className="min-h-0 min-w-0 flex-1">
+              <div ref={fullscreenAiContentRef} className="min-h-0 min-w-0 flex-1">
                 <Suspense fallback={<AiPanelFallback />}><AiPanel
                   fullscreenDragHandleProps={{
                     onPointerDown: handleFullscreenAiDragStart,

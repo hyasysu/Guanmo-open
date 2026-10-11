@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReadingArtifact } from '@/services/database/readingArtifacts'
 import type { ReadingMark } from '@/services/readingMarks'
 
@@ -326,6 +326,43 @@ describe('ReadingArtifactCenter', () => {
       expect(disconnect).toHaveBeenCalled()
     } finally {
       globalThis.ResizeObserver = originalResizeObserver
+    }
+  })
+
+  it('preserves collapsed card measurements while the retained page is hidden', async () => {
+    const originalResizeObserver = globalThis.ResizeObserver
+    const callbacks: (() => void)[] = []
+    class TrackingResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(() => callback([], this as unknown as ResizeObserver))
+      }
+      observe = vi.fn()
+      disconnect = vi.fn()
+    }
+    globalThis.ResizeObserver = TrackingResizeObserver as unknown as typeof ResizeObserver
+    const scrollHeight = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function () {
+      return this.closest('[hidden]') ? 0 : 300
+    })
+    try {
+      mocks.loadReadingArtifactsPage.mockReset().mockResolvedValue({ artifacts: [], total: 0 })
+      const view = render(<div><ReadingArtifactCenter onOpenAiSource={vi.fn()} /></div>)
+      const expand = await screen.findByRole('button', { name: '展开全文' })
+      const card = expand.closest('article')!
+      const region = screen.getByRole('region', { name: '阅读成果内容' })
+      region.scrollTop = 420
+      const heights = Array.from(card.querySelectorAll<HTMLElement>('[style]')).map((element) => element.style.height)
+      view.rerender(<div hidden><ReadingArtifactCenter onOpenAiSource={vi.fn()} /></div>)
+      act(() => callbacks.forEach((callback) => callback()))
+      // Hidden resize callbacks must not remove the expand control or change its height target.
+      expect(expand).toBeInTheDocument()
+      expect(Array.from(card.querySelectorAll<HTMLElement>('[style]')).map((element) => element.style.height)).toEqual(heights)
+      view.rerender(<div><ReadingArtifactCenter onOpenAiSource={vi.fn()} /></div>)
+      act(() => callbacks.forEach((callback) => callback()))
+      expect(screen.getByRole('button', { name: '展开全文' })).toBe(expand)
+      expect(region.scrollTop).toBe(420)
+    } finally {
+      globalThis.ResizeObserver = originalResizeObserver
+      scrollHeight.mockRestore()
     }
   })
 
