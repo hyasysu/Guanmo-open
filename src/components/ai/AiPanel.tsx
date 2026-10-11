@@ -1,4 +1,4 @@
-import { memo, useState, useRef, useEffect, useCallback, useMemo, type CSSProperties, type PointerEventHandler } from 'react'
+import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type CSSProperties, type PointerEventHandler } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { motion } from 'motion/react'
 import { useAppStore } from '@/stores/appStore'
@@ -154,6 +154,9 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const hasMoreHistory = useChatStore((s) => s.hasMoreHistory)
   const loadMoreHistory = useChatStore((s) => s.loadMoreHistory)
   const [loadingHistory, setLoadingHistory] = useState(false)
+  const historyAutoLoadRef = useRef(false)
+  const historyRequestRef = useRef(false)
+  const historyAnchorRef = useRef<{ element: HTMLElement; top: number; firstId: string | undefined } | null>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const autoFollowRef = useRef(true)
   const scrollFrameRef = useRef<number | null>(null)
@@ -653,14 +656,64 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     }
   }
 
-  const handleLoadHistory = async () => {
+  useLayoutEffect(() => {
+    const anchor = historyAnchorRef.current
+    const container = chatContainerRef.current
+    if (!anchor || !container) return
+    if (panelView !== 'chat' || !anchor.element.isConnected) {
+      historyAnchorRef.current = null
+    } else if (visibleMessages[0]?.id !== anchor.firstId) {
+      container.scrollTop += anchor.element.getBoundingClientRect().top - anchor.top
+      historyAnchorRef.current = null
+    } else if (!loadingHistory) {
+      historyAnchorRef.current = null
+    }
+  }, [visibleMessages, panelView, loadingHistory])
+
+  const handleLoadHistory = useCallback(async () => {
+    if (!databaseEnabled || !hasMoreHistory || historyRequestRef.current) return
+    historyAutoLoadRef.current = true
+    historyRequestRef.current = true
+    const container = chatContainerRef.current
+    const anchor = container && Array.from(container.querySelectorAll<HTMLElement>('[data-chat-message-id]'))
+      .find((element) => element.getBoundingClientRect().bottom > container.getBoundingClientRect().top)
+    if (anchor) {
+      historyAnchorRef.current = { element: anchor, top: anchor.getBoundingClientRect().top, firstId: visibleMessagesRef.current[0]?.id }
+      autoFollowRef.current = false
+      if (scrollFrameRef.current !== null) {
+        cancelAnimationFrame(scrollFrameRef.current)
+        scrollFrameRef.current = null
+      }
+    }
     setLoadingHistory(true)
     try {
       await loadMoreHistory()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '历史记录加载失败，请重试')
     } finally {
+      historyRequestRef.current = false
       setLoadingHistory(false)
     }
-  }
+  }, [databaseEnabled, hasMoreHistory, loadMoreHistory])
+
+  useEffect(() => {
+    const container = chatContainerRef.current
+    if (!container || panelView !== 'chat') return
+    let previousTop = container.scrollTop
+    const handleScroll = () => {
+      const top = container.scrollTop
+      const upwards = top < previousTop
+      previousTop = top
+      const anchor = historyAnchorRef.current
+      if (anchor) anchor.top = anchor.element.getBoundingClientRect().top
+      if (upwards && top <= 120 && historyAutoLoadRef.current
+        && Date.now() >= programmaticScrollUntilRef.current) {
+        void handleLoadHistory()
+      }
+    }
+    container.addEventListener('scroll', handleScroll, { passive: true })
+    return () => container.removeEventListener('scroll', handleScroll)
+  }, [panelView, handleLoadHistory])
 
   const handleOpenRagSource = useCallback(async (source: Pick<RagSource, 'filePath' | 'startLine' | 'endLine'>) => {
     try {
@@ -909,7 +962,11 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
             <Button
               type="text"
               size="small"
-              onClick={clearMessages}
+              onClick={() => {
+                historyAutoLoadRef.current = false
+                historyAnchorRef.current = null
+                clearMessages()
+              }}
               title="清空对话"
               icon={
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -953,7 +1010,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
       )}
 
       {/* Chat Content - 聊天保持外层滚动，阅读成果由页面内部接管滚动 */}
-      <div ref={chatContainerRef} hidden={panelView === 'artifacts'} className={`flex-1 min-h-0 ${panelView === 'artifacts' ? 'hidden' : 'overflow-y-auto'} overflow-x-hidden min-w-0 bg-gm-surface ${panelView === 'chat' ? 'pb-32' : 'pb-0'}`}>
+      <div ref={chatContainerRef} hidden={panelView === 'artifacts'} style={loadingHistory ? { overflowAnchor: 'none' } : undefined} className={`flex-1 min-h-0 ${panelView === 'artifacts' ? 'hidden' : 'overflow-y-auto'} overflow-x-hidden min-w-0 bg-gm-surface ${panelView === 'chat' ? 'pb-32' : 'pb-0'}`}>
         {panelView === 'artifacts' ? null : panelView === 'reminders' ? (
           READING_REMINDER_FEATURE_AVAILABLE ? (
             <ReadingRemindersPanel
