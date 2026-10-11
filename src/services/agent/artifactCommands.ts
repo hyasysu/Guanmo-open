@@ -43,6 +43,7 @@ export {
   getReadingArtifactReferences,
   mergeReadingArtifactQuestionMetadata,
   mergeReadingArtifactReferencesMetadata,
+  mergeReadingArtifactSelectionMetadata,
   resolveAnnotationPosition,
 } from '@/services/database/readingArtifacts'
 

@@ -28,6 +28,7 @@ import type {
   ReadingArtifactMessageReference,
 } from '@/services/ai/types'
 import { resolveStoredSourceReferences, type SourceReferenceId } from '@/services/ai/sourceReferences'
+import { buildOriginalSelections, type OriginalSelectionSnapshot } from '@/services/originalSelections'
 import { AI_SHORTCUT_SUBMIT_EVENT } from '@/services/aiContext'
 import {
   consumePendingPanelNavigation,
@@ -43,7 +44,7 @@ import {
 import { applyPendingEditCommand } from '@/services/pendingEditCommand'
 import { saveAssistantMessageAsMarkdown } from '@/services/assistantMessageExport'
 import { ReadingArtifactCenter } from '@/components/reading-artifacts/ReadingArtifactCenter'
-import type { ReadingArtifactDocumentRef } from '@/services/readingArtifactCenter'
+import type { ReadingArtifactDocumentRef, ReadingArtifactLocation } from '@/services/readingArtifactCenter'
 import { useReadingArtifactsStore, type ReadingArtifactFilter } from '@/stores/readingArtifactsStore'
 import {
   type ReadingArtifact,
@@ -54,6 +55,7 @@ import {
   getAnnotationStructuredContent,
   getReadingArtifactQuestion,
   getReadingArtifactReferences,
+  buildReadingArtifactReferences,
   resolveAnnotationPosition,
 } from '@/services/agent/artifactCommands'
 import {
@@ -135,6 +137,11 @@ export function buildUserQuestionMap(messages: ChatMessage[]): Map<string, strin
   return questions
 }
 
+export function buildUserSelectionMap(messages: ChatMessage[]): Map<string, OriginalSelectionSnapshot[]> {
+  return new Map(messages.filter((message) => message.role === 'user' && message.id)
+    .map((message) => [message.id!, buildOriginalSelections(message.tags)]))
+}
+
 export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
   const { messages, streaming, error, timeline, sendMessage, cancelStream } = useAiChat()
@@ -169,6 +176,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const visibleMessagesRef = useRef(visibleMessages)
   visibleMessagesRef.current = visibleMessages
   const userQuestionsById = useMemo(() => buildUserQuestionMap(messages), [messages])
+  const userSelectionsById = useMemo(() => buildUserSelectionMap(messages), [messages])
   const [reasoningMode, setReasoningMode] = useState<'off' | 'on'>('off')
   const [resetManualToggle, setResetManualToggle] = useState(0)
   const [panelView, setPanelView] = useState<AiPanelView>('chat')
@@ -669,8 +677,8 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     }
   }, [])
 
-  const handleOpenArtifactSource = useCallback(async (artifact: ReadingArtifact, documentRef: ReadingArtifactDocumentRef) => {
-    const location = documentRef.locations[0]
+  const handleOpenArtifactSource = useCallback(async (artifact: ReadingArtifact, documentRef: ReadingArtifactDocumentRef, selectedLocation?: ReadingArtifactLocation) => {
+    const location = selectedLocation ?? documentRef.locations[0]
     if (!documentRef.filePath) {
       toast.error('该成果未绑定来源文件')
       return
@@ -681,6 +689,8 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
       : null
     // 批注按 Markdown model/source offset 定位；其他类型直接用锚点行号。
     const annotation = artifact.type === 'annotation' && source?.filePath && isSameFilePath(source.filePath, documentRef.filePath)
+      && (!selectedLocation || (location?.startOffset !== undefined
+        || (location?.startLine === source.startLine && location?.endLine === source.endLine)))
       ? getAnnotationStructuredContent(artifact)
       : null
     try {
@@ -738,6 +748,8 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     contextMeta: ChatMessageContextMeta | undefined,
     messageId: string | undefined,
     question: string | undefined,
+    originalSelections: OriginalSelectionSnapshot[] | undefined,
+    referencedSourceIds: SourceReferenceId[] | undefined,
   ) => {
     if (!databaseEnabled) {
       toast.error('阅读成果仅桌面版可用')
@@ -768,6 +780,8 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
           messageId,
           question,
           structuredContent: structured,
+          originalSelections,
+          referencedSourceIds,
         })
         if (saved) {
           toast.success('已保存为 AI 解读')
@@ -790,6 +804,8 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
         contextScope: contextMeta?.readingScope,
         messageId,
         question,
+        originalSelections,
+        referencedSourceIds,
       })
       if (saved) {
         toast.success(`已保存为${ARTIFACT_TYPE_LABELS[type]}`)
@@ -989,6 +1005,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
               const revealForSendAnimation = isSendAnimationTarget
                 && (sendAnimation?.phase === 'arrived' || sendAnimation?.phase === 'cancelled')
               const parentQuestion = msg.parentId ? userQuestionsById.get(msg.parentId) : undefined
+              const originalSelections = msg.parentId ? userSelectionsById.get(msg.parentId) : undefined
               // 历史会话之间的分隔线
               const showSessionDivider = Boolean(msg.sessionId && msg.sessionId !== prevMsg?.sessionId)
               // 历史消息 → 当前消息的分隔线
@@ -1013,6 +1030,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
                   visualId={assistantVisualId}
                   sources={msg.sources}
                   referencedSourceIds={msg.referencedSourceIds}
+                  originalSelections={originalSelections}
                   onOpenSource={handleOpenRagSource}
                   artifactReferences={msg.artifactReferences}
                   suppressEntranceAnimation={hideForSendAnimation || animatedSendMessageKeysRef.current.has(messageKey)}
@@ -1037,6 +1055,8 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
                           msg.contextMeta,
                           msg.id,
                           parentQuestion,
+                          originalSelections,
+                          msg.referencedSourceIds,
                         )
                       : undefined
                   }
@@ -1790,6 +1810,7 @@ export const ChatBubble = memo(function ChatBubble({
   visualId,
   sources,
   referencedSourceIds,
+  originalSelections,
   artifactReferences,
   onOpenArtifact,
   onOpenSource,
@@ -1806,6 +1827,7 @@ export const ChatBubble = memo(function ChatBubble({
   visualId?: string | null
   sources?: ChatMessageSource[]
   referencedSourceIds?: SourceReferenceId[]
+  originalSelections?: OriginalSelectionSnapshot[]
   artifactReferences?: ReadingArtifactMessageReference[]
   onOpenArtifact?: (key: string) => void
   onOpenSource?: (source: LocalChatMessageSource) => void
@@ -1823,6 +1845,7 @@ export const ChatBubble = memo(function ChatBubble({
     () => resolveStoredSourceReferences(sources, referencedSourceIds),
     [referencedSourceIds, sources],
   )
+  const messageSources = buildReadingArtifactReferences(displayedSources.sources, originalSelections)
   const bubbleRef = useRef<HTMLDivElement>(null)
   const saveMenuRef = useRef<HTMLDivElement>(null)
   const saveControlsHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1943,10 +1966,9 @@ export const ChatBubble = memo(function ChatBubble({
           ) : (
             <AssistantMarkdown content={content} />
           )}
-          {!isUser && displayedSources.sources.length > 0 && onOpenSource && (
+          {!isUser && messageSources.length > 0 && onOpenSource && (
             <MessageSources
-              sources={displayedSources.sources}
-              hasValidReferences={displayedSources.hasValidReferences}
+              sources={messageSources}
               onOpenSource={onOpenSource}
             />
           )}
@@ -2084,12 +2106,10 @@ function AiAvatar({
 
 function MessageSources({
   sources,
-  hasValidReferences,
   onOpenSource,
 }: {
   sources: ChatMessageSource[]
-  hasValidReferences: boolean
-  onOpenSource: (source: LocalChatMessageSource) => void
+  onOpenSource?: (source: LocalChatMessageSource) => void
 }) {
   const [expanded, setExpanded] = useState(false)
 
@@ -2097,17 +2117,18 @@ function MessageSources({
     <div className="mt-3 border-t border-gm-border-subtle pt-2">
       <button
         type="button"
+        aria-expanded={expanded}
         onClick={() => setExpanded((value) => !value)}
         className="flex w-full items-center gap-1.5 text-left text-micro font-bold text-gm-text-tertiary hover:text-gm-primary"
       >
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`flex-shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}>
           <path d="M9 18l6-6-6-6" />
         </svg>
-        <span>{hasValidReferences ? '引用来源' : '检索来源/未确认引用'} {sources.length}</span>
+        <span>来源 · {sources.length}</span>
       </button>
       {expanded && (
         <div className="mt-2 space-y-1">
-          {sources.map((source, index) => (
+          {onOpenSource && sources.map((source, index) => (
             source.kind === 'web' ? (
               <a
                 key={`${source.url}-${index}`}

@@ -24,6 +24,7 @@ import {
   listArtifactDocuments,
   listArtifactsByDocument,
   type ReadingArtifactDocumentRef,
+  type ReadingArtifactLocation,
   type ReadingArtifactItem,
   type ReadingArtifactItemType,
 } from '@/services/readingArtifactCenter'
@@ -36,6 +37,7 @@ import { useReadingMarksStore } from '@/stores/readingMarksStore'
 import { MORPHING_MOTION_TOKENS } from '@/components/common/useMorphingMotion'
 import { ArtifactCategoryLabels, ArtifactOrganizationActions, ArtifactOrganizationToolbar, useArtifactOrganization } from './ArtifactOrganizationControls'
 import type { ArtifactOrganizationFilter } from '@/services/database/artifactOrganization'
+import { OriginalSelections } from '@/components/ai/OriginalSelections'
 import './readingArtifactPaging.css'
 
 type DocumentAvailability = 'checking' | 'available' | 'unavailable'
@@ -175,7 +177,7 @@ export function ReadingArtifactCenter({
   focusKey,
   onCloseFocus,
 }: {
-  onOpenAiSource: (artifact: ReadingArtifact, documentRef: ReadingArtifactDocumentRef) => void | Promise<void>
+  onOpenAiSource: (artifact: ReadingArtifact, documentRef: ReadingArtifactDocumentRef, location?: ReadingArtifactLocation) => void | Promise<void>
   focusKey?: string | null
   onCloseFocus?: () => void
 }) {
@@ -643,9 +645,9 @@ export function ReadingArtifactCenter({
         await deleteAiArtifact(item.id)
         if (view === 'focus') { setLoadedItems([]); loadedItemsRef.current = [] }
       }}
-      onOpenAiSource={(ref) => {
+      onOpenAiSource={(ref, location) => {
       const artifact = aiById.get(item.id)
-        if (artifact) return onOpenAiSource(artifact, ref)
+        if (artifact) return onOpenAiSource(artifact, ref, location)
       }}
     />
   )
@@ -958,14 +960,14 @@ function ExpandableText({
   )
 }
 
-function ArtifactCard({ renderActions, categoryLabels, item, availability, anchorStatus, currentDocument, reducedMotion, expanded, onToggleExpand, onNavigateMark, onUpdateMark, onDeleteMark, onDeleteAi, onOpenAiSource }: { renderActions: (remove: () => void) => React.ReactNode; categoryLabels: React.ReactNode; item: ReadingArtifactItem; availability: Record<string, DocumentAvailability>; anchorStatus?: SourceAnchorStatus; currentDocument?: ReadingArtifactDocumentRef | null; reducedMotion: boolean; expanded: boolean; onToggleExpand?: () => void; onNavigateMark: () => void; onUpdateMark: (color?: ReadingMarkColor, note?: string) => Promise<unknown>; onDeleteMark: () => Promise<void>; onDeleteAi: () => Promise<void>; onOpenAiSource: (ref: ReadingArtifactDocumentRef) => void | Promise<void> }) {
+function ArtifactCard({ renderActions, categoryLabels, item, availability, anchorStatus, currentDocument, reducedMotion, expanded, onToggleExpand, onNavigateMark, onUpdateMark, onDeleteMark, onDeleteAi, onOpenAiSource }: { renderActions: (remove: () => void) => React.ReactNode; categoryLabels: React.ReactNode; item: ReadingArtifactItem; availability: Record<string, DocumentAvailability>; anchorStatus?: SourceAnchorStatus; currentDocument?: ReadingArtifactDocumentRef | null; reducedMotion: boolean; expanded: boolean; onToggleExpand?: () => void; onNavigateMark: () => void; onUpdateMark: (color?: ReadingMarkColor, note?: string) => Promise<unknown>; onDeleteMark: () => Promise<void>; onDeleteAi: () => Promise<void>; onOpenAiSource: (ref: ReadingArtifactDocumentRef, location?: ReadingArtifactLocation) => void | Promise<void> }) {
   const [editing, setEditing] = useState(false)
   const [note, setNote] = useState(item.content ?? '')
   const [contentOverflow, setContentOverflow] = useState<Record<string, boolean>>({})
   const [manualExpanded, setManualExpanded] = useState(false)
   const [questionExpanded, setQuestionExpanded] = useState(false)
   const isUser = item.source === 'user'
-  const refs = currentDocument ? [currentDocument] : item.documentRefs
+  const refs = item.documentRefs
   const webReferences = item.references?.filter((reference) => reference.kind === 'web') ?? []
   const question = item.question?.trim() || ''
   const collapsedTitle = question || item.title || '未记录原问题'
@@ -1007,7 +1009,7 @@ function ArtifactCard({ renderActions, categoryLabels, item, availability, ancho
     ) : (
       <>
         <div>
-        <div className="flex items-start gap-1 px-3.5 pt-3.5"><span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 text-micro font-bold text-gm-text-secondary"><span className="h-2.5 w-2.5 shrink-0 rounded-full bg-gm-primary" /><span className="rounded-full bg-gm-primary-subtle px-1.5 py-0.5 text-[10px] font-bold tracking-[0.04em] text-gm-primary">AI · {TYPE_LABELS[item.type]}</span>{(refs.length + webReferences.length) > 0 && <span className="font-normal text-gm-text-tertiary">· {refs.length + webReferences.length} 个来源</span>}<span className="ml-auto shrink-0 text-micro font-normal text-gm-text-tertiary">{new Date(item.createdAt).toLocaleDateString('zh-CN')}</span></span>{renderActions(remove)}</div>
+        <div className="flex items-center gap-1 px-3.5 pt-3.5"><span className="flex min-h-7 min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 text-micro font-bold text-gm-text-secondary"><span className="h-2.5 w-2.5 shrink-0 rounded-full bg-gm-primary" /><span className="rounded-full bg-gm-primary-subtle px-1.5 py-0.5 text-[10px] font-bold tracking-[0.04em] text-gm-primary">AI · {TYPE_LABELS[item.type]}</span>{(refs.length + webReferences.length) > 0 && <span className="font-normal text-gm-text-tertiary">· {refs.length + webReferences.length} 个来源</span>}<span className="ml-auto shrink-0 text-micro font-normal text-gm-text-tertiary">{new Date(item.createdAt).toLocaleDateString('zh-CN')}</span></span>{renderActions(remove)}</div>
         <button id={triggerId} type="button" aria-label={`AI · ${TYPE_LABELS[item.type]} ${collapsedTitle} ${expanded ? '收起' : '展开'}`} aria-expanded={expanded} aria-controls={contentId} onClick={(event) => {
           const selection = window.getSelection()
           if (event.detail > 0 && selection && !selection.isCollapsed && event.currentTarget.contains(selection.anchorNode)) return
@@ -1033,8 +1035,17 @@ function ArtifactCard({ renderActions, categoryLabels, item, availability, ancho
                   </div>
                   {contentOverflow.question && <button type="button" aria-expanded={questionExpanded} aria-controls={`${contentId}-question`} onClick={() => setQuestionExpanded((value) => !value)} className="mt-2 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-micro font-bold text-gm-primary outline-none transition-colors hover:bg-gm-primary/5 focus-visible:ring-1 focus-visible:ring-gm-primary/40"><span>{questionExpanded ? '收起原问题' : '展开原问题'}</span><ChevronDown size={14} strokeWidth={1.8} className={`transition-transform duration-200 ${questionExpanded ? 'rotate-180' : ''}`} aria-hidden="true" /></button>}
                 </section>
+                <OriginalSelections selections={item.originalSelections ?? []} />
                 <section className="rounded-xl border px-3 py-2.5" style={AI_REPLY_STYLES}><h4 className="mb-1.5 text-micro font-bold tracking-wide text-gm-primary">AI 回复</h4>{item.content?.trim() ? <div tabIndex={0} aria-label="AI 回复正文" className="max-h-80 overflow-y-auto pr-1 prose max-w-none text-caption leading-[1.65] text-gm-text [&_p]:my-1.5 [&_p]:text-[length:var(--gm-ai-chat-font-size)] [&_li]:text-[length:var(--gm-ai-chat-font-size)] [&_ul]:my-1.5 [&_ol]:my-1.5 [&_pre]:max-w-full [&_pre]:overflow-x-auto" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown></div> : <p className="text-caption text-gm-text-tertiary" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}>暂无 AI 回复内容</p>}</section>
-                <section><h4 className="mb-1.5 text-micro font-bold tracking-wide text-gm-text-tertiary">参考资料</h4><div className="flex flex-wrap gap-1.5">{refs.map((ref) => <button key={ref.documentId} type="button" aria-label={!ref.filePath || availability[ref.documentId] === 'unavailable' ? `${ref.fileName} · 来源文档不可用` : `${ref.fileName} · 查看原文`} disabled={!ref.filePath || availability[ref.documentId] === 'unavailable'} onClick={() => void onOpenAiSource(ref)} className="flex min-w-0 max-w-full items-center gap-2 rounded-xl border border-gm-border-subtle/80 bg-gm-canvas/45 px-2.5 py-2 text-left text-micro text-gm-text-secondary transition-colors hover:border-gm-primary/35 hover:text-gm-primary disabled:cursor-not-allowed disabled:text-gm-warning"><FileText size={15} strokeWidth={1.7} aria-hidden="true" /><span className="truncate">{availability[ref.documentId] === 'unavailable' || !ref.filePath ? `${ref.fileName} · 来源文档不可用` : `${ref.fileName} · 查看原文`}</span><ChevronRight size={14} strokeWidth={1.8} className="ml-auto shrink-0 text-gm-text-tertiary" aria-hidden="true" /></button>)}{webReferences.map((reference, index) => <a key={`${reference.url}-${index}`} aria-label={`打开来源 ${reference.title || reference.url}`} href={reference.url} target="_blank" rel="noreferrer" className="flex min-w-0 max-w-full items-center gap-2 rounded-xl border border-gm-border-subtle/80 bg-gm-canvas/45 px-2.5 py-2 text-left text-micro text-gm-text-secondary transition-colors hover:border-gm-primary/35 hover:text-gm-primary"><ExternalLink size={15} strokeWidth={1.7} aria-hidden="true" /><span className="truncate">{reference.title || reference.url}</span><ChevronRight size={14} strokeWidth={1.8} className="ml-auto shrink-0 text-gm-text-tertiary" aria-hidden="true" /></a>)}{refs.length === 0 && webReferences.length === 0 && <span className="text-micro text-gm-text-tertiary">暂无可跳转来源</span>}</div>{anchorStatus === 'changed' && <p className="mt-1.5 text-micro text-gm-warning">原文已变更，定位可能偏移</p>}</section>
+                <section><h4 className="mb-1.5 text-micro font-bold tracking-wide text-gm-text-tertiary">参考资料</h4>{item.referencedSourceIds !== undefined && <p className="mb-1.5 text-micro text-gm-text-tertiary">{item.referencedSourceIds.length ? `已确认引用：${item.referencedSourceIds.map((id) => `[${id}]`).join("、")}；其余为候选资料` : "候选资料 · 未确认引用"}</p>}<div className="flex flex-wrap gap-1.5">{refs.map((ref) => <div key={ref.documentId} className="min-w-0 max-w-full rounded-xl border border-gm-border-subtle/80 bg-gm-canvas/45 p-1">
+                  {ref.locations.length > 1 && <div className="px-1.5 py-1 text-micro font-bold text-gm-text-secondary">{ref.fileName}</div>}
+                  {(ref.locations.length ? ref.locations : [undefined]).map((location, index) => {
+                    const unavailable = !ref.filePath || availability[ref.documentId] === 'unavailable'
+                    const position = [location?.headingPath?.join(' / '), location?.startLine ? `L${location.startLine}-${location.endLine ?? location.startLine}` : ''].filter(Boolean).join(' · ')
+                    const label = `${ref.fileName}${ref.locations.length > 1 ? ` · ${position || `区块 ${index + 1}`}` : ''} · ${unavailable ? '来源文档不可用' : '查看原文'}`
+                    return <button key={index} type="button" aria-label={label} disabled={unavailable} onClick={() => void onOpenAiSource(ref, location)} className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-1.5 py-1 text-left text-micro transition-colors hover:text-gm-primary disabled:cursor-not-allowed disabled:text-gm-warning ${currentDocument?.documentId === ref.documentId ? 'text-gm-primary' : 'text-gm-text-secondary'}`}><FileText size={15} strokeWidth={1.7} aria-hidden="true" /><span className="min-w-0 flex-1"><span className="block truncate">{label}</span>{position && ref.locations.length <= 1 && <span className="block text-gm-text-tertiary">{position}</span>}</span><ChevronRight size={14} strokeWidth={1.8} className="shrink-0 text-gm-text-tertiary" aria-hidden="true" /></button>
+                  })}
+                </div>)}{webReferences.map((reference, index) => <a key={`${reference.url}-${index}`} aria-label={`打开来源 ${reference.title || reference.url}`} href={reference.url} target="_blank" rel="noreferrer" className="flex min-w-0 max-w-full items-center gap-2 rounded-xl border border-gm-border-subtle/80 bg-gm-canvas/45 px-2.5 py-2 text-left text-micro text-gm-text-secondary transition-colors hover:border-gm-primary/35 hover:text-gm-primary"><ExternalLink size={15} strokeWidth={1.7} aria-hidden="true" /><span className="truncate">{reference.title || reference.url}</span><ChevronRight size={14} strokeWidth={1.8} className="ml-auto shrink-0 text-gm-text-tertiary" aria-hidden="true" /></a>)}{refs.length === 0 && webReferences.length === 0 && <span className="text-micro text-gm-text-tertiary">暂无可跳转来源</span>}</div>{anchorStatus === 'changed' && <p className="mt-1.5 text-micro text-gm-warning">原文已变更，定位可能偏移</p>}</section>
               </div>
 
             </div>

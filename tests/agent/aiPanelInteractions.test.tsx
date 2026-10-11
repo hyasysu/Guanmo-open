@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import type { ChatMessage } from '@/services/ai/types'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AiPanel } from '@/components/ai/AiPanel'
 import { StatusBar } from '@/components/layout/StatusBar'
@@ -12,7 +13,7 @@ const aiChat = vi.hoisted(() => ({
   messages: [
     { id: 'user-1', role: 'user' as const, content: '匿名问题', timestamp: 1 },
     { id: 'assistant-1', parentId: 'user-1', role: 'assistant' as const, content: '匿名回答', timestamp: 2 },
-  ],
+  ] as ChatMessage[],
   streaming: false,
   error: null,
   timeline: [],
@@ -106,6 +107,7 @@ describe('AI 面板视图返回', () => {
     useSettingsStore.getState().updateAppearanceSettings({ aiAssistantFontSize: 14, sendMessageAnimationEnabled: false })
     readingArtifacts.setQuery.mockReset()
     readingArtifacts.setPage.mockReset()
+    readingArtifacts.saveArtifactFromMessage.mockReset().mockResolvedValue(artifactFixture)
     scrollTo.mockReset()
     Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
       configurable: true,
@@ -207,6 +209,51 @@ describe('AI 面板视图返回', () => {
 
     expect(panel.style.getPropertyValue('--gm-ai-chat-font-size')).toBe('18px')
     expect(panel.style.getPropertyValue('--gm-ai-chat-meta-font-size')).toBe('calc(18px - 2px)')
+  })
+
+  it.each(['selection', 'rag', 'web', 'mixed'] as const)('按parentId显示并保存%s回复的原始选区，候选/引用保持分离', async (mode) => {
+    const sources: ChatMessage['sources'] = mode === 'selection' ? [] : [
+      ...(mode !== 'web' ? [{ kind: 'local' as const, filePath: 'C:/anonymous/Rag.md', fileName: 'Rag.md', startLine: 8, endLine: 9 }] : []),
+      ...(mode !== 'rag' ? [{ kind: 'web' as const, title: '检索网页', url: 'https://example.com' }] : []),
+    ]
+    aiChat.messages = [
+      { id: 'user-old', role: 'user', content: '旧问题', tags: [{ type: 'selection', title: '旧选区', filePath: null, content: '旧轮文本', preview: '旧轮文本' }] },
+      { id: 'user-1', role: 'user', content: '当轮问题', tags: [
+        { type: 'selection', title: 'A.md', filePath: 'C:/anonymous/A.md', content: '当轮选中文本', preview: '预览', startLine: 2, endLine: 3 },
+        { type: 'selection', title: 'A.md', filePath: 'C:/anonymous/A.md', content: '当轮第二选区', preview: '预览', startLine: 5, endLine: 6 },
+      ] },
+      { id: 'assistant-1', parentId: 'user-1', role: 'assistant', content: '匿名回答', sources, referencedSourceIds: sources.length ? ['S1'] : [] },
+    ]
+    useChatStore.getState().addContextTag({ type: 'selection', title: '新草稿', filePath: null, content: '不能用的当前选区', preview: '新草稿' })
+    render(<AiPanel />)
+    const assistant = document.querySelector('[data-chat-message-id="assistant-1"]')!
+    const contextToggle = within(assistant as HTMLElement).getByRole('button', { name: /^来源 · / })
+    expect(contextToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(within(assistant as HTMLElement).queryByText('当轮选中文本')).not.toBeInTheDocument()
+    fireEvent.click(contextToggle)
+    expect(contextToggle).toHaveAttribute('aria-expanded', 'true')
+    expect(within(assistant as HTMLElement).getByTitle('Open C:/anonymous/A.md:2-3')).toBeInTheDocument()
+    expect(within(assistant as HTMLElement).getByTitle('Open C:/anonymous/A.md:5-6')).toBeInTheDocument()
+    expect(assistant).not.toHaveTextContent('原始选区')
+    expect(within(assistant as HTMLElement).queryByText('当轮选中文本')).not.toBeInTheDocument()
+    expect(within(assistant as HTMLElement).queryByText('当轮第二选区')).not.toBeInTheDocument()
+    expect(assistant).not.toHaveTextContent('旧轮文本')
+    expect(assistant).not.toHaveTextContent('不能用的当前选区')
+    fireEvent.click(within(assistant as HTMLElement).getByRole('button', { name: '保存回复' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '摘要' }))
+    expect(readingArtifacts.saveArtifactFromMessage).toHaveBeenCalledWith(expect.objectContaining({
+      question: '当轮问题', sources, referencedSourceIds: sources.length ? ['S1'] : [],
+      originalSelections: [expect.objectContaining({ text: '当轮选中文本', startLine: 2 }), expect.objectContaining({ text: '当轮第二选区', startLine: 5 })],
+    }))
+  })
+
+  it('没有关联用户消息时不猜相邻选区', () => {
+    aiChat.messages = [
+      { id: 'user-1', role: 'user', content: '问题', tags: [{ type: 'selection', title: '片段', filePath: null, content: '不可猜测', preview: '预览' }] },
+      { id: 'assistant-1', parentId: 'missing', role: 'assistant', content: '匿名回答' },
+    ]
+    render(<AiPanel />)
+    expect(document.querySelector('[data-chat-message-id="assistant-1"]')).not.toHaveTextContent('来源 · ')
   })
 
   it('默认关闭时按 Enter 发送不会创建光点', () => {

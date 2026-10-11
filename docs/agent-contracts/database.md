@@ -26,6 +26,12 @@
 - 备份导入必须在 SQLite 事务中完成，失败回滚。
 - 数据边界回归使用 `npm run test:runtime-schemas`。
 
+## AI 阅读成果消息快照
+
+- 保存回复时仅通过助手 `parentId` 取得对应用户消息的 selection tags，不用相邻消息、当前草稿或当前文件补造历史。
+- `reading_artifacts.structured_content` 可选保存 `originalSelections`（文本、文件、有效行号/偏移、截断及仅预览标识）、完整 `sourceCandidates` 与 `referencedSourceIds`；有文件和有效行号的选区追加到成果 `references`，按文件与行号去重，供来源跳转和按文档查询使用；不插入模型候选 `sourceCandidates`，不改变 `[S1…]` 映射。旧成果缺字段继续兼容；已保存选区快照的成果读取时合并定位来源，不写回或猜测缺失坐标。
+- 快照在异步补全来源哈希前复制，保存后不依赖聊天记录或来源文件仍存在。备份沿用原结构化 JSON，无新表、迁移或版本升级。
+
 ## ReadingMark 持久化
 
 - `reading_marks` 为独立表，SQLite/Rust 命令提供按 ID、按文档、全量分页读取、upsert 与删除；Rust 校验枚举、路径与 offset，并由 Rust 刷新 `updated_at`、保留 `created_at`。

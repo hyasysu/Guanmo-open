@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   navigateToReadingMark: vi.fn(),
   loadReadingMarksPage: vi.fn(),
   loadReadingArtifactsPage: vi.fn(),
+  loadFocusedArtifact: vi.fn(),
 }))
 
 vi.mock('@/hooks/useTauri', async (importOriginal) => ({
@@ -38,11 +39,13 @@ vi.mock('@/services/readingMarks', async (importOriginal) => ({
 vi.mock('@/services/agent/artifactCommands', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/services/agent/artifactCommands')>()),
   loadReadingArtifactsPageCommand: mocks.loadReadingArtifactsPage,
+  loadReadingArtifactItemByKeyCommand: mocks.loadFocusedArtifact,
 }))
 
 import { ReadingArtifactCenter } from '@/components/reading-artifacts/ReadingArtifactCenter'
 import { useReadingArtifactsStore } from '@/stores/readingArtifactsStore'
 import { useReadingMarksStore } from '@/stores/readingMarksStore'
+import { adaptAiReadingArtifact } from '@/services/readingArtifactCenter'
 
 const readingMark: ReadingMark = {
   id: 'mark-1',
@@ -335,7 +338,42 @@ describe('ReadingArtifactCenter', () => {
     expect(onOpenAiSource).toHaveBeenCalledWith(
       aiArtifact,
       expect.objectContaining({ documentId: 'path:c:/anonymous/b.md', fileName: 'B.md' }),
+      expect.objectContaining({ startLine: 1, endLine: 1 }),
     )
+  })
+
+  it.each(['recent', 'documents', 'focus'] as const)('keeps all files and selectable blocks in %s', async (entry) => {
+    const artifact: ReadingArtifact = {
+      ...aiArtifact,
+      structuredContent: { question: '多区块问题', references: [
+        { kind: 'local', filePath: 'C:/anonymous/A.md', fileName: 'A.md', titlePath: ['第一节'], startLine: 1, endLine: 2 },
+        { kind: 'local', filePath: 'C:/anonymous/A.md', fileName: 'A.md', titlePath: ['第二节'], startLine: 5, endLine: 6 },
+        { kind: 'local', filePath: 'C:/anonymous/B.md', fileName: 'B.md', startLine: 3, endLine: 4 },
+      ] },
+    }
+    mocks.loadReadingArtifactsPage.mockResolvedValue({ artifacts: [artifact], total: 1 })
+    mocks.fileExists.mockResolvedValue(true)
+    useReadingArtifactsStore.setState({ artifacts: [artifact], allArtifacts: [artifact] })
+    mocks.loadFocusedArtifact.mockResolvedValue({ item: adaptAiReadingArtifact(artifact), artifact })
+    const onOpen = vi.fn()
+    render(<ReadingArtifactCenter onOpenAiSource={onOpen} focusKey={entry === 'focus' ? 'ai:artifact-1' : undefined} />)
+    if (entry === 'documents') {
+      await screen.findByRole('button', { name: /AI · AI 解读.*多区块问题/ })
+      fireEvent.click(screen.getByRole('tab', { name: '按文档' }))
+      fireEvent.click(await screen.findByRole('button', { name: /A\.md/ }))
+      fireEvent.click(screen.getByRole('button', { name: '排序：原文顺序' }))
+      fireEvent.click(screen.getByRole('menuitemradio', { name: '时间顺序' }))
+    }
+    const toggle = await screen.findByRole('button', { name: /AI · AI 解读.*多区块问题/ })
+    if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle)
+    await screen.findByRole('button', { name: /A\.md.*第二节.*L5-6/ })
+    const card = screen.getByRole('button', { name: /AI · AI 解读.*多区块问题/ }).closest('article')!
+    expect(within(card).getByRole('button', { name: 'B.md · 查看原文' })).toBeInTheDocument()
+    fireEvent.click(within(card).getByRole('button', { name: /A\.md.*第二节.*L5-6/ }))
+    expect(onOpen).toHaveBeenCalledWith(artifact,
+      expect.objectContaining({ fileName: 'A.md', locations: expect.any(Array) }),
+      { headingPath: ['第二节'], startLine: 5, endLine: 6 })
+    expect(within(card).getAllByRole('button', { name: /A\.md.*L/ })).toHaveLength(2)
   })
 
   it('keeps AI results collapsed and shows the three reading layers one at a time', async () => {
@@ -360,6 +398,20 @@ describe('ReadingArtifactCenter', () => {
     expect(questionSet).toHaveAttribute('aria-expanded', 'true')
     expect(explanation).toHaveAttribute('aria-expanded', 'false')
     expect(screen.getByText('未记录原问题')).toBeInTheDocument()
+  })
+
+  it('shows pathless truncated original selections separately from reference candidates and confirmed IDs', async () => {
+    mocks.loadReadingArtifactsPage.mockResolvedValue({ artifacts: [{ ...aiArtifact, structuredContent: {
+      ...aiArtifact.structuredContent,
+      originalSelections: [{ title: '历史片段', text: '独立的历史选区文本', filePath: null, truncated: true, previewOnly: false }],
+      referencedSourceIds: ['S2'],
+    } }], total: 1 })
+    render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: /AI · AI 解读.*匿名问题/ }))
+    expect(screen.getByText('独立的历史选区文本')).toBeInTheDocument()
+    expect(screen.getByText(/历史片段.*未绑定文件.*内容已截断/)).toBeInTheDocument()
+    expect(screen.getByText('已确认引用：[S2]；其余为候选资料')).toBeInTheDocument()
+    expect(screen.getByText('参考资料')).toBeInTheDocument()
   })
 
   it('allows selecting card content without toggling the AI card on selection release', async () => {

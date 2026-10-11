@@ -26,6 +26,8 @@ vi.mock('@/services/database/persistence', () => ({
 }))
 
 import { useReadingArtifactsStore } from '@/stores/readingArtifactsStore'
+import { buildOriginalSelections } from '@/services/originalSelections'
+import { getReadingArtifactOriginalSelections, getReadingArtifactReferencedSourceIds } from '@/services/database/readingArtifacts'
 
 function createArtifact(id: string, overrides: Partial<ReadingArtifact> = {}): ReadingArtifact {
   return {
@@ -153,10 +155,55 @@ describe('readingArtifactsStore 保存消息来源', () => {
 
     const input = mocks.persistReadingArtifact.mock.calls[0][0]
     expect(input.source).toBeNull()
-    expect(input.structuredContent).toEqual({
+    expect(input.structuredContent).toMatchObject({
       references: [{ kind: 'web', title: '匿名网页', url: 'https://example.com/web-only' }],
     })
     expect(mocks.loadDocumentContentHashByPath).not.toHaveBeenCalled()
+  })
+
+  it('保存前捕获独立选区及候选来源，不因异步等待或引用过滤改号', async () => {
+    let resolveHash!: (value: string) => void
+    mocks.loadDocumentContentHashByPath.mockReturnValue(new Promise<string>((resolve) => { resolveHash = resolve }))
+    const selections = buildOriginalSelections([{ type: 'selection', title: '原选区', filePath: null, content: '历史文本', preview: '历史文本' }])
+    const sources = [
+      { kind: 'local' as const, filePath: 'C:/anonymous/A.md', fileName: 'A.md', startLine: 1, endLine: 2 },
+      { kind: 'web' as const, title: '候选网页', url: 'https://example.com', snippet: '完整候选快照' },
+    ]
+    const saving = useReadingArtifactsStore.getState().saveArtifactFromMessage({
+      type: 'summary', title: '摘要', content: '回答 [S2]', originalSelections: selections,
+      sources, referencedSourceIds: ['S2'], question: '当轮问题',
+    })
+    selections[0].text = '新的草稿选区'
+    sources[1].title = '后来的来源'
+    resolveHash('hash')
+    const saved = (await saving)!
+    expect(getReadingArtifactOriginalSelections(saved)[0].text).toBe('历史文本')
+    expect(getReadingArtifactReferencedSourceIds(saved)).toEqual(['S2'])
+    expect(saved.structuredContent).toMatchObject({ sourceCandidates: [sources[0], { title: '候选网页', snippet: '完整候选快照' }],
+      references: [sources[0], { kind: 'web', title: '候选网页', url: 'https://example.com' }] })
+    useReadingArtifactsStore.setState({ artifacts: [], allArtifacts: [] })
+    await useReadingArtifactsStore.getState().loadArtifacts()
+    expect(getReadingArtifactOriginalSelections(useReadingArtifactsStore.getState().artifacts[0])[0].text).toBe('历史文本')
+  })
+
+  it.each(['selection', 'web', 'mixed'] as const)('将%s请求的原选区持久化到来源，保持检索引用编号', async (mode) => {
+    const sources = mode === 'selection' ? [] : [
+      { kind: 'web' as const, title: '网页', url: 'https://example.com' },
+      ...(mode === 'mixed' ? [{ kind: 'local' as const, filePath: 'C:/anonymous/B.md', fileName: 'B.md', startLine: 8, endLine: 9 }] : []),
+    ]
+    const originalSelections = buildOriginalSelections([
+      { type: 'selection', title: '选区', filePath: 'C:/anonymous/A.md', startLine: 3, endLine: 4, content: '原文', preview: '原文' },
+      { type: 'selection', title: '重复选区', filePath: 'c:/ANONYMOUS/a.md', startLine: 3, endLine: 4, content: '原文', preview: '原文' },
+      { type: 'selection', title: '未绑定文件', filePath: null, content: '片段', preview: '片段' },
+    ])
+    const saved = (await useReadingArtifactsStore.getState().saveArtifactFromMessage({
+      type: 'summary', title: '摘要', content: '回答', sources, originalSelections, referencedSourceIds: sources.length ? ['S1'] : [],
+    }))!
+    expect(saved.structuredContent).toMatchObject({
+      references: [...sources, { kind: 'local', filePath: 'C:/anonymous/A.md', fileName: 'A.md', startLine: 3, endLine: 4 }],
+      referencedSourceIds: sources.length ? ['S1'] : [],
+    })
+    expect(getReadingArtifactOriginalSelections(saved)).toHaveLength(3)
   })
 
   it('使用服务端组合筛选、分页和准确总数，并在条件变化时回到第一页', async () => {
