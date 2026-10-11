@@ -36,6 +36,7 @@ import { useReadingMarksStore } from '@/stores/readingMarksStore'
 import { MORPHING_MOTION_TOKENS } from '@/components/common/useMorphingMotion'
 import { ArtifactCategoryLabels, ArtifactOrganizationActions, ArtifactOrganizationToolbar, useArtifactOrganization } from './ArtifactOrganizationControls'
 import type { ArtifactOrganizationFilter } from '@/services/database/artifactOrganization'
+import './readingArtifactPaging.css'
 
 type DocumentAvailability = 'checking' | 'available' | 'unavailable'
 type CenterView = 'recent' | 'documents' | 'detail' | 'focus'
@@ -208,6 +209,8 @@ export function ReadingArtifactCenter({
   const [itemsTotal, setItemsTotal] = useState(0)
   const [itemsLoading, setItemsLoading] = useState(true)
   const [itemsLoadingMore, setItemsLoadingMore] = useState(false)
+  const [itemsHasMore, setItemsHasMore] = useState(false)
+  const [enteringItems, setEnteringItems] = useState<ReadonlyMap<string, number>>(() => new Map())
   const [itemsError, setItemsError] = useState<string | null>(null)
   const [documentPage, setDocumentPage] = useState<ReadingArtifactDocumentPage>({ documents: [], total: 0, hasMore: false })
   const [documentsLoading, setDocumentsLoading] = useState(true)
@@ -215,12 +218,14 @@ export function ReadingArtifactCenter({
   const loadedAiArtifactsRef = useRef<ReadingArtifact[]>([])
   const documentPageRef = useRef<ReadingArtifactDocumentPage>({ documents: [], total: 0, hasMore: false })
   const requestSequenceRef = useRef(0)
+  const appendRequestRef = useRef<number | null>(null)
   const documentRequestSequenceRef = useRef(0)
   const searchDebounceRef = useRef<number | null>(null)
   const [expandedAiKey, setExpandedAiKey] = useState<string | null>(null)
   const reducedMotion = useReducedMotion() ?? false
   const rootRef = useRef<HTMLDivElement>(null)
   const contentScrollerRef = useRef<HTMLDivElement>(null)
+  const prefetchCardRef = useRef<HTMLDivElement>(null)
   const detailHeadingRef = useRef<HTMLHeadingElement>(null)
   const returnFocusRef = useRef<HTMLButtonElement | null>(null)
   const previousViewRef = useRef<CenterView>('recent')
@@ -255,9 +260,11 @@ export function ReadingArtifactCenter({
   }), [activeTypes, detailSort, organizationFilter, query, selectedDocument, view])
 
   const loadItems = useCallback(async (append: boolean, quiet = false) => {
+    if (append && appendRequestRef.current !== null) return
     const offset = append ? loadedItemsRef.current.length : 0
-    const limit = !append && view === 'recent' ? 10 : queryOptions.limit
+    const limit = view === 'recent' ? 5 : queryOptions.limit
     const requestId = ++requestSequenceRef.current
+    appendRequestRef.current = append ? requestId : null
     if (append) setItemsLoadingMore(true)
     else if (!quiet) setItemsLoading(true)
     setItemsError(null)
@@ -292,7 +299,11 @@ export function ReadingArtifactCenter({
       const next = view === 'detail'
         ? listArtifactsByDocument(filtered, selectedDocument?.documentId ?? null)
         : filtered
-      const combined = append ? [...loadedItemsRef.current, ...next] : next
+      const existingKeys = new Set(loadedItemsRef.current.map((item) => item.key))
+      const added = append ? next.filter((item) => !existingKeys.has(item.key)) : next
+      const combined = append ? [...loadedItemsRef.current, ...added] : next
+      setEnteringItems(new Map(append ? added.map((item, index) => [item.key, index]) : []))
+      setItemsHasMore(result.hasMore && added.length > 0)
       const nextArtifacts = append
         ? [...loadedAiArtifactsRef.current, ...result.artifacts.filter((artifact) => !loadedAiArtifactsRef.current.some((current) => current.id === artifact.id))]
         : result.artifacts
@@ -305,6 +316,7 @@ export function ReadingArtifactCenter({
     } catch (error) {
       if (requestId === requestSequenceRef.current) setItemsError(error instanceof Error ? error.message : String(error))
     } finally {
+      if (appendRequestRef.current === requestId) appendRequestRef.current = null
       if (requestId === requestSequenceRef.current) {
         setItemsLoading(false)
         setItemsLoadingMore(false)
@@ -418,6 +430,17 @@ export function ReadingArtifactCenter({
   const aiById = useMemo(() => new Map(loadedAiArtifacts.map((artifact) => [artifact.id, artifact])), [loadedAiArtifacts])
   const items = loadedItems
   const recentItems = useMemo(() => listRecentArtifacts(items), [items])
+  useEffect(() => {
+    const scroller = contentScrollerRef.current
+    const target = prefetchCardRef.current
+    if (view !== 'recent' || itemsLoading || itemsLoadingMore || itemsError || !itemsHasMore || !scroller || !target) return
+    let cancelled = false
+    const observer = new IntersectionObserver((entries) => {
+      if (!cancelled && entries.some((entry) => entry.isIntersecting)) void loadItems(true)
+    }, { root: scroller })
+    observer.observe(target)
+    return () => { cancelled = true; observer.disconnect() }
+  }, [view, itemsLoading, itemsLoadingMore, itemsError, itemsHasMore, recentItems, loadItems])
   const documentSummaries = useMemo(() => documentPage.documents.map((summary) => ({
       documentRef: summary.documentId === '__independent__' ? null : {
         documentId: documentIdForSummary(summary),
@@ -446,10 +469,11 @@ export function ReadingArtifactCenter({
       setAvailability((current) => current[ref.documentId] ? current : { ...current, [ref.documentId]: 'checking' })
       void fileExists(ref.filePath)
         .then((exists) => {
-          if (!cancelled) setAvailability((current) => ({ ...current, [ref.documentId]: exists ? 'available' : 'unavailable' }))
+          const status = exists ? 'available' : 'unavailable'
+          if (!cancelled) setAvailability((current) => current[ref.documentId] === status ? current : { ...current, [ref.documentId]: status })
         })
         .catch(() => {
-          if (!cancelled) setAvailability((current) => ({ ...current, [ref.documentId]: 'unavailable' }))
+          if (!cancelled) setAvailability((current) => current[ref.documentId] === 'unavailable' ? current : { ...current, [ref.documentId]: 'unavailable' })
         })
     }
     return () => { cancelled = true }
@@ -563,6 +587,7 @@ export function ReadingArtifactCenter({
   }
 
   useEffect(() => () => {
+    requestSequenceRef.current += 1
     if (searchDebounceRef.current !== null) window.clearTimeout(searchDebounceRef.current)
   }, [])
 
@@ -694,7 +719,7 @@ export function ReadingArtifactCenter({
 
       <div ref={contentScrollerRef} role="region" aria-label="阅读成果内容" tabIndex={0} className="min-h-0 flex-1 overflow-y-auto px-4 pb-3 outline-none">
           {loading ? <EmptyState text="正在加载阅读成果…" /> : view === 'recent' ? (
-            <RecentView items={recentItems} renderCard={renderCard} />
+            <RecentView items={recentItems} renderCard={renderCard} prefetchCardRef={prefetchCardRef} scrollerRef={contentScrollerRef} enteringItems={enteringItems} reducedMotion={reducedMotion} />
           ) : view === 'documents' ? (
             <DocumentView summaries={documentSummaries} availability={availability} onOpen={openDocument} />
           ) : view === 'focus' ? (
@@ -712,10 +737,15 @@ export function ReadingArtifactCenter({
           {itemsError && (
             <div className="mt-3 flex items-center justify-center gap-2 text-micro text-gm-error">
               <span>加载失败：{itemsError}</span>
-              <button type="button" className="underline underline-offset-2" onClick={() => void (view === 'documents' ? loadDocuments(false) : loadItems(false))}>重试</button>
+              <button type="button" className="underline underline-offset-2" onClick={() => void (view === 'documents' ? loadDocuments(false) : loadItems(view === 'recent' && items.length > 0))}>重试</button>
             </div>
           )}
-          {view !== 'documents' && items.length > 0 && items.length < itemsTotal && (
+          {view === 'recent' && !loading && items.length > 0 && (
+            <div role="status" aria-live="polite" className="flex h-12 items-center justify-center text-caption text-gm-text-tertiary">
+              {itemsLoadingMore ? <><span className="sr-only">正在加载更多阅读成果</span><span aria-hidden="true" className="gm-artifact-loading-dots"><i /><i /><i /></span></> : !itemsHasMore && !itemsError ? '没有更多了' : null}
+            </div>
+          )}
+          {view === 'detail' && items.length > 0 && items.length < itemsTotal && (
             <button type="button" disabled={itemsLoadingMore} onClick={() => void loadItems(true)} className="mt-3 w-full rounded-md border border-gm-border py-2 text-caption text-gm-text-secondary hover:bg-gm-surface-hover disabled:opacity-50">{itemsLoadingMore ? '加载中…' : '加载更多'}</button>
           )}
           {view === 'documents' && documentPage.documents.length > 0 && documentPage.documents.length < documentPage.total && (
@@ -741,14 +771,58 @@ function FilterCheck({ type, checked, onToggle }: { type: ReadingArtifactItemTyp
   return <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-caption hover:bg-gm-surface-hover"><input type="checkbox" checked={checked} onChange={() => onToggle(type)} />{TYPE_LABELS[type]}</label>
 }
 
-function RecentView({ items, renderCard }: { items: ReadingArtifactItem[]; renderCard: (item: ReadingArtifactItem) => React.ReactNode }) {
+function RecentView({ items, renderCard, prefetchCardRef, scrollerRef, enteringItems, reducedMotion }: { items: ReadingArtifactItem[]; renderCard: (item: ReadingArtifactItem) => React.ReactNode; prefetchCardRef: React.RefObject<HTMLDivElement>; scrollerRef: React.RefObject<HTMLDivElement>; enteringItems: ReadonlyMap<string, number>; reducedMotion: boolean }) {
+  const entranceQueue = useRef(new Map<string, { element: HTMLDivElement; start: (delay: number) => void }>())
+  const nextEntranceAt = useRef(0)
+  const registerEntrance = useCallback((key: string, element: HTMLDivElement, start: (delay: number) => void) => {
+    const entry = { element, start }
+    entranceQueue.current.set(key, entry)
+    return () => { if (entranceQueue.current.get(key) === entry) entranceQueue.current.delete(key) }
+  }, [])
+  const revealThrough = useCallback((key: string) => {
+    const queue = [...entranceQueue.current.entries()].sort(([, left], [, right]) =>
+      left.element.compareDocumentPosition(right.element) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1)
+    const last = queue.findIndex(([pendingKey]) => pendingKey === key)
+    if (last < 0) return
+    const now = performance.now()
+    let startAt = Math.max(now, nextEntranceAt.current)
+    for (const [pendingKey, entry] of queue.slice(0, last + 1)) {
+      entranceQueue.current.delete(pendingKey)
+      entry.start(startAt - now)
+      startAt += 50
+    }
+    nextEntranceAt.current = startAt
+  }, [])
   if (items.length === 0) return <EmptyState text="当前条件下没有阅读成果" />
   const dates = new Map<string, ReadingArtifactItem[]>()
   for (const item of items) {
     const date = dateGroupLabel(item.createdAt)
     dates.set(date, [...(dates.get(date) ?? []), item])
   }
-  return <div className="space-y-6">{[...dates].map(([date, grouped]) => <section key={date}><h3 className="mb-2 text-caption font-bold text-gm-text-secondary">{date}</h3><div className="space-y-2">{grouped.map((item) => renderCard(item))}</div></section>)}</div>
+  const prefetchKey = items[Math.max(0, items.length - 2)]?.key
+  return <div className="space-y-6">{[...dates].map(([date, grouped]) => <section key={date}><h3 className="mb-2 text-caption font-bold text-gm-text-secondary">{date}</h3><div className="space-y-2">{grouped.map((item) => <div key={item.key} ref={item.key === prefetchKey ? prefetchCardRef : undefined}><RecentCardEntrance artifactKey={item.key} index={enteringItems.get(item.key)} scrollerRef={scrollerRef} reducedMotion={reducedMotion} registerEntrance={registerEntrance} revealThrough={revealThrough}>{renderCard(item)}</RecentCardEntrance></div>)}</div></section>)}</div>
+}
+
+function RecentCardEntrance({ artifactKey, index, scrollerRef, reducedMotion, registerEntrance, revealThrough, children }: { artifactKey: string; index?: number; scrollerRef: React.RefObject<HTMLDivElement>; reducedMotion: boolean; registerEntrance: (key: string, element: HTMLDivElement, start: (delay: number) => void) => () => void; revealThrough: (key: string) => void; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const delay = useRef(0)
+  const [phase, setPhase] = useState(index !== undefined && !reducedMotion ? 'pending' : 'done')
+  useEffect(() => {
+    if (phase !== 'pending' || reducedMotion || !ref.current || !scrollerRef.current) return
+    const unregister = registerEntrance(artifactKey, ref.current, (wait) => {
+      delay.current = wait
+      setPhase('entering')
+    })
+    let cancelled = false
+    const observer = new IntersectionObserver((entries) => {
+      if (!cancelled && entries.some((entry) => entry.isIntersecting)) {
+        revealThrough(artifactKey)
+      }
+    }, { root: scrollerRef.current })
+    observer.observe(ref.current)
+    return () => { cancelled = true; observer.disconnect(); unregister() }
+  }, [phase, reducedMotion, scrollerRef, artifactKey, registerEntrance, revealThrough])
+  return <div ref={ref} className={reducedMotion || phase === 'done' ? undefined : phase === 'pending' ? 'gm-artifact-card-pending' : 'gm-artifact-card-enter'} style={{ '--gm-artifact-enter-delay': `${delay.current}ms` } as CSSProperties} onAnimationEnd={(event) => { if (event.target === event.currentTarget) setPhase('done') }}>{children}</div>
 }
 
 function DocumentView({ summaries, availability, onOpen }: { summaries: ReturnType<typeof listArtifactDocuments>; availability: Record<string, DocumentAvailability>; onOpen: (ref: ReadingArtifactDocumentRef | null, origin?: HTMLButtonElement) => void }) {
