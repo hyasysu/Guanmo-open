@@ -1,6 +1,6 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate } from '@codemirror/view'
-import { StateField, StateEffect, Range } from '@codemirror/state'
+import { StateField, StateEffect, Range, Compartment, Text } from '@codemirror/state'
 
 // --- CodeMirror manual search via decorations ---
 
@@ -24,7 +24,7 @@ const searchField = StateField.define<DecorationSet>({
   update(deco, tr) {
     for (const effect of tr.effects) {
       if (effect.is(setSearchQuery)) {
-        const { query, caseSensitive, currentMatch, matches } = effect.value
+        const { query, currentMatch, matches } = effect.value
         if (!query || matches.length === 0) return Decoration.none
         const decos: Range<Decoration>[] = matches.map((m, i) =>
           (i === currentMatch ? activeDeco : markDeco).range(m.from, m.to)
@@ -35,7 +35,7 @@ const searchField = StateField.define<DecorationSet>({
         return Decoration.none
       }
     }
-    return deco.map(tr.changes)
+    return tr.docChanged ? Decoration.none : deco
   },
   provide: (f) => EditorView.decorations.from(f),
 })
@@ -73,32 +73,35 @@ export function findNearestMatchIndex(matches: { from: number; to: number }[], a
 
 // --- Component ---
 
+interface PreviewSearchHandle {
+  scrollToOffset: (offset: number) => void
+  setSearchState?: (state: { query: string; activeOffset?: number } | null) => void
+  searchVisible?: (query: string) => Array<{ from: number; to: number }>
+  getViewportOffset?: () => number | undefined
+}
+
+interface PreviewSource {
+  content: string
+  targetKey?: string
+  ready?: boolean
+  paneRef: React.RefObject<HTMLDivElement | null>
+  previewRef: React.RefObject<PreviewSearchHandle | null>
+}
+
 interface SearchOverlayProps {
   onClose: () => void
   editorViewRef?: React.MutableRefObject<EditorView | null>
+  editorView?: EditorView | null
+  targetKey?: string
   searchRequest?: SearchRequest
-  previewSources?: Array<{
-    content: string
-    paneRef: React.RefObject<HTMLDivElement | null>
-    previewRef: React.RefObject<{
-      scrollToOffset: (offset: number) => void
-      setSearchState?: (state: { query: string; activeOffset?: number } | null) => void
-      /** 可见文本投影搜索（与预览高亮同一语义）；未提供时回退原文扫描 */
-      searchVisible?: (query: string) => Array<{ from: number; to: number }>
-      /** 当前视口顶部对应的源码 offset；未提供时锚点兜底为文档首个匹配 */
-      getViewportOffset?: () => number | undefined
-    } | null>
-  }>
+  previewSources?: PreviewSource[]
 }
 
 export interface SearchRequest {
   requestId: number
   target: 'editor' | 'preview'
   initialQuery: string
-  anchor?: {
-    offset: number
-    sourceIndex?: number
-  }
+  anchor?: { offset: number; sourceIndex?: number }
 }
 
 interface PreviewMatch {
@@ -107,243 +110,224 @@ interface PreviewMatch {
   to: number
 }
 
-export function SearchOverlay({ onClose, editorViewRef, searchRequest, previewSources = [] }: SearchOverlayProps) {
+interface SearchBinding {
+  view: EditorView | null
+  key?: string
+  sources: Array<{ handle: PreviewSearchHandle | null; key?: string; content: string; ready: boolean }>
+  compartment: Compartment
+  alive: boolean
+}
+
+export function SearchOverlay({ onClose, editorViewRef, editorView, targetKey, searchRequest, previewSources = [] }: SearchOverlayProps) {
   const isEditor = !!editorViewRef
   const [query, setQuery] = useState(searchRequest?.initialQuery ?? '')
+  const queryRef = useRef(query)
   const [replaceText, setReplaceText] = useState('')
   const [matchCount, setMatchCount] = useState(0)
-  const [currentMatch, setCurrentMatch] = useState(0)
-  const currentMatchRef = useRef(0)
-  const matchesRef = useRef<{ from: number; to: number }[]>([])
-  const previewMatchesRef = useRef<PreviewMatch[]>([])
+  const [currentMatch, setCurrentMatch] = useState(-1)
+  const currentMatchRef = useRef(-1)
+  const matchesRef = useRef<PreviewMatch[]>([])
+  const searchedDocRef = useRef<Text | null>(null)
+  const bindingRef = useRef<SearchBinding | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const appliedSearchRequestIdRef = useRef<number | null>(null)
+  const refreshRef = useRef<() => void>(() => {})
+  const requestOriginRef = useRef({ id: searchRequest?.requestId, key: targetKey, isEditor })
 
-  // Ensure searchField is in editor's extensions
-  useEffect(() => {
-    const view = editorViewRef?.current
-    if (!view) return
-    // Add searchField if not already present
-    if (!view.state.field(searchField, false)) {
-      view.dispatch({ effects: StateEffect.appendConfig.of(searchField) })
+  const bindingIsCurrent = () => {
+    const binding = bindingRef.current
+    if (!binding || binding.key !== targetKey) return false
+    if (isEditor) return !!binding.view && binding.alive && binding.view === editorViewRef?.current
+      && (editorView === undefined || binding.view === editorView)
+    return binding.view === null && binding.sources.length > 0 && binding.sources.length === previewSources.length
+      && binding.sources.every((source, i) => source.ready && previewSources[i].ready !== false
+        && source.handle === previewSources[i].previewRef.current && !!source.handle?.searchVisible
+        && source.key === previewSources[i].targetKey && source.content === previewSources[i].content)
+  }
+
+  const syncHighlights = (active = -1) => {
+    const binding = bindingRef.current
+    if (!binding) return
+    const matches = matchesRef.current
+    if (binding.view && binding.alive) {
+      binding.view.dispatch({ effects: setSearchQuery.of({ query: queryRef.current, caseSensitive: false, currentMatch: active, matches }) })
+    } else {
+      const selected = matches[active]
+      binding.sources.forEach((source, index) => source.handle?.setSearchState?.(queryRef.current
+        ? { query: queryRef.current, ...(selected?.sourceIndex === index ? { activeOffset: selected.from } : {}) }
+        : null))
     }
-  }, [editorViewRef])
+  }
 
-  // Close on Escape
+  // 只重建派生结果；自动刷新不选择、不滚动、不抢焦点。
+  const refresh = () => {
+    matchesRef.current = []
+    searchedDocRef.current = null
+    currentMatchRef.current = -1
+    setCurrentMatch(-1)
+    if (queryRef.current && bindingIsCurrent()) {
+      const binding = bindingRef.current!
+      if (binding.view) {
+        searchedDocRef.current = binding.view.state.doc
+        matchesRef.current = findMatches(binding.view.state.doc.toString(), queryRef.current, false)
+          .map((match) => ({ ...match, sourceIndex: 0 }))
+      } else {
+        matchesRef.current = binding.sources.flatMap((source, sourceIndex) =>
+          source.handle!.searchVisible!(queryRef.current).map((match) => ({ ...match, sourceIndex })))
+      }
+    }
+    if (bindingIsCurrent()) syncHighlights()
+    setMatchCount(matchesRef.current.length)
+  }
+  refreshRef.current = refresh
+
+  const clearBinding = () => {
+    const binding = bindingRef.current
+    bindingRef.current = null
+    if (!binding) return
+    if (binding.view && binding.alive) {
+      binding.view.dispatch({ effects: [clearSearch.of(null), binding.compartment.reconfigure([])] })
+    }
+    binding.sources.forEach((source) => source.handle?.setSearchState?.(null))
+  }
+
+  // ref 对象稳定不代表实例稳定。生产入口通过实例创建/模型提交通知触发渲染。
+  useLayoutEffect(() => {
+    const view = isEditor ? (editorView === undefined ? editorViewRef?.current ?? null : editorView) : null
+    const sources = isEditor ? [] : previewSources.map((source) => ({
+      handle: source.previewRef.current, key: source.targetKey, content: source.content,
+      ready: source.ready !== false && !!source.previewRef.current?.searchVisible,
+    }))
+    const previous = bindingRef.current
+    if (previous && previous.view === view && previous.key === targetKey
+      && previous.sources.length === sources.length && previous.sources.every((source, i) =>
+        source.handle === sources[i].handle && source.key === sources[i].key
+        && source.content === sources[i].content && source.ready === sources[i].ready)) return
+    clearBinding()
+    const binding: SearchBinding = { view, key: targetKey, sources, compartment: new Compartment(), alive: true }
+    bindingRef.current = binding
+    if (view && binding.alive) {
+      const listener = ViewPlugin.define(() => ({
+        destroy() { binding.alive = false },
+        update(update: ViewUpdate) {
+          if (!update.docChanged) return
+          // CM update 内不能 dispatch；坐标立即因 doc 身份失效，提交后再刷新。
+          queueMicrotask(() => { if (bindingRef.current === binding && binding.alive && searchedDocRef.current !== view.state.doc) refreshRef.current() })
+        },
+      }))
+      view.dispatch({ effects: StateEffect.appendConfig.of(binding.compartment.of([searchField, listener])) })
+    }
+    refreshRef.current()
+  })
+
+  useLayoutEffect(() => () => { clearBinding() }, [])
+
+  const selectMatch = (index: number) => {
+    if (!bindingIsCurrent()) return
+    const match = matchesRef.current[index]
+    if (!match) return
+    currentMatchRef.current = index
+    setCurrentMatch(index)
+    const view = bindingRef.current?.view
+    if (view) {
+      view.dispatch({ selection: { anchor: match.from, head: match.to },
+        effects: setSearchQuery.of({ query: queryRef.current, caseSensitive: false, currentMatch: index, matches: matchesRef.current }), scrollIntoView: true })
+    } else {
+      syncHighlights(index)
+      bindingRef.current?.sources[match.sourceIndex].handle?.scrollToOffset(match.from)
+    }
+  }
+
+  const previewAnchor = () => {
+    const focusedIndex = previewSources.findIndex((source) => source.paneRef.current?.contains(document.activeElement))
+    const sourceIndex = Math.max(0, focusedIndex)
+    return { sourceIndex, offset: bindingRef.current?.sources[sourceIndex]?.handle?.getViewportOffset?.() ?? 0 }
+  }
+
+  const doSearch = (q: string, initialAnchor?: SearchRequest['anchor']) => {
+    queryRef.current = q
+    setQuery(q)
+    refresh()
+    if (!bindingIsCurrent() || !q) return
+    const anchor = initialAnchor ?? (isEditor
+      ? { offset: bindingRef.current!.view!.state.selection.main.head, sourceIndex: 0 }
+      : previewAnchor())
+    const candidates = matchesRef.current.filter((match) => match.sourceIndex === (anchor.sourceIndex ?? 0))
+    const nearest = candidates[findNearestMatchIndex(candidates, anchor.offset)]
+    if (nearest) selectMatch(matchesRef.current.indexOf(nearest))
+  }
+
+  const navigate = (direction: 1 | -1) => {
+    if (!queryRef.current || !bindingIsCurrent()) return
+    const view = bindingRef.current?.view
+    if (view && searchedDocRef.current !== view.state.doc) refresh()
+    const matches = matchesRef.current
+    if (!matches.length) return
+    let index = currentMatchRef.current
+    if (index >= 0) index = (index + direction + matches.length) % matches.length
+    else {
+      const anchor = view ? { offset: view.state.selection.main.head, sourceIndex: 0 } : previewAnchor()
+      if (direction === 1) {
+        index = matches.findIndex((match) => match.sourceIndex > anchor.sourceIndex || (match.sourceIndex === anchor.sourceIndex && match.from >= anchor.offset))
+        if (index < 0) index = 0
+      } else {
+        index = matches.length - 1
+        for (let i = matches.length - 1; i >= 0; i -= 1) {
+          if (matches[i].sourceIndex < anchor.sourceIndex || (matches[i].sourceIndex === anchor.sourceIndex && matches[i].from <= anchor.offset)) { index = i; break }
+        }
+      }
+    }
+    selectMatch(index)
+  }
+  const handleNext = () => navigate(1)
+  const handlePrev = () => navigate(-1)
+
+  const handleReplace = () => {
+    if (!isEditor || !queryRef.current || !bindingIsCurrent()) return
+    const view = bindingRef.current!.view!
+    if (searchedDocRef.current !== view.state.doc) refresh()
+    const sel = view.state.selection.main
+    if (matchesRef.current.some((match) => match.from === sel.from && match.to === sel.to)) {
+      view.dispatch({ changes: { from: sel.from, to: sel.to, insert: replaceText }, selection: { anchor: sel.from + replaceText.length } })
+      refresh()
+    }
+    navigate(1)
+  }
+
+  const handleReplaceAll = () => {
+    if (!isEditor || !queryRef.current || !bindingIsCurrent()) return
+    const view = bindingRef.current!.view!
+    if (searchedDocRef.current !== view.state.doc) refresh()
+    const changes = matchesRef.current.map((match) => ({ from: match.from, to: match.to, insert: replaceText }))
+    if (changes.length) view.dispatch({ changes })
+    refresh()
+  }
+
+  const handleInputKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') { e.preventDefault(); navigate(e.shiftKey ? -1 : 1) }
+  }
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        onClose()
-      }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose() }
     }
     window.addEventListener('keydown', handler, true)
     return () => window.removeEventListener('keydown', handler, true)
   }, [onClose])
-
-  // Clear on unmount
-  useEffect(() => {
-    const sources = previewSources
-    return () => {
-      const view = editorViewRef?.current
-      if (view && view.state.field(searchField, false)) {
-        view.dispatch({ effects: clearSearch.of(null) })
-      }
-      // 搜索关闭：清除各预览实例的模型驱动高亮（虚拟块卸载/挂载不再残留）
-      for (const source of sources) {
-        source.previewRef.current?.setSearchState?.(null)
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // --- Editor search ---
-  const doEditorSearch = useCallback((searchQuery: string, anchorOffset?: number) => {
-    const view = editorViewRef?.current
-    if (!view || !view.state.field(searchField, false)) return
-    if (!searchQuery) {
-      view.dispatch({ effects: clearSearch.of(null) })
-      matchesRef.current = []
-      setMatchCount(0)
-      return
-    }
-    const doc = view.state.doc.toString()
-    const matches = findMatches(doc, searchQuery, false)
-    matchesRef.current = matches
-    // 锚点取当前光标：优先跳离光标最近的匹配，而不是文档首个匹配
-    const nearest = findNearestMatchIndex(matches, anchorOffset ?? view.state.selection.main.head)
-    currentMatchRef.current = nearest
-    setCurrentMatch(matches.length > 0 ? nearest : 0)
-    setMatchCount(matches.length)
-
-    if (matches.length > 0) {
-      // Move cursor to nearest match
-      view.dispatch({
-        selection: { anchor: matches[nearest].from, head: matches[nearest].to },
-        effects: setSearchQuery.of({ query: searchQuery, caseSensitive: false, currentMatch: nearest, matches }),
-        scrollIntoView: true,
-      })
-    } else {
-      view.dispatch({ effects: setSearchQuery.of({ query: searchQuery, caseSensitive: false, currentMatch: -1, matches: [] }) })
-    }
-  }, [editorViewRef])
-
-  const editorNext = useCallback(() => {
-    const view = editorViewRef?.current
-    if (!view || !view.state.field(searchField, false)) return
-    const matches = matchesRef.current
-    if (matches.length === 0) return
-    const next = (currentMatchRef.current + 1) % matches.length
-    currentMatchRef.current = next
-    setCurrentMatch(next)
-    view.dispatch({
-      selection: { anchor: matches[next].from, head: matches[next].to },
-      effects: setSearchQuery.of({ query, caseSensitive: false, currentMatch: next, matches }),
-      scrollIntoView: true,
-    })
-  }, [editorViewRef, query])
-
-  const editorPrev = useCallback(() => {
-    const view = editorViewRef?.current
-    if (!view || !view.state.field(searchField, false)) return
-    const matches = matchesRef.current
-    if (matches.length === 0) return
-    const prev = (currentMatchRef.current - 1 + matches.length) % matches.length
-    currentMatchRef.current = prev
-    setCurrentMatch(prev)
-    view.dispatch({
-      selection: { anchor: matches[prev].from, head: matches[prev].to },
-      effects: setSearchQuery.of({ query, caseSensitive: false, currentMatch: prev, matches }),
-      scrollIntoView: true,
-    })
-  }, [editorViewRef, query])
-
-  // --- Preview search (model-driven highlights via setSearchState) ---
-  /** 同步搜索状态到各预览实例：active 匹配仅在目标 pane，其余 pane 仅保留普通高亮 */
-  const syncPreviewSearchState = useCallback((searchQuery: string, activeSourceIndex: number, activeOffset?: number) => {
-    previewSources.forEach((source, index) => {
-      const state = searchQuery
-        ? (index === activeSourceIndex && activeOffset !== undefined
-          ? { query: searchQuery, activeOffset }
-          : { query: searchQuery })
-        : null
-      source.previewRef.current?.setSearchState?.(state)
-    })
-  }, [previewSources])
-
-  const revealPreviewMatch = useCallback((match: PreviewMatch, searchQuery: string) => {
-    syncPreviewSearchState(searchQuery, match.sourceIndex, match.from)
-    previewSources[match.sourceIndex]?.previewRef.current?.scrollToOffset(match.from)
-  }, [previewSources, syncPreviewSearchState])
-
-  const searchPreview = useCallback((searchQuery: string, initialAnchor?: SearchRequest['anchor']) => {
-    const matches = previewSources.flatMap((source, sourceIndex) => {
-      // 优先使用预览实例的可见文本投影搜索（与预览高亮、复制同一语义），
-      // 避免命中链接 URL / Markdown 标记等不可见源码；实例未提供时回退原文扫描。
-      const visible = source.previewRef.current?.searchVisible?.(searchQuery)
-      if (visible) return visible.map((match) => ({ ...match, sourceIndex }))
-      return findMatches(source.content, searchQuery, false).map((match) => ({ ...match, sourceIndex }))
-    })
-    previewMatchesRef.current = matches
-    // 初次由选区触发时优先定位到选区所在 pane/offset；普通输入继续按活动 pane 视口定位。
-    let nearest = 0
-    if (initialAnchor) {
-      const sourceMatches = typeof initialAnchor.sourceIndex === 'number'
-        ? matches.filter((match) => match.sourceIndex === initialAnchor.sourceIndex)
-        : matches
-      const selected = sourceMatches[findNearestMatchIndex(sourceMatches, initialAnchor.offset)]
-      if (selected) nearest = matches.indexOf(selected)
-    } else {
-      let anchorSourceIndex = 0
-      const activeEl = document.activeElement
-      if (activeEl) {
-        const focusedIndex = previewSources.findIndex((source) => source.paneRef.current?.contains(activeEl))
-        if (focusedIndex >= 0) anchorSourceIndex = focusedIndex
-      }
-      const anchor = previewSources[anchorSourceIndex]?.previewRef.current?.getViewportOffset?.()
-      nearest = findNearestMatchIndex(matches, anchor)
-    }
-    currentMatchRef.current = nearest
-    setCurrentMatch(matches.length > 0 ? nearest : 0)
-    setMatchCount(matches.length)
-    if (!searchQuery) {
-      syncPreviewSearchState('', -1)
-      return
-    }
-    if (matches[nearest]) revealPreviewMatch(matches[nearest], searchQuery)
-    else syncPreviewSearchState(searchQuery, -1)
-  }, [previewSources, revealPreviewMatch, syncPreviewSearchState])
-
-  const navigatePreview = useCallback((direction: 1 | -1) => {
-    if (!query) return
-    const matches = previewMatchesRef.current
-    if (matches.length === 0) return
-    const nextIdx = direction === 1
-      ? (currentMatchRef.current + 1) % matches.length
-      : (currentMatchRef.current - 1 + matches.length) % matches.length
-    currentMatchRef.current = nextIdx
-    setCurrentMatch(nextIdx)
-    revealPreviewMatch(matches[nextIdx], query)
-  }, [query, revealPreviewMatch])
-
-  // --- Combined ---
-  const doSearch = useCallback((q: string, initialAnchor?: SearchRequest['anchor']) => {
-    setQuery(q)
-    if (isEditor) doEditorSearch(q, initialAnchor?.offset)
-    else searchPreview(q, initialAnchor)
-  }, [isEditor, doEditorSearch, searchPreview])
-
-  const handleNext = useCallback(() => {
-    if (!query) return
-    if (isEditor) editorNext()
-    else navigatePreview(1)
-  }, [query, isEditor, editorNext, navigatePreview])
-
-  const handlePrev = useCallback(() => {
-    if (!query) return
-    if (isEditor) editorPrev()
-    else navigatePreview(-1)
-  }, [query, isEditor, editorPrev, navigatePreview])
-
-  const handleReplace = useCallback(() => {
-    const view = editorViewRef?.current
-    if (!view || !query) return
-    const sel = view.state.selection.main
-    const selectedText = view.state.sliceDoc(sel.from, sel.to)
-    if (selectedText.toLowerCase() === query.toLowerCase()) {
-      view.dispatch({ changes: { from: sel.from, to: sel.to, insert: replaceText } })
-    }
-    editorNext()
-  }, [editorViewRef, query, replaceText, editorNext])
-
-  const handleReplaceAll = useCallback(() => {
-    const view = editorViewRef?.current
-    if (!view || !query) return
-    const doc = view.state.doc.toString()
-    const regex = new RegExp(escapeRegex(query), 'gi')
-    const replaced = doc.replace(regex, replaceText)
-    if (replaced !== doc) {
-      view.dispatch({ changes: { from: 0, to: doc.length, insert: replaced } })
-    }
-    doEditorSearch(query)
-  }, [editorViewRef, query, replaceText, doEditorSearch])
-
-  const handleInputKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      if (e.shiftKey) handlePrev()
-      else handleNext()
-    }
-  }, [handleNext, handlePrev])
-
-  useEffect(() => { inputRef.current?.focus() }, [])
+  useEffect(() => { inputRef.current?.focus() }, [searchRequest?.requestId])
 
   useEffect(() => {
     if (!searchRequest?.initialQuery || appliedSearchRequestIdRef.current === searchRequest.requestId) return
+    const origin = requestOriginRef.current
+    if (origin.id !== searchRequest.requestId) requestOriginRef.current = { id: searchRequest.requestId, key: targetKey, isEditor }
+    else if (origin.key !== targetKey || origin.isEditor !== isEditor) {
+      appliedSearchRequestIdRef.current = searchRequest.requestId
+      return
+    }
+    if (!bindingIsCurrent()) return
     appliedSearchRequestIdRef.current = searchRequest.requestId
     doSearch(searchRequest.initialQuery, searchRequest.anchor)
-  }, [doSearch, searchRequest])
+  })
 
   return (
     <div
@@ -357,7 +341,7 @@ export function SearchOverlay({ onClose, editorViewRef, searchRequest, previewSo
           <input
             ref={inputRef}
             value={query}
-            onChange={(e) => doSearch(e.target.value)}
+            onChange={(e) => { appliedSearchRequestIdRef.current = searchRequest?.requestId ?? null; doSearch(e.target.value) }}
             onKeyDown={handleInputKeyDown}
             placeholder="搜索..."
             className="flex-1 h-8 px-3 text-caption text-gm-text bg-gm-canvas border border-gm-border rounded-lg outline-none focus:border-gm-primary transition-colors"
@@ -398,8 +382,4 @@ export function SearchOverlay({ onClose, editorViewRef, searchRequest, previewSo
       </div>
     </div>
   )
-}
-
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }

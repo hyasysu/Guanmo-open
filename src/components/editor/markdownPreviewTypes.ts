@@ -79,6 +79,8 @@ export interface MarkdownPreviewProps {
   isVisible?: boolean
   onFirstVisible?: () => void
   onRenderComplete?: () => void
+  /** 全文模型提交且旧搜索清理完成；不依赖虚拟块全部挂载。 */
+  onSearchModelChange?: (target: { documentKey?: string; content: string } | null) => void
   onPositionIntent?: () => void
   resource?: 'preview' | 'left-preview' | 'right-preview'
   readingMarks?: ReadingMark[]

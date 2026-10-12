@@ -187,6 +187,51 @@ describe('Agent execution budget', () => {
     expect(result.answer).toBe('基于证据的匿名答案')
   })
 
+  it('日期查找时将直接证据规则和中间表格一起交给模型', async () => {
+    // 验证请求组装，不将模拟答案当作真实模型遵循规则的证据。
+    const table = [
+      '| 日期 | 专题 | 必做（按顺序） | 选做 / 进阶 |',
+      '|---|---|---|---|',
+      '| D1 10/11 日 | JS 基础、模拟、哈希 | 415 字符串相加、1 两数之和 | 49 字母异位词分组 |',
+    ].join('\n')
+    const results = [
+      '本周目标：JS 基础操作不再频繁出错；能区分双指针、滑动窗口、前缀和、二分。',
+      table,
+      '验收：大数加法能处理不同长度、连续进位和最后进位。',
+    ].map((snippet, index) => ({
+      filePath: 'D:\\anonymous\\algorithm-plan.md',
+      title: '匿名算法计划',
+      chunkId: `plan-chunk-${index}`,
+      snippet,
+      titlePath: ['第 1 周'],
+      startLine: index * 10 + 1,
+      endLine: index * 10 + 9,
+    }))
+    registerTool({
+      name: 'search_knowledge',
+      description: '匿名知识库检索',
+      parameters: [],
+      execute: vi.fn(async () => JSON.stringify({ status: 'ok', resultCount: results.length, results })),
+    })
+    responseQueue.push(
+      [{ content: '', done: true, toolCallDeltas: [{ index: 0, name: 'search_knowledge', arguments: '{}' }] }],
+      [{ content: '匿名回答', done: true }],
+    )
+    await runAgent({ query: '查找知识库中10.11日要做什么算法题', candidateToolNames: ['search_knowledge'] })
+
+    const request = streamChat.mock.calls[1][0]
+    const systemPrompt = request.messages.find((message) => message.role === 'system')?.content
+    expect(systemPrompt).toContain('不得用周目标、概述或验收替代具体条目')
+    expect(systemPrompt).toContain('10.11、10/11、10月11日')
+    expect(systemPrompt).toContain('保留必做、选做等列的区别')
+    const toolMessage = request.messages.find((message) => message.content.startsWith('工具返回结果'))
+    expect(toolMessage).toBeDefined()
+    const toolContent = toolMessage!.content
+    const payload = JSON.parse(toolContent.slice(toolContent.indexOf('{'), toolContent.lastIndexOf('}') + 1))
+    expect(payload.results.map((entry: { snippet: string }) => entry.snippet))
+      .toEqual(results.map((entry) => entry.snippet))
+  })
+
   it('知识库来源只包含实际装入模型的完整结果项', async () => {
     const results = Array.from({ length: 8 }, (_, index) => ({
       filePath: `D:\\anonymous\\source-${index + 1}.md`,

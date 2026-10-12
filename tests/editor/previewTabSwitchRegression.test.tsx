@@ -195,6 +195,90 @@ async function settleLazyEditorModules() {
   })
 }
 
+describe('SearchOverlay 生产模式与文档边界', () => {
+  async function settleSearch() {
+    await settleLazyEditorModules()
+    await act(async () => { vi.advanceTimersByTime(1200) })
+    document.querySelectorAll<HTMLElement>('.select-text.bg-gm-surface').forEach((pane) => {
+      pane.scrollTo = vi.fn((options: ScrollToOptions | number, y?: number) => {
+        pane.scrollTop = typeof options === 'number' ? y ?? 0 : options.top ?? pane.scrollTop
+      })
+    })
+  }
+
+  it('真实编辑/虚拟预览双向切换与快速切文件保留输入，刷新不滚动', async () => {
+    setupEditor([anonymousTab('A', '目标\n\n目标'), anonymousTab('B', '前文\n\n目标'), anonymousTab('C', '没有匹配')], 'A', 'edit')
+    const { container } = render(<EditorArea />)
+    await settleSearch()
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    const input = screen.getByPlaceholderText('搜索...')
+    fireEvent.change(input, { target: { value: '目标' } })
+    expect(screen.getByText('1/2')).toBeInTheDocument()
+    act(() => useEditorStore.getState().setViewMode('preview'))
+    await settleSearch()
+    expect(screen.getByText('0/2')).toBeInTheDocument()
+    const preview = getLeftPreviewContainer(container)!
+    preview.scrollTop = 77
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
+    expect(screen.getByText(/^[12]\/2$/)).toBeInTheDocument()
+    act(() => useEditorStore.getState().setViewMode('edit'))
+    await settleSearch()
+    expect(screen.getByText('0/2')).toBeInTheDocument()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(screen.getByText(/^[12]\/2$/)).toBeInTheDocument()
+    act(() => { useEditorStore.getState().setActiveTab('B'); useEditorStore.getState().setActiveTab('C') })
+    await settleSearch()
+    expect(input).toHaveValue('目标')
+    expect(screen.getByText('无')).toBeInTheDocument()
+    act(() => useEditorStore.getState().setActiveTab('B'))
+    await settleSearch()
+    expect(screen.getByText('0/1')).toBeInTheDocument()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(screen.getByText('1/1')).toBeInTheDocument()
+    act(() => useEditorStore.getState().setViewMode('preview'))
+    await settleSearch()
+    getLeftPreviewContainer(container)!.scrollTop = 55
+    fireEvent.focus(input)
+    act(() => useEditorStore.getState().updateTabContent('B', '目标\n\n目标\n\n目标'))
+    await settleSearch()
+    expect(screen.getByText('0/3')).toBeInTheDocument()
+    expect(input).toHaveFocus()
+    // 模型变更可以按原有虚拟高度校正 scrollTop；搜索刷新不能发起关键词滚动。
+    expect(getLeftPreviewContainer(container)?.scrollTo).not.toHaveBeenCalled()
+    act(() => { for (const tab of useEditorStore.getState().tabs) useEditorStore.getState().closeTab(tab.id) })
+    await settleSearch()
+    expect(input).toHaveValue('目标')
+    expect(screen.getByText('无')).toBeInTheDocument()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(screen.getByText('无')).toBeInTheDocument()
+  })
+
+  it('双预览换右栏/移除右栏及 Diff 暂停搜索，不搜索隐藏实例', async () => {
+    setupEditor([anonymousTab('A', '目标'), anonymousTab('B', '目标\n\n目标'), anonymousTab('C', '空白')], 'A', 'dual-preview')
+    useEditorStore.getState().setRightPaneTabId('B')
+    render(<EditorArea />)
+    await settleSearch()
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    const input = screen.getByPlaceholderText('搜索...')
+    fireEvent.change(input, { target: { value: '目标' } })
+    expect(screen.getByText('1/3')).toBeInTheDocument()
+    act(() => useEditorStore.getState().setRightPaneTabId('C'))
+    await settleSearch()
+    expect(screen.getByText('0/1')).toBeInTheDocument()
+    act(() => useEditorStore.getState().setViewMode('diff-preview'))
+    await settleSearch()
+    expect(input).toHaveValue('目标')
+    expect(screen.getByText('无')).toBeInTheDocument()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(screen.getByText('无')).toBeInTheDocument()
+    act(() => useEditorStore.getState().setViewMode('edit-preview'))
+    await settleSearch()
+    expect(screen.getByText('0/1')).toBeInTheDocument()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(screen.getByText('1/1')).toBeInTheDocument()
+  })
+})
+
 describe('preview horizontal overflow boundary', () => {
   it('hides pane-wide horizontal overflow while preserving local scrollers', async () => {
     const content = [
@@ -1369,6 +1453,23 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
       expect(useEditorStore.getState().readingPositions['tab-a']).toMatchObject({
         editorScrollTop: 480,
       })
+    })
+
+    it('does not replay file position restoration on same-document content updates', async () => {
+      const tab = anonymousTab('tab-a', '# 匿名文档\n\n编辑内容')
+      setupEditor([tab], 'tab-a', 'edit-preview', { syncScroll: true })
+      const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+      render(<EditorArea />)
+      await settleLazyEditorModules()
+      act(() => vi.advanceTimersByTime(2_000))
+      info.mockClear()
+
+      act(() => {
+        useEditorStore.getState().updateTabContent('tab-a', tab.content + '输入')
+        vi.advanceTimersByTime(350)
+      })
+
+      expect(info.mock.calls.some(([tag, data]) => tag === '[阅读位置][预览恢复]' && data?.phase === '初始定位')).toBe(false)
     })
 
     it('preview render-induced scroll and content update never move the left editor', async () => {

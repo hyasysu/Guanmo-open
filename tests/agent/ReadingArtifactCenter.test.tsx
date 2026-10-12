@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReadingArtifact } from '@/services/database/readingArtifacts'
 import type { ReadingMark } from '@/services/readingMarks'
 
@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   navigateToReadingMark: vi.fn(),
   loadReadingMarksPage: vi.fn(),
   loadReadingArtifactsPage: vi.fn(),
+  loadFocusedArtifact: vi.fn(),
 }))
 
 vi.mock('@/hooks/useTauri', async (importOriginal) => ({
@@ -38,11 +39,13 @@ vi.mock('@/services/readingMarks', async (importOriginal) => ({
 vi.mock('@/services/agent/artifactCommands', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/services/agent/artifactCommands')>()),
   loadReadingArtifactsPageCommand: mocks.loadReadingArtifactsPage,
+  loadReadingArtifactItemByKeyCommand: mocks.loadFocusedArtifact,
 }))
 
 import { ReadingArtifactCenter } from '@/components/reading-artifacts/ReadingArtifactCenter'
 import { useReadingArtifactsStore } from '@/stores/readingArtifactsStore'
 import { useReadingMarksStore } from '@/stores/readingMarksStore'
+import { adaptAiReadingArtifact } from '@/services/readingArtifactCenter'
 
 const readingMark: ReadingMark = {
   id: 'mark-1',
@@ -295,7 +298,9 @@ describe('ReadingArtifactCenter', () => {
     const annotationExpand = within(annotationCard!).getByRole('button', { name: '展开全文' })
     expect(highlightCard).toHaveTextContent('高亮原文第8行')
     expect(within(highlightCard!).getByRole('button', { name: 'A.md · 查看原文' })).toBeInTheDocument()
-    expect(within(highlightCard!).getByRole('button', { name: '删除' })).toBeInTheDocument()
+    fireEvent.click(within(highlightCard!).getByRole('button', { name: /成果操作/ }))
+    expect(screen.getByRole('button', { name: '删除成果' })).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
 
     fireEvent.click(annotationExpand)
     expect(screen.getAllByRole('button', { name: '收起' })).toHaveLength(1)
@@ -324,6 +329,43 @@ describe('ReadingArtifactCenter', () => {
     }
   })
 
+  it('preserves collapsed card measurements while the retained page is hidden', async () => {
+    const originalResizeObserver = globalThis.ResizeObserver
+    const callbacks: (() => void)[] = []
+    class TrackingResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(() => callback([], this as unknown as ResizeObserver))
+      }
+      observe = vi.fn()
+      disconnect = vi.fn()
+    }
+    globalThis.ResizeObserver = TrackingResizeObserver as unknown as typeof ResizeObserver
+    const scrollHeight = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function () {
+      return this.closest('[hidden]') ? 0 : 300
+    })
+    try {
+      mocks.loadReadingArtifactsPage.mockReset().mockResolvedValue({ artifacts: [], total: 0 })
+      const view = render(<div><ReadingArtifactCenter onOpenAiSource={vi.fn()} /></div>)
+      const expand = await screen.findByRole('button', { name: '展开全文' })
+      const card = expand.closest('article')!
+      const region = screen.getByRole('region', { name: '阅读成果内容' })
+      region.scrollTop = 420
+      const heights = Array.from(card.querySelectorAll<HTMLElement>('[style]')).map((element) => element.style.height)
+      view.rerender(<div hidden><ReadingArtifactCenter onOpenAiSource={vi.fn()} /></div>)
+      act(() => callbacks.forEach((callback) => callback()))
+      // Hidden resize callbacks must not remove the expand control or change its height target.
+      expect(expand).toBeInTheDocument()
+      expect(Array.from(card.querySelectorAll<HTMLElement>('[style]')).map((element) => element.style.height)).toEqual(heights)
+      view.rerender(<div><ReadingArtifactCenter onOpenAiSource={vi.fn()} /></div>)
+      act(() => callbacks.forEach((callback) => callback()))
+      expect(screen.getByRole('button', { name: '展开全文' })).toBe(expand)
+      expect(region.scrollTop).toBe(420)
+    } finally {
+      globalThis.ResizeObserver = originalResizeObserver
+      scrollHeight.mockRestore()
+    }
+  })
+
   it('keeps each multi-document AI source as an independent source action', async () => {
     const onOpenAiSource = vi.fn()
     mocks.fileExists.mockResolvedValue(true)
@@ -333,7 +375,42 @@ describe('ReadingArtifactCenter', () => {
     expect(onOpenAiSource).toHaveBeenCalledWith(
       aiArtifact,
       expect.objectContaining({ documentId: 'path:c:/anonymous/b.md', fileName: 'B.md' }),
+      expect.objectContaining({ startLine: 1, endLine: 1 }),
     )
+  })
+
+  it.each(['recent', 'documents', 'focus'] as const)('keeps all files and selectable blocks in %s', async (entry) => {
+    const artifact: ReadingArtifact = {
+      ...aiArtifact,
+      structuredContent: { question: '多区块问题', references: [
+        { kind: 'local', filePath: 'C:/anonymous/A.md', fileName: 'A.md', titlePath: ['第一节'], startLine: 1, endLine: 2 },
+        { kind: 'local', filePath: 'C:/anonymous/A.md', fileName: 'A.md', titlePath: ['第二节'], startLine: 5, endLine: 6 },
+        { kind: 'local', filePath: 'C:/anonymous/B.md', fileName: 'B.md', startLine: 3, endLine: 4 },
+      ] },
+    }
+    mocks.loadReadingArtifactsPage.mockResolvedValue({ artifacts: [artifact], total: 1 })
+    mocks.fileExists.mockResolvedValue(true)
+    useReadingArtifactsStore.setState({ artifacts: [artifact], allArtifacts: [artifact] })
+    mocks.loadFocusedArtifact.mockResolvedValue({ item: adaptAiReadingArtifact(artifact), artifact })
+    const onOpen = vi.fn()
+    render(<ReadingArtifactCenter onOpenAiSource={onOpen} focusKey={entry === 'focus' ? 'ai:artifact-1' : undefined} />)
+    if (entry === 'documents') {
+      await screen.findByRole('button', { name: /AI · AI 解读.*多区块问题/ })
+      fireEvent.click(screen.getByRole('tab', { name: '按文档' }))
+      fireEvent.click(await screen.findByRole('button', { name: /A\.md/ }))
+      fireEvent.click(screen.getByRole('button', { name: '排序：原文顺序' }))
+      fireEvent.click(screen.getByRole('menuitemradio', { name: '时间顺序' }))
+    }
+    const toggle = await screen.findByRole('button', { name: /AI · AI 解读.*多区块问题/ })
+    if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle)
+    await screen.findByRole('button', { name: /A\.md.*第二节.*L5-6/ })
+    const card = screen.getByRole('button', { name: /AI · AI 解读.*多区块问题/ }).closest('article')!
+    expect(within(card).getByRole('button', { name: 'B.md · 查看原文' })).toBeInTheDocument()
+    fireEvent.click(within(card).getByRole('button', { name: /A\.md.*第二节.*L5-6/ }))
+    expect(onOpen).toHaveBeenCalledWith(artifact,
+      expect.objectContaining({ fileName: 'A.md', locations: expect.any(Array) }),
+      { headingPath: ['第二节'], startLine: 5, endLine: 6 })
+    expect(within(card).getAllByRole('button', { name: /A\.md.*L/ })).toHaveLength(2)
   })
 
   it('keeps AI results collapsed and shows the three reading layers one at a time', async () => {
@@ -358,6 +435,65 @@ describe('ReadingArtifactCenter', () => {
     expect(questionSet).toHaveAttribute('aria-expanded', 'true')
     expect(explanation).toHaveAttribute('aria-expanded', 'false')
     expect(screen.getByText('未记录原问题')).toBeInTheDocument()
+  })
+
+  it('shows pathless truncated original selections separately from reference candidates and confirmed IDs', async () => {
+    mocks.loadReadingArtifactsPage.mockResolvedValue({ artifacts: [{ ...aiArtifact, structuredContent: {
+      ...aiArtifact.structuredContent,
+      originalSelections: [{ title: '历史片段', text: '独立的历史选区文本', filePath: null, truncated: true, previewOnly: false }],
+      referencedSourceIds: ['S2'],
+    } }], total: 1 })
+    render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: /AI · AI 解读.*匿名问题/ }))
+    expect(screen.getByText('独立的历史选区文本')).toBeInTheDocument()
+    expect(screen.getByText(/历史片段.*未绑定文件.*内容已截断/)).toBeInTheDocument()
+    expect(screen.getByText('已确认引用：[S2]；其余为候选资料')).toBeInTheDocument()
+    expect(screen.getByText('参考资料')).toBeInTheDocument()
+  })
+
+  it('allows selecting card content without toggling the AI card on selection release', async () => {
+    render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
+    const toggle = await screen.findByRole('button', { name: /AI · AI 解读.*匿名问题/ })
+    const title = within(toggle).getByText('匿名问题')
+    expect(title.closest('.select-text')).toBeInTheDocument()
+    expect(screen.getByText('人工批注').closest('.select-text')).toBeInTheDocument()
+    const selection = window.getSelection()!
+    const range = document.createRange()
+    range.selectNodeContents(title)
+    selection.removeAllRanges()
+    selection.addRange(range)
+    fireEvent.click(toggle, { detail: 1 })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    selection.removeAllRanges()
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByLabelText('AI 回复正文').closest('.select-text')).toBeInTheDocument()
+    expect(screen.getAllByText('匿名问题').at(-1)?.closest('.select-text')).toBeInTheDocument()
+    const copyShortcut = new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true, cancelable: true })
+    screen.getByLabelText('AI 回复正文').dispatchEvent(copyShortcut)
+    expect(copyShortcut.defaultPrevented).toBe(false)
+  })
+
+  it('expands long original questions independently and resets them when the AI card closes', async () => {
+    const question = Array.from({ length: 9 }, (_, index) => `匿名代码问题第${index + 1}行`).join('\n')
+    mocks.loadReadingArtifactsPage.mockResolvedValue({
+      artifacts: [{ ...aiArtifact, structuredContent: { ...aiArtifact.structuredContent, question } }],
+      total: 1,
+    })
+    render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
+
+    const cardToggle = await screen.findByRole('button', { name: /AI · AI 解读/ })
+    expect(screen.queryByRole('button', { name: '展开原问题' })).not.toBeInTheDocument()
+    fireEvent.click(cardToggle)
+    const questionToggle = await screen.findByRole('button', { name: '展开原问题' })
+    expect(questionToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByLabelText('AI 回复正文')).toHaveTextContent(aiArtifact.content)
+    fireEvent.click(questionToggle)
+    expect(screen.getByRole('button', { name: '收起原问题' })).toHaveAttribute('aria-expanded', 'true')
+    expect(cardToggle).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(cardToggle)
+    fireEvent.click(cardToggle)
+    expect(await screen.findByRole('button', { name: '展开原问题' })).toHaveAttribute('aria-expanded', 'false')
   })
 
   it('does not present the recent 40-item window as document totals when aggregation fails and can retry', async () => {

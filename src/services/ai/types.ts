@@ -15,6 +15,8 @@ export interface EmbeddingConfig {
   provider: ProviderId
   baseUrl: string
   apiKey: string
+  apiKeyConfigured?: boolean
+  credentialVersion?: number
   embeddingModel: string
   timeout: number
 }
@@ -24,6 +26,8 @@ export interface AiConfig {
   provider: ProviderId
   baseUrl: string
   apiKey: string
+  apiKeyConfigured?: boolean
+  credentialVersion?: number
   chatModel: string
   streamEnabled: boolean
   webSearchEnabled: boolean

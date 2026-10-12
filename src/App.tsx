@@ -1,3 +1,4 @@
+import { hasApiCredential } from '@/services/apiConnection'
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AppLayout, preloadAiPanel } from './components/layout/AppLayout'
 import { ToastContainer } from './components/common/ToastContainer'
@@ -166,7 +167,7 @@ function scheduleIdleWarmup(): void {
     async () => {
       await ensureSettingsSecretsHydrated()
       const { ai } = useSettingsStore.getState()
-      if ((ai.apiKey || isLocalApi(ai.baseUrl)) && ai.baseUrl && ai.chatModel) {
+      if ((hasApiCredential(ai) || isLocalApi(ai.baseUrl)) && ai.baseUrl && ai.chatModel) {
         await singletonManager.init(SINGLETON_IDS.CHAT_AI, async () => {
           const startTime = performance.now()
           const provider = initAiClient(ai)
@@ -185,7 +186,7 @@ function scheduleIdleWarmup(): void {
     async () => {
       await ensureSettingsSecretsHydrated()
       const { ai } = useSettingsStore.getState()
-      if ((ai.embedding.apiKey || isLocalApi(ai.embedding.baseUrl)) && ai.embedding.baseUrl && ai.embedding.embeddingModel) {
+      if ((hasApiCredential(ai.embedding) || isLocalApi(ai.embedding.baseUrl)) && ai.embedding.baseUrl && ai.embedding.embeddingModel) {
         await singletonManager.init(SINGLETON_IDS.EMBEDDING_AI, async () => {
           const startTime = performance.now()
           const provider = initEmbeddingClient(ai.embedding)

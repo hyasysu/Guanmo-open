@@ -12,6 +12,13 @@
 - 大文档编辑继续使用 `EditorArea` 的预览更新防抖，目录跳转、任务列表行号和滚动同步沿用现有 DOM 行号标记。
 - 桌面构建不得产出 `markdownPreview.worker-*` 独立脚本，回归检查由 `npm run build:desktop` 执行。
 
+## 不可信渲染边界
+
+- 原始 HTML 和内联 SVG 继续经过 `markdownHtml.ts` 的统一清洗链；SVG 样式只能使用已作用域化的安全规则及本地片段引用。清洗后不得重新拼入原始 HTML。
+- Mermaid 使用现有 `securityLevel: 'strict'` 和库内 SVG 清洗，不调用文档定义的回调；预览、分屏和全屏共用该入口。
+- ECharts 只接收受限 JSON；tooltip 固定使用 Canvas `richText`，保留字符串模板作为文本，未配置 tooltip 时不新增可见提示。拒绝启用 HTML `toolbox.feature.dataView`，可改用安全图表或 Markdown 表格；拒绝危险协议、远程/协议相对资源、SVG data URL 和原型字段。解析/渲染失败只显示固定错误，不把原始错误或配置值拼入提示。
+- 安全专项定向测试：`tests/services/echartsOption.test.ts`、`renderingSecurity.test.ts` 和 `tests/markdown-preview-prototype/{html,svg}-sanitize.test.tsx`。静态 CSP/ACL 检查不替代浏览器或原生 IPC 验收。
+
 ## ReadingMark
 
 - 批注 anchor 必须由一次 `PreviewSelectionSnapshot` 生成，保存全文 UTF-16 offset、`DocumentRange`、可见 quote 与上下文；不得持久化 DOM 节点或 DOM Range。

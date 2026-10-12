@@ -1,4 +1,5 @@
 import { getDatabase, isDatabaseReady } from './db'
+import { artifactOrganizationClause, type ArtifactOrganizationFilter } from './artifactOrganization'
 import {
   decodeReadingArtifact,
   type ReadingArtifact,
@@ -20,7 +21,7 @@ import {
 export type ReadingArtifactCenterView = 'recent' | 'detail'
 export type ReadingArtifactCenterSort = 'time' | 'source'
 
-export interface ReadingArtifactCenterPageOptions {
+export interface ReadingArtifactCenterPageOptions extends ArtifactOrganizationFilter {
   view: ReadingArtifactCenterView
   document?: { documentId: string; filePath?: string; fileName: string } | null
   documentId?: string | null
@@ -181,6 +182,10 @@ async function loadPageFromDatabase(options: ReadingArtifactCenterPageOptions): 
   const artifactSearch = artifactSearchClause(query, artifactParams)
   if (markSearch) markWhere.push(markSearch)
   if (artifactSearch) artifactWhere.push(artifactSearch)
+  const markOrganization = artifactOrganizationClause("'mark:' || reading_marks.id", options, markParams)
+  const aiOrganization = artifactOrganizationClause("'ai:' || reading_artifacts.id", options, artifactParams)
+  if (markOrganization) markWhere.push(markOrganization)
+  if (aiOrganization) artifactWhere.push(aiOrganization)
   const markWhereSql = markWhere.join(' AND ')
   const artifactWhereSql = artifactWhere.join(' AND ')
   const markCountRows = await db.select<{ total: number }>(`SELECT COUNT(*) AS total FROM reading_marks WHERE ${markWhereSql}`, markParams)
@@ -239,7 +244,7 @@ export async function loadReadingArtifactCenterItemsPage(options: ReadingArtifac
   return isDatabaseReady() ? loadPageFromDatabase(options) : loadPageFallback(options)
 }
 
-export async function loadReadingArtifactDocumentSummariesPage(options: {
+export async function loadReadingArtifactDocumentSummariesPage(options: ArtifactOrganizationFilter & {
   query?: string
   types: readonly string[]
   limit: number
@@ -283,8 +288,10 @@ export async function loadReadingArtifactDocumentSummariesPage(options: {
     searchParts.push(`(quote LIKE ${p} ESCAPE '!' OR COALESCE(note, '') LIKE ${p} ESCAPE '!' OR document_path LIKE ${p} ESCAPE '!')`)
     searchParts.push(`(title LIKE ${p} ESCAPE '!' OR content LIKE ${p} ESCAPE '!' OR COALESCE(source_file_name, '') LIKE ${p} ESCAPE '!' OR COALESCE(source_quote, '') LIKE ${p} ESCAPE '!' OR COALESCE(structured_content, '') LIKE ${p} ESCAPE '!')`)
   }
-  const markFilter = [`${markTypes}`, ...(searchParts[0] ? [searchParts[0]] : [])].join(' AND ')
-  const artifactFilter = [`${artifactTypes}`, "reading_artifacts.status = 'active'", ...(searchParts[1] ? [searchParts[1]] : [])].join(' AND ')
+  const markOrganization = artifactOrganizationClause("'mark:' || reading_marks.id", options, params)
+  const aiOrganization = artifactOrganizationClause("'ai:' || reading_artifacts.id", options, params)
+  const markFilter = [`${markTypes}`, ...(searchParts[0] ? [searchParts[0]] : []), ...(markOrganization ? [markOrganization] : [])].join(' AND ')
+  const artifactFilter = [`${artifactTypes}`, "reading_artifacts.status = 'active'", ...(searchParts[1] ? [searchParts[1]] : []), ...(aiOrganization ? [aiOrganization] : [])].join(' AND ')
   const sql = `WITH docs AS (
     SELECT lower(replace(document_path, '\\\\', '/')) AS document_id, document_path AS file_path, document_path AS file_name, created_at, CASE WHEN note IS NULL OR trim(note) = '' THEN 1 ELSE 0 END AS highlights, CASE WHEN note IS NOT NULL AND trim(note) <> '' THEN 1 ELSE 0 END AS annotations, 0 AS ai_artifacts, id AS item_id FROM reading_marks WHERE ${markFilter}
     UNION ALL

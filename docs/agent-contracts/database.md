@@ -26,7 +26,21 @@
 - 备份导入必须在 SQLite 事务中完成，失败回滚。
 - 数据边界回归使用 `npm run test:runtime-schemas`。
 
+## AI 阅读成果消息快照
+
+- 保存回复时仅通过助手 `parentId` 取得对应用户消息的 selection tags，不用相邻消息、当前草稿或当前文件补造历史。
+- `reading_artifacts.structured_content` 可选保存 `originalSelections`（文本、文件、有效行号/偏移、截断及仅预览标识）、完整 `sourceCandidates` 与 `referencedSourceIds`；有文件和有效行号的选区追加到成果 `references`，按文件与行号去重，供来源跳转和按文档查询使用；不插入模型候选 `sourceCandidates`，不改变 `[S1…]` 映射。旧成果缺字段继续兼容；已保存选区快照的成果读取时合并定位来源，不写回或猜测缺失坐标。
+- 快照在异步补全来源哈希前复制，保存后不依赖聊天记录或来源文件仍存在。备份沿用原结构化 JSON，无新表、迁移或版本升级。
+
 ## ReadingMark 持久化
 
 - `reading_marks` 为独立表，SQLite/Rust 命令提供按 ID、按文档、全量分页读取、upsert 与删除；Rust 校验枚举、路径与 offset，并由 Rust 刷新 `updated_at`、保留 `created_at`。
 - 备份 v1 的 `readingMarks` 为可选输入、导出始终包含；导入与现有会话、成果和提醒在同一事务中恢复，旧备份缺少该字段必须兼容为空数组。
+
+## 阅读成果收藏与分类
+
+- schema v4 的 `reading_artifact_organization` 按 `mark:<id>` / `ai:<id>` 保存收藏和分类 ID，`reading_artifact_categories` 保存分类名称；不复制成果内容。旧成果没有整理记录时默认未收藏、未分类。
+- 收藏与分类分别通过 Rust `set_reading_artifact_organization` 局部更新；Rust 事务校验成果和分类存在性。分类名称经 Rust 校验为 1–40 个字符，重名拒绝。
+- 删除分类在 Rust 同一事务中解除所有归属，保留收藏、成果和原文；删除成果通过 SQLite trigger 清理对应整理记录。
+- 整理筛选在 SQL 计数和分页之前应用，包含按文档的汇总查询。备份 v1 增加可选的 `artifactCategories` / `artifactOrganization`，导入仍与成果在同一事务中恢复，旧备份缺少字段时兼容。
+- 备份分类合并优先复用本地同名分类并映射备份分类 ID；没有同名项但 ID 已存在时保留本地名称。映射后的成果分类引用去重，保留本地分类及其既有归属；新增分类、映射引用与其它备份内容仍在同一 Rust 事务中，非法关联使整包回滚。

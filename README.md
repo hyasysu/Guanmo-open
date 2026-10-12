@@ -206,7 +206,7 @@ VITE_GUANMO_WEB_SEARCH_API_KEY_SECRET=guanmo.web-search.api-key
 
 ## 📚 使用说明 · User Guide
 
-- **[观墨使用说明书](docs/USER_GUIDE.md)**：安装配置、日常操作、快捷键与常见问题。
+- **[观墨使用手册](docs/USER_GUIDE.md)**：文字版快速上手与完整功能说明，涵盖文件、阅读、批注成果、AI、知识库、设置、备份和常见问题，并说明桌面与网页差异。
 - **[AI 使用指南](docs/AI_ROUTING_GUIDE.md)**：选区提问、知识库、文件、长期记忆与联网搜索。
 
 ---

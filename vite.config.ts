@@ -1,8 +1,11 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+import { addWebCsp } from './scripts/webCsp'
 
-export default defineConfig(({ mode }) => ({
+export default defineConfig(({ mode, command }) => {
+  process.env.GUANMO_BUILD_MODE = mode
+  return ({
   base: './',
   plugins: [
     react(),
@@ -14,6 +17,15 @@ export default defineConfig(({ mode }) => ({
           return html
             .replace('<head>', `<head>\n    <meta name="guanmo-build-mode" content="${mode}" />`)
             .replace('/src/main.tsx', mode === 'web' ? '/src/webMain.tsx' : '/src/main.tsx')
+        },
+      },
+    },
+    {
+      name: 'guanmo-web-csp',
+      transformIndexHtml: {
+        order: 'post',
+        handler(html) {
+          return mode === 'web' ? addWebCsp(html, command === 'serve') : html
         },
       },
     },
@@ -82,4 +94,5 @@ export default defineConfig(({ mode }) => ({
       },
     },
   },
-}))
+  })
+})

@@ -5,7 +5,7 @@ import type { ContextTag } from '@/types/contextTag'
 import { resolveScopeFilePaths } from '@/services/aiScope'
 import { hideLikelyToolJsonPrefix } from '@/services/agent/toolCallParser'
 import type { RagSearchProgress } from '@/services/rag/nativeIndex'
-import { dropOldestCompleteTurns, isModelContextOverflowError } from '@/services/ai/contextBudget'
+import { withContextOverflowRecovery } from '@/services/ai/contextBudget'
 import { createSourceReferenceRegistry, parseSourceReferences, type SourceReferenceRegistry } from '@/services/ai/sourceReferences'
 
 function createStreamContentFlusher(
@@ -229,6 +229,7 @@ export async function streamFinalAnswer(options: {
   reasoningMode?: 'off' | 'on'
 }): Promise<void> {
   const filter = options.filterToolJson ?? false
+  let hasPublishedContent = false
 
   const sendOnce = async (messages: ChatMessage[]) => {
     if (options.streamEnabled) {
@@ -240,10 +241,13 @@ export async function streamFinalAnswer(options: {
       })
       let accumulated = ''
       const transform = (content: string) => filter ? hideLikelyToolJsonPrefix(content) : content
-      const flusher = createStreamContentFlusher(options.onUpdate, options.isCancelled, transform)
+      const flusher = createStreamContentFlusher((content) => {
+        hasPublishedContent = hasPublishedContent || Boolean(content)
+        options.onUpdate(content)
+      }, () => options.isCancelled() || Boolean(options.signal?.aborted), transform)
       try {
         for await (const chunk of stream) {
-          if (options.isCancelled()) break
+          if (options.isCancelled() || options.signal?.aborted) break
           accumulated += chunk.content
           flusher.schedule(accumulated)
           if (chunk.done) break
@@ -260,18 +264,16 @@ export async function streamFinalAnswer(options: {
       temperature: options.temperature,
       reasoningMode: options.reasoningMode,
     })
-    if (!options.isCancelled()) {
+    if (!options.isCancelled() && !options.signal?.aborted) {
       options.onUpdate(filter ? hideLikelyToolJsonPrefix(response.content) : response.content)
     }
   }
 
-  try {
-    await sendOnce(options.messages)
-    return
-  } catch (error) {
-    if (!isModelContextOverflowError(error) || options.isCancelled()) throw error
-    console.warn('[AI context] provider reported context overflow; retrying after dropping oldest turn')
-    const reduced = dropOldestCompleteTurns(options.messages)
-    await sendOnce(reduced)
-  }
+  await withContextOverflowRecovery(options.messages, sendOnce, {
+    isCancelled: () => options.isCancelled() || Boolean(options.signal?.aborted),
+    onRetry: () => {
+      if (hasPublishedContent) options.onUpdate('')
+      hasPublishedContent = false
+    },
+  })
 }

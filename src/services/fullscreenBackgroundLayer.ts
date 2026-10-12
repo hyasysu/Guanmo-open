@@ -120,7 +120,7 @@ export async function updateFullscreenBackground(selection: BackgroundSelection)
   if (request !== revision) return
 
   const root = document.documentElement
-  if (!isTauri()) {
+  if (import.meta.env.MODE === 'web' || !isTauri()) {
     clearBackground()
     return
   }

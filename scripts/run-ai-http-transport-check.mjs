@@ -1,4 +1,6 @@
 import { Buffer } from 'node:buffer'
+import console from 'node:console'
+import process from 'node:process'
 import { spawnSync } from 'node:child_process'
 import { build } from 'esbuild'
 
@@ -40,7 +42,11 @@ try {
   process.exit(1)
 }
 
+if (process.argv.includes('--frontend-only')) {
+  console.log('Rust API HTTP tests: NOT TESTED (--frontend-only)')
+} else {
 const cargo = spawnSync('cargo', [
-  'test', '--manifest-path', 'src-tauri/Cargo.toml', 'api_http', '--lib', '--quiet',
+  'test', '--manifest-path', 'src-tauri/Cargo.toml', 'api_http', '--lib', '--quiet', '--jobs', '1',
 ], { stdio: 'inherit', shell: process.platform === 'win32' })
 if (cargo.status !== 0) process.exit(cargo.status ?? 1)
+}

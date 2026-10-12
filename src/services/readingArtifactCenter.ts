@@ -3,7 +3,11 @@ import {
   getAnnotationStructuredContent,
   getReadingArtifactQuestion,
   getReadingArtifactReferences,
+  getReadingArtifactOriginalSelections,
+  getReadingArtifactReferencedSourceIds,
 } from '@/services/database/readingArtifacts'
+import type { OriginalSelectionSnapshot } from '@/services/originalSelections'
+import type { SourceReferenceId } from '@/services/ai/sourceReferences'
 import { normalizeFilePath } from '@/services/pathIdentity'
 import type { ReadingMark, ReadingMarkAnchor, ReadingMarkColor } from '@/services/readingMarks'
 import { normalizeWorkspacePath, type WorkspaceRoot } from '@/services/workspaceIdentity'
@@ -48,6 +52,8 @@ export interface ReadingArtifactItem {
   color?: ReadingMarkColor
   question?: string
   references?: ReadingArtifactReference[]
+  originalSelections?: OriginalSelectionSnapshot[]
+  referencedSourceIds?: SourceReferenceId[]
   createdAt: number
   updatedAt: number
 }
@@ -92,6 +98,14 @@ function documentIdFor(filePath: string): string {
 }
 
 function appendLocation(ref: ReadingArtifactDocumentRef, location: ReadingArtifactLocation): void {
+  const sameRange = location.startLine !== undefined && location.endLine !== undefined
+    ? ref.locations.find((item) => item.startLine === location.startLine && item.endLine === location.endLine)
+    : undefined
+  if (sameRange) {
+    if (location.startOffset !== undefined) sameRange.startOffset = location.startOffset
+    if (location.endOffset !== undefined) sameRange.endOffset = location.endOffset
+    return
+  }
   const key = JSON.stringify(location)
   if (!ref.locations.some((item) => JSON.stringify(item) === key)) ref.locations.push(location)
 }
@@ -193,6 +207,8 @@ export function adaptAiReadingArtifact(
     content: artifact.content,
     question: getReadingArtifactQuestion(artifact) || undefined,
     references,
+    originalSelections: getReadingArtifactOriginalSelections(artifact),
+    referencedSourceIds: getReadingArtifactReferencedSourceIds(artifact),
     createdAt: artifact.createdAt,
     updatedAt: artifact.updatedAt,
   }

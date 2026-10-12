@@ -39,7 +39,7 @@ function invokeMock(command: string, args?: Record<string, unknown>) {
       case 'load_reading_marks':
       case 'list_authorized_api_origins':
       case 'load_reading_marks_page': return []
-      case 'load_secret': return null
+      case 'configure_api_connection': return { configId: 'smoke-config', configured: false }
       case 'authorize_selected_path':
       case 'authorize_workspace_path':
       case 'record_diagnostic_event':
@@ -195,6 +195,31 @@ describe('Core Smoke（真实 Desktop React Tree，隔离原生 I/O）', () => {
     await checkpoint(() => expect(screen.getByPlaceholderText('搜索阅读成果')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: /打开 AI 助手/ }))
     await checkpoint(() => expect(screen.getByPlaceholderText('输入消息... (Enter 发送)')).toBeInTheDocument())
+    const aiPanelContent = root.querySelector<HTMLElement>('.gm-layout-ai-panel .gm-layout-sidebar-content')!
+    await user.click(screen.getByRole('button', { name: '关闭面板' }))
+    await checkpoint(() => {
+      expect(useAppStore.getState().aiPanelOpen).toBe(false)
+      expect(root.querySelector('.gm-layout-ai-panel .gm-layout-sidebar-content')).toBe(aiPanelContent)
+      expect(aiPanelContent.inert).toBe(true)
+      expect(aiPanelContent.closest('.gm-layout-ai-panel')).toHaveAttribute('aria-hidden', 'true')
+      expect(screen.queryByRole('button', { name: '关闭面板' })).toBeNull()
+      expect(screen.getByRole('button', { name: /打开 AI 助手/ })).toHaveFocus()
+    })
+    await user.click(screen.getByRole('button', { name: /打开 AI 助手/ }))
+    await checkpoint(() => {
+      expect(screen.getByPlaceholderText('输入消息... (Enter 发送)')).toBeInTheDocument()
+      expect(root.querySelector('.gm-layout-ai-panel .gm-layout-sidebar-content')).toBe(aiPanelContent)
+      expect(aiPanelContent.inert).toBe(false)
+      expect(aiPanelContent.closest('.gm-layout-ai-panel')).toHaveAttribute('aria-hidden', 'false')
+    })
+
+    await user.click(screen.getByTitle('折叠侧边栏'))
+    await checkpoint(() => {
+      expect(root.querySelector('.gm-layout-sidebar-content[aria-hidden="true"]')).toBeNull()
+      expect(screen.getByRole('button', { name: '展开侧边栏' })).toHaveFocus()
+    })
+    await user.click(screen.getByRole('button', { name: '展开侧边栏' }))
+    await checkpoint(() => expect(screen.getByText('文件侧边栏')).toBeInTheDocument())
 
     await user.click(screen.getByTitle('设置'))
     await checkpoint(() => expect(screen.getByText('AI 模型')).toBeInTheDocument())

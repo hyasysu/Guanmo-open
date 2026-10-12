@@ -2,6 +2,7 @@ import { useAppStore } from '@/stores/appStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { MAX_SELECTION_CHARS } from '@/types/contextTag'
+import { requestOpenAiChat } from '@/services/aiPanelNavigation'
 
 const PREVIEW_LENGTH = 160
 export const AI_SHORTCUT_SUBMIT_EVENT = 'guanmo:submit-ai-shortcut'
@@ -19,6 +20,7 @@ function extractFileName(path: string): string {
 function ensureAiPanelOpen() {
   const app = useAppStore.getState()
   app.openAiPanel()
+  requestOpenAiChat()
 }
 
 /**

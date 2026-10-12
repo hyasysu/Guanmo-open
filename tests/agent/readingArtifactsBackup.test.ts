@@ -10,7 +10,7 @@ vi.mock('@/services/database/db', () => ({
   getDatabase: () => database,
 }))
 
-import { getReadingArtifactReferences, loadReadingArtifacts, loadReadingArtifactsForBackup } from '@/services/database/readingArtifacts'
+import { getReadingArtifactOriginalSelections, getReadingArtifactReferences, getReadingArtifactReferencedSourceIds, loadReadingArtifacts, loadReadingArtifactsForBackup } from '@/services/database/readingArtifacts'
 
 describe('阅读成果来源数据库与备份读取', () => {
   beforeEach(() => {
@@ -78,5 +78,24 @@ describe('阅读成果来源数据库与备份读取', () => {
         expect.objectContaining({ kind: 'web', title: '匿名网页' }),
       ],
     })
+  })
+
+  it('成果快照在重新加载和备份中自包含，旧成果缺字段仍可读', async () => {
+    const [oldArtifact] = await loadReadingArtifacts()
+    expect(getReadingArtifactOriginalSelections(oldArtifact)).toEqual([])
+    expect(getReadingArtifactReferencedSourceIds(oldArtifact)).toBeUndefined()
+    const row = database.select.mock.results[0]
+    const [fixture] = await row.value
+    const originalSelections = [{ title: '匿名选区', text: '当轮历史文本', filePath: null, truncated: false, previewOnly: false }]
+    const metadata = { ...JSON.parse(fixture.structured_content), originalSelections, referencedSourceIds: ['S2'],
+      sourceCandidates: [{ kind: 'local', filePath: 'C:/anonymous/note.md', fileName: 'note.md', startLine: 2, endLine: 4 }, { kind: 'web', title: '匿名网页', url: 'https://example.com/anonymous', snippet: '候选正文' }] }
+    database.select.mockResolvedValue([{ ...fixture, structured_content: JSON.stringify(metadata) }])
+    const [reloaded] = await loadReadingArtifacts()
+    expect(getReadingArtifactOriginalSelections(reloaded)).toEqual(originalSelections)
+    expect(getReadingArtifactReferencedSourceIds(reloaded)).toEqual(['S2'])
+    const [backup] = await loadReadingArtifactsForBackup()
+    expect(JSON.parse(backup.structuredContent!)).toEqual(metadata)
+    // 读取成果只查询成果表，不需要原聊天存在。
+    expect(database.select.mock.calls.every(([query]) => !String(query).includes('chat_messages'))).toBe(true)
   })
 })

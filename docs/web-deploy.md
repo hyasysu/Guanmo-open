@@ -11,6 +11,13 @@
 - `npm run build` 生成 Web 版；`npm run build:desktop` 生成 Tauri 桌面前端。Tauri 配置必须调用 desktop 命令，不得混用 Web 入口。
 - 两种构建分别执行模式校验与体积预算；可单独运行 `npm run check:bundle:web` 或 `npm run check:bundle:desktop`。Web 产物允许共享桌面 UI、CodeMirror 与完整 Markdown 预览，但不得包含 Tauri、SQLite 或 IndexedDB 运行时。
 
+## Web CSP
+
+- GitHub Pages 不提供本项目可配置的响应头；Vite 在 Web 开发页和生产 HTML 的头部注入 CSP meta。`scripts/webCsp.ts` 按最终 HTML 中现有内联启动脚本生成 SHA-256 hash，不改变启动执行时序，不使用脚本 `unsafe-inline` 或 `unsafe-eval`。
+- 样式保留 `unsafe-inline` 以兼容 CodeMirror、主题令牌及图表；图片保留 HTTPS/data/blob，字体保留 self/data；禁用 object、iframe、base 与表单提交。meta 无法提供 `frame-ancestors` 防嵌入；未来使用可配置服务器时由响应头补齐，不声称本地 meta 已覆盖。
+- Web `connect-src` 保留 HTTPS 和 HTTP：Chromium 不接受 `[::1]` CSP host-source，`http:` 是保留已有 IPv6 回环模型的兼容例外，不能宣称 CSP 自身只允许回环 HTTP。现有 Web 请求入口仍拒绝公网 HTTP、保留 CORS；Release 不开放 WebSocket，开发仅开放 localhost/127.0.0.1 的 HMR。桌面不使用此 Web 策略，API 继续经 Rust。
+- `npm run build` 验证 Web 产物/bundle；真实页面分别验证启动 hash、脚本/事件拒绝和安全渲染。未部署时线上 CSP 记 NOT TESTED；不得未经安全门禁把产物复制并推送到部署仓库。
+
 ## 仓库说明
 
 - **网页版源码仓库**：即当前开源仓库 `D:\React\guanmo-open`，在此处执行 `npm run build`（Vite）打包

@@ -61,3 +61,7 @@ export async function listAuthorizedApiOrigins(): Promise<never> {
 export async function revokeApiOrigin(_origin: string): Promise<never> {
   throw new UnsupportedCapabilityError('桌面 API 地址授权管理')
 }
+
+export async function externalApiFetch(): Promise<never> {
+  throw new UnsupportedCapabilityError('桌面安全配置请求')
+}

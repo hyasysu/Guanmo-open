@@ -6,8 +6,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { AiShortcutMenuItems } from './AiShortcutMenuItems'
 import { useFileOperations } from '@/hooks/useFileOperations'
 import { useActiveHeading, type ActiveHeadingGeometry } from '@/hooks/useActiveHeading'
-import { saveFile, saveFileAs } from '@/services/fileSystem'
-import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
+import { saveActiveDocument, persistDocumentContent } from '@/services/documentSave'
 import { extractToc, type TocItem } from '@/services/markdownToc'
 import { toggleMarkdownTaskAtLine } from '@/services/markdownTasks'
 import { saveExternalImageForMarkdown, saveImageFileForMarkdown } from '@/services/markdownImages'
@@ -168,10 +167,27 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
   const viewModeUsage = useEditorStore((s) => s.viewModeUsage)
   const isFullscreen = useAppStore((s) => s.isFullscreen)
   const editorViewRef = useRef<EditorView | null>(null)
+  const searchOpenRef = useRef(false)
+  const [, setSearchTargetRevision] = useState(0)
+  const searchEditorRef = useRef<{ view: EditorView; documentKey?: string | null } | null>(null)
+  const handleSearchEditorChange = useCallback((view: EditorView | null, documentKey?: string | null) => {
+    searchEditorRef.current = view ? { view, documentKey } : null
+    if (searchOpenRef.current) setSearchTargetRevision((revision) => revision + 1)
+  }, [])
   const leftPreviewRef = useRef<HTMLDivElement>(null)
   const rightPreviewRef = useRef<HTMLDivElement>(null)
   const leftMarkdownPreviewRef = useRef<MarkdownPreviewHandle>(null)
   const rightMarkdownPreviewRef = useRef<MarkdownPreviewHandle>(null)
+  const leftSearchModelRef = useRef<{ documentKey?: string; content: string } | null>(null)
+  const rightSearchModelRef = useRef<{ documentKey?: string; content: string } | null>(null)
+  const handleLeftSearchModelChange = useCallback((target: { documentKey?: string; content: string } | null) => {
+    leftSearchModelRef.current = target
+    if (searchOpenRef.current) setSearchTargetRevision((revision) => revision + 1)
+  }, [])
+  const handleRightSearchModelChange = useCallback((target: { documentKey?: string; content: string } | null) => {
+    rightSearchModelRef.current = target
+    if (searchOpenRef.current) setSearchTargetRevision((revision) => revision + 1)
+  }, [])
   const diffViewRef = useRef<MarkdownDiffViewHandle>(null)
   const annotationOverlayRef = useRef<AnnotationHoverOverlayHandle>(null)
   const restoredPreviewKeysRef = useRef<{ left: string | null; right: string | null }>({ left: null, right: null })
@@ -218,6 +234,7 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
   const [searchRequest, setSearchRequest] = useState<SearchRequest | null>(null)
   const searchRequestIdRef = useRef(0)
   const searchOpen = searchRequest !== null
+  searchOpenRef.current = searchOpen
   const [rightPaneDragOver, setRightPaneDragOver] = useState(false)
   const [tocCollapsed, setTocCollapsed] = useState(false)
   const [activeEditorHeading, setActiveEditorHeading] = useState<string | null>(null)
@@ -597,23 +614,31 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
     && restoredPreviewKeysRef.current.right !== getPreviewRestoreKey(rightTab.id, viewMode)
   )
 
-  // 预览内容更新（版本变化）只恢复预览自身位置，保证右侧渲染稳定；
-  // 绝不在内容更新时反向恢复编辑器位置——否则右侧渲染会把左侧视口拉走
-  // （编辑左侧时每次预览刷新都可能导致左侧跳动）。
+  // 文件/模式切换恢复阅读位置；同文档刷新由 MarkdownPreview 保持当前视口，
+  // 不重播旧位置，也取消上一轮恢复留下的迟到布局校正。
   useLayoutEffect(() => {
     if (!activeTab?.id) return
     const restoreStartedAt = import.meta.env.DEV ? performance.now() : 0
     if (viewMode === 'preview' || viewMode === 'edit-preview' || viewMode === 'dual-preview') {
-      restorePreviewReadingPosition(activeTab.id, leftPreviewRef.current, 'left')
+      if (restoredPreviewKeysRef.current.left === getPreviewRestoreKey(activeTab.id, viewMode)) {
+        allowPreviewPositionUpdates(activeTab.id, 'left')
+      } else {
+        restorePreviewReadingPosition(activeTab.id, leftPreviewRef.current, 'left')
+      }
     }
     if (viewMode === 'dual-preview' && rightTab?.id) {
-      restorePreviewReadingPosition(rightTab.id, rightPreviewRef.current, 'right')
+      if (restoredPreviewKeysRef.current.right === getPreviewRestoreKey(rightTab.id, viewMode)) {
+        allowPreviewPositionUpdates(rightTab.id, 'right')
+      } else {
+        restorePreviewReadingPosition(rightTab.id, rightPreviewRef.current, 'right')
+      }
     }
     if (leftPreviewVisible) {
       reportPreviewSwitchPerformance(activeTab.id, restoreStartedAt)
     }
   }, [
     activePreview.version,
+    allowPreviewPositionUpdates,
     activeTab?.id,
     restorePreviewReadingPosition,
     rightPreview.version,
@@ -1134,47 +1159,15 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
     }
   }, [activeTab?.id, activePreview.version, cancelEditorFollower, cancelPreviewFollower, setScrollSyncSource, syncEditorToPreviewLine, syncPreviewToEditorLine, syncScroll, viewMode])
 
-  const handleSave = useCallback(async () => {
-    const state = useEditorStore.getState()
-    const tab = state.tabs.find((item) => item.id === state.activeTabId)
-    if (!tab) return
-    try {
-      if (tab.filePath) {
-        await saveFile(tab.filePath, tab.content)
-        scheduleMarkdownDocumentIndex(tab.filePath, tab.title, tab.content)
-        useEditorStore.getState().markTabSaved(tab.id, tab.content)
-        toast.success('已保存')
-      } else {
-        const result = await saveFileAs(tab.content)
-        if (result) {
-          scheduleMarkdownDocumentIndex(result.path, result.name, result.content)
-          useEditorStore.getState().saveTabAs(tab.id, result.path, result.name, result.content)
-          toast.success('已保存')
-        }
-      }
-    } catch (err) {
-      console.error('Save failed:', err)
-      toast.error(describeFileOperationError(err, '保存失败'))
-    }
-  }, [])
+  const handleSave = saveActiveDocument
 
   const persistTabContent = useCallback(async (tabId: string, nextContent: string) => {
-    const targetTab = useEditorStore.getState().tabs.find((tab) => tab.id === tabId)
-    if (!targetTab) return
-
-    updateTabContent(tabId, nextContent)
-
-    if (!targetTab.filePath) return
-
     try {
-      await saveFile(targetTab.filePath, nextContent)
-      scheduleMarkdownDocumentIndex(targetTab.filePath, targetTab.title, nextContent)
-      useEditorStore.getState().replaceTabContentWithSaved(tabId, nextContent)
+      await persistDocumentContent(tabId, nextContent)
     } catch (err) {
-      console.error('Auto-save markdown task failed:', err)
       toast.error(describeFileOperationError(err, '任务勾选保存失败'))
     }
-  }, [updateTabContent])
+  }, [])
 
   const handleTaskToggle = useCallback(async (tabId: string, content: string, line: number, checked: boolean) => {
     const nextContent = toggleMarkdownTaskAtLine(content, line, checked)
@@ -1493,6 +1486,9 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
   }, [createSearchRequest])
 
   const getSearchProps = (request: SearchRequest | null) => {
+    const searchEditor = searchEditorRef.current
+    const leftSearchModel = leftSearchModelRef.current
+    const rightSearchModel = rightSearchModelRef.current
     const canUseEditor = viewMode === 'edit' || viewMode === 'edit-preview'
     const canUsePreview = leftPreviewVisible
     const defaultTarget: SearchRequest['target'] = canUseEditor ? 'editor' : 'preview'
@@ -1501,23 +1497,32 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
       : request?.target === 'preview' && canUsePreview
         ? 'preview'
         : defaultTarget
-    if (target === 'editor') return { editorViewRef, searchRequest: request ?? undefined }
+    if (target === 'editor') return {
+      editorViewRef,
+      editorView: editorVisible && searchEditor?.documentKey === activeTab?.id ? searchEditor?.view ?? null : null,
+      targetKey: activeTab?.id,
+      searchRequest: request ?? undefined,
+    }
     const previewSources = []
-    if (leftPreviewVisible && leftPreviewRef.current) {
+    if (viewMode !== 'diff-preview' && leftPreviewVisible && activeTab) {
       previewSources.push({
-        content: leftPreviewRenderRef.current.content,
+        content: activeTab.content,
+        targetKey: activeTab.id,
+        ready: previewContentReady && leftSearchModel?.documentKey === activeTab.id && leftSearchModel?.content === activeTab.content,
         paneRef: leftPreviewRef,
         previewRef: leftMarkdownPreviewRef,
       })
     }
-    if (viewMode === 'dual-preview' && rightPreviewRef.current && rightTab) {
+    if (viewMode === 'dual-preview' && rightTab) {
       previewSources.push({
-        content: rightPreview.content,
+        content: rightTab.content,
+        targetKey: rightTab.id,
+        ready: rightSearchModel?.documentKey === rightTab.id && rightSearchModel?.content === rightTab.content,
         paneRef: rightPreviewRef,
         previewRef: rightMarkdownPreviewRef,
       })
     }
-    return { previewSources, searchRequest: request ?? undefined }
+    return { previewSources, targetKey: `${activeTab?.id ?? ''}:${viewMode === 'dual-preview' ? rightTab?.id ?? '' : ''}`, searchRequest: request ?? undefined }
   }
 
   const handlePreviewFirstVisible = useCallback((documentId: string | null) => {
@@ -1642,6 +1647,7 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
                   onSave={handleSave}
                   onImageFiles={(files, insertAt) => void handleInsertImageFiles(files, insertAt)}
                   viewRef={editorViewRef}
+                  onViewChange={handleSearchEditorChange}
                   documentKey={activeTab.id}
                   tabId={activeTab.id}
                   initialScrollTop={getStoredEditorTop(activeTab.id)}
@@ -1720,6 +1726,7 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
                       }
                     }}
                     onRenderComplete={handlePreviewRenderComplete}
+                    onSearchModelChange={handleLeftSearchModelChange}
                     onPositionIntent={allowLeftPreviewPositionUpdates}
                     resource="left-preview"
                     readingMarks={activeReadingMarks}
@@ -1787,6 +1794,7 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
                     isVisible={viewMode === 'dual-preview'}
                     onPositionIntent={allowRightPreviewPositionUpdates}
                     resource="right-preview"
+                    onSearchModelChange={handleRightSearchModelChange}
                     readingMarks={rightReadingMarks}
                     onCreateReadingMark={readingMarksEnabled ? handleCreateRightReadingMark : undefined}
                     onUpdateReadingMark={readingMarksEnabled ? handleUpdateRightReadingMark : undefined}
@@ -1824,8 +1832,8 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
           </>
         )}
 
-        {searchOpen && tabs.length > 0 && (
-          <SearchOverlay key={`${searchRequest?.requestId ?? 0}:${searchRequest?.target ?? ''}`} onClose={() => setSearchRequest(null)} {...getSearchProps(searchRequest)} />
+        {searchOpen && (
+          <SearchOverlay onClose={() => setSearchRequest(null)} {...getSearchProps(searchRequest)} />
         )}
         {previewMenu && (
           <ContextMenu position={previewMenu} onClose={closePreviewMenu} minWidth={176} maxWidth={176}>

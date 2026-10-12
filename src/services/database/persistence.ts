@@ -14,6 +14,7 @@ import {
   type MemoryQueryFilters,
 } from './memoryQuery'
 import type { ReadingMark } from '@/services/readingMarks'
+import { loadArtifactOrganization, type ArtifactCategory, type ArtifactOrganization } from './artifactOrganization'
 
 interface DocumentRow {
   id: string
@@ -87,6 +88,8 @@ export interface BackupPayload {
   artifacts: ReadingArtifactBackupEntry[]
   readingReminders: ReadingReminderBackupEntry[]
   readingMarks?: ReadingMark[]
+  artifactCategories?: ArtifactCategory[]
+  artifactOrganization?: ArtifactOrganization[]
   note: string
 }
 
@@ -920,6 +923,7 @@ export async function exportBackupPayload(): Promise<BackupPayload> {
   const readingReminders = await loadReadingRemindersForBackup()
   const { loadAllReadingMarksForBackup } = await import('./readingMarks')
   const readingMarks = await loadAllReadingMarksForBackup()
+  const organization = await loadArtifactOrganization()
   return {
     version: 1,
     exportedAt: Date.now(),
@@ -928,6 +932,8 @@ export async function exportBackupPayload(): Promise<BackupPayload> {
     artifacts,
     readingReminders,
     readingMarks,
+    artifactCategories: organization.categories,
+    artifactOrganization: organization.entries,
     note: '不包含 API Key 等敏感密钥。知识库文档索引可在新环境通过工作区重建恢复。',
   }
 }

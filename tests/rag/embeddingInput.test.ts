@@ -8,6 +8,7 @@ import {
   getEmbeddingInput,
 } from '@/services/rag/embeddingInput'
 import { canSkipDocumentIndex, reconcileDocumentChunks } from '@/services/rag/reconciler'
+import { ExternalHttpError } from '@/services/externalHttp'
 
 const mockBatchEmbedding = vi.fn()
 const mockEmbedding = vi.fn()
@@ -171,6 +172,35 @@ describe('embedding preprocessing compatibility', () => {
     expect(reconciled.document.chunks[0].embeddingInputHash).toBeUndefined()
     expect(reconciled.document.chunks[0].embeddingModel).toBeNull()
     expect(reconciled.stats.reembedded).toBe(0)
+  })
+
+  it.each(['RATE_LIMIT_EXCEEDED', 'SESSION_LIMIT_EXCEEDED'])('stops %s without serial fallback or persistence', async (code) => {
+    const document: Document = {
+      id: 'anonymous-document', filePath: 'D:/anonymous/limit.md', title: 'anonymous',
+      content: 'anonymous', lastModified: 1, chunks: [createChunk('anonymous')],
+    }
+    const error = new ExternalHttpError(code, 'API 使用上限')
+    mockBatchEmbedding.mockRejectedValueOnce(error)
+    const { embedDocument } = await import('@/services/rag/pipeline')
+    await expect(embedDocument(document)).rejects.toBe(error)
+    expect(mockEmbedding).not.toHaveBeenCalled()
+    expect(mockAddDocument).not.toHaveBeenCalled()
+    expect(mockFlushPersistence).not.toHaveBeenCalled()
+  })
+
+  it('stops when serial fallback reaches the limit', async () => {
+    const document: Document = {
+      id: 'anonymous-document', filePath: 'D:/anonymous/limit.md', title: 'anonymous',
+      content: 'anonymous', lastModified: 1,
+      chunks: [createChunk('first'), { ...createChunk('second'), id: 'second' }],
+    }
+    const error = new ExternalHttpError('RATE_LIMIT_EXCEEDED', 'API 使用上限')
+    mockBatchEmbedding.mockRejectedValueOnce(new Error('batch rejected'))
+    mockEmbedding.mockRejectedValueOnce(error)
+    const { embedDocument } = await import('@/services/rag/pipeline')
+    await expect(embedDocument(document)).rejects.toBe(error)
+    expect(mockEmbedding).toHaveBeenCalledTimes(1)
+    expect(mockAddDocument).not.toHaveBeenCalled()
   })
 
   it('keeps the parent id while progressively replacing a v1 vector', async () => {

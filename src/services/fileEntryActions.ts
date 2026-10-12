@@ -1,6 +1,7 @@
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
-import { fileExistsEntry, renameFileEntryInFileSystem, saveFileAs } from '@/services/fileSystem'
+import { fileExistsEntry, renameFileEntryInFileSystem } from '@/services/fileSystem'
+import { saveDocumentAs, saveDocumentCopy } from '@/services/documentSave'
 import { basenamePath, dirnamePath, isTauri, joinPath } from '@/hooks/useTauri'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
@@ -39,20 +40,16 @@ export async function renameFileEntry(path: string, nextName: string): Promise<s
 }
 
 export async function saveTabAsFile(tab: Tab): Promise<void> {
-  const result = await saveFileAs(tab.content)
-  if (!result) return
-  useEditorStore.getState().saveTabAs(tab.id, result.path, result.name, result.content)
-  scheduleMarkdownDocumentIndex(result.path, result.name, result.content)
+  await saveDocumentAs(tab.id)
 }
 
 export async function saveExistingFileAs(path: string): Promise<void> {
   const state = useEditorStore.getState()
   const opened = state.tabs.find((tab) => isSameFilePath(tab.filePath, path))
   const content = opened?.content ?? await readRememberedFile(path)
-  const result = await saveFileAs(content)
-  if (!result) return
-  state.addTab(result.path, result.name, result.content)
-  scheduleMarkdownDocumentIndex(result.path, result.name, result.content)
+  const result = await saveDocumentCopy(content, opened?.id)
+  if (!result || result.status !== 'written') return
+  state.addTab(result.path, result.path.split(/[/\\]/).pop() || 'untitled.md', result.content)
 }
 
 export async function reloadOpenedTabFromDisk(tab: Tab): Promise<boolean> {

@@ -125,4 +125,18 @@ describe('database schema versioning', () => {
     await expect(initializeDatabaseSchema(database)).rejects.toThrow('backfill failed')
     expect(database.userVersion).toBe(0)
   })
+
+  it('upgrades version 3 with additive organization tables and cleanup triggers, then stays idempotent', async () => {
+    const database = new FakeSchemaDatabase({ userVersion: 3, existingSchema: true })
+    await initializeDatabaseSchema(database)
+    expect(database.executed.some((sql) => sql.startsWith('CREATE TABLE IF NOT EXISTS reading_artifact_categories'))).toBe(true)
+    expect(database.executed.some((sql) => sql.startsWith('CREATE TABLE IF NOT EXISTS reading_artifact_organization'))).toBe(true)
+    expect(database.executed.filter((sql) => sql.includes('organization_delete'))).toHaveLength(2)
+    expect(database.executed).not.toContain(DB_LEGACY_BACKFILL_STATEMENTS[0])
+    expect(database.selected.some((sql) => sql.startsWith('PRAGMA table_info'))).toBe(false)
+    expect(database.executed.some((sql) => /DROP TABLE|DELETE FROM reading_artifacts|DELETE FROM reading_marks/.test(sql))).toBe(false)
+    database.executed = []
+    await initializeDatabaseSchema(database)
+    expect(database.executed).toEqual([])
+  })
 })

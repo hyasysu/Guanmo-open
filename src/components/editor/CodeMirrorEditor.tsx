@@ -10,6 +10,7 @@ import {
   closeBrackets,
   closeBracketsKeymap,
   completionKeymap,
+  closeCompletion,
 } from '@codemirror/autocomplete'
 import { tags } from '@lezer/highlight'
 import { useEditorStore } from '@/stores/editorStore'
@@ -18,6 +19,7 @@ import { setActiveEditorView } from '@/services/editorViewRef'
 import { useEditorHistoryStore } from '@/stores/editorHistoryStore'
 import { DeferredContentEmitter } from '@/services/editorInputBuffer'
 import { editorCodeLanguages } from '@/services/editorCodeLanguages'
+import { markdownCompletionSource } from '@/services/markdownCompletion'
 import { eventMarker } from '@/services/eventMarker'
 
 interface CodeMirrorEditorProps {
@@ -26,6 +28,7 @@ interface CodeMirrorEditorProps {
   onSave?: () => void
   onImageFiles?: (files: File[], insertAt?: number) => void
   viewRef?: React.MutableRefObject<EditorView | null>
+  onViewChange?: (view: EditorView | null, documentKey?: string | null) => void
   documentKey?: string | null
   tabId?: string | null
   initialScrollTop?: number
@@ -202,9 +205,61 @@ export function buildMarkdownEditorTheme(fontSize: number, lineHeight: number, f
       borderRadius: '16px',
       boxShadow: '0 4px 12px color-mix(in srgb, var(--gm-text) 10%, transparent)',
     },
-    '.cm-tooltip-autocomplete': {
-      '& > ul > li': { padding: '4px 8px' },
+    '.cm-tooltip.cm-tooltip-autocomplete': {
+      fontFamily: 'var(--gm-font-family)',
+      fontSize: '13px',
+      borderRadius: '12px',
+      padding: '4px',
+      boxShadow: 'var(--gm-tooltip-shadow, 0 8px 24px rgba(0, 0, 0, 0.16))',
+      '& > ul': {
+        fontFamily: 'inherit',
+        minWidth: '260px',
+        maxWidth: 'min(400px, 90vw)',
+        maxHeight: '240px',
+        padding: '0',
+        scrollbarWidth: 'thin',
+        scrollbarColor: 'var(--gm-border-hover) transparent',
+      },
+      '& > ul::-webkit-scrollbar': { width: '4px' },
+      '& > ul::-webkit-scrollbar-thumb': { borderRadius: '4px', backgroundColor: 'var(--gm-border-hover)' },
+      '& > ul::-webkit-scrollbar-button': { display: 'none' },
+      '& > ul > li': {
+        boxSizing: 'border-box',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '16px',
+        minHeight: '32px',
+        padding: '5px 10px',
+        margin: '2px 0',
+        borderRadius: '8px',
+        lineHeight: '20px',
+        color: 'var(--gm-text)',
+      },
+      '& > ul > li:hover': { backgroundColor: 'var(--gm-surface-hover)' },
       '& > ul > li[aria-selected]': { backgroundColor: 'var(--gm-primary-subtle)', color: 'var(--gm-text)' },
+      '& .cm-completionLabel': {
+        flex: '1', minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: '500',
+      },
+      '& .cm-completionMatchedText': { textDecoration: 'none', color: 'var(--gm-primary)', fontWeight: '700' },
+      '& .cm-completionDetail': {
+        flexShrink: '0',
+        maxWidth: '140px',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        marginLeft: '0',
+        padding: '1px 6px',
+        border: '1px solid var(--gm-border-subtle)',
+        borderRadius: '6px',
+        backgroundColor: 'var(--gm-surface-elevated)',
+        color: 'var(--gm-text-secondary)',
+        fontFamily: '"Cascadia Code", "JetBrains Mono", monospace',
+        fontSize: '11px',
+        fontStyle: 'normal',
+        lineHeight: '18px',
+      },
+      '& .cm-completionListIncompleteTop:before, & .cm-completionListIncompleteBottom:after': {
+        fontSize: '10px', lineHeight: '12px', color: 'var(--gm-text-tertiary)',
+      },
     },
     '.cm-panels': {
       backgroundColor: 'var(--gm-surface)',
@@ -259,7 +314,7 @@ const saveKeymap = keymap.of([
   },
 ])
 
-export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, viewRef: externalViewRef, documentKey, tabId, initialScrollTop, initialCursor, initialSelection, initialRanges, initialMainIndex, onBeforeDestroy, resource = 'editor' }: CodeMirrorEditorProps) {
+export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, viewRef: externalViewRef, onViewChange, documentKey, tabId, initialScrollTop, initialCursor, initialSelection, initialRanges, initialMainIndex, onBeforeDestroy, resource = 'editor' }: CodeMirrorEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const internalViewRef = useRef<EditorView | null>(null)
   const viewRef = externalViewRef || internalViewRef
@@ -275,6 +330,8 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
   onImageFilesRef.current = onImageFiles
   const onBeforeDestroyRef = useRef(onBeforeDestroy)
   onBeforeDestroyRef.current = onBeforeDestroy
+  const onViewChangeRef = useRef(onViewChange)
+  onViewChangeRef.current = onViewChange
 
   // Read editor settings from store
   const editorSettings = useSettingsStore((s) => s.editor)
@@ -342,6 +399,7 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
       setCanRedo(redoDepth(update.state) > 0)
     })
 
+    const markdownSupport = markdown({ base: markdownLanguage, codeLanguages: editorCodeLanguages })
     const state = EditorState.create({
       doc: currentDoc,
       extensions: [
@@ -351,11 +409,12 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
         history(),
         bracketMatching(),
         closeBrackets(),
-        autocompletion(),
+        autocompletion({ maxRenderedOptions: Number.POSITIVE_INFINITY, icons: false }),
         highlightSelectionMatches(),
         syntaxHighlighting(markdownHighlightStyle),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-        markdown({ base: markdownLanguage, codeLanguages: editorCodeLanguages }),
+        markdownSupport,
+        markdownSupport.language.data.of({ autocomplete: markdownCompletionSource }),
         EditorState.languageData.of(() => [{
           closeBrackets: {
             brackets: ['(', '[', '{', "'", '"', '`'],
@@ -366,6 +425,10 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
         saveKeymap,
         updateListener,
         EditorView.domEventHandlers({
+          compositionstart(_event, view) {
+            closeCompletion(view)
+            return false
+          },
           drop(event, view) {
             const files = Array.from(event.dataTransfer?.files || []).filter(isImageLikeFile)
             if (files.length === 0) return false
@@ -449,6 +512,8 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
     setCanUndo(false)
     setCanRedo(false)
 
+    onViewChangeRef.current?.(view, documentKey)
+
     // 行号槽在 .cm-scroller 布局流中占据宽度，会把正文推向右侧；将其宽度暴露为 CSS 变量，
     // 供全屏分屏布局在外侧留白中扣除，保证编辑栏与预览栏文本列等宽（见 global.css 分屏补偿规则）
     const guttersEl = view.dom.querySelector<HTMLElement>('.cm-gutters')
@@ -474,6 +539,7 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
       inputBuffer.dispose()
       if (inputBufferRef.current === inputBuffer) inputBufferRef.current = null
       onBeforeDestroyRef.current?.(documentKey, view)
+      onViewChangeRef.current?.(null, documentKey)
       view.destroy()
       eventMarker.mark('model-dispose', { editor: 'codemirror', resource, documentKey })
       eventMarker.mark('editor-dispose', { editor: 'codemirror', resource, documentKey })

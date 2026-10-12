@@ -11,6 +11,8 @@ import { getDatabase, isDatabaseReady } from './db'
 import type { ChatMessageSource, ReadingScope } from '@/services/ai/types'
 import { parseMarkdownBlocks, type MarkdownBlock } from '@/services/markdownBlocks'
 import { normalizeFilePath } from '@/services/pathIdentity'
+import { decodeOriginalSelections, type OriginalSelectionSnapshot } from '@/services/originalSelections'
+import type { SourceReferenceId } from '@/services/ai/sourceReferences'
 
 /** 阅读成果类型，与 schema CHECK 约束保持一致 */
 export type ReadingArtifactType =
@@ -211,7 +213,7 @@ export interface WebReadingArtifactReference {
   publishedAt?: string
 }
 
-/** AI 回答实际使用的完整参考来源快照。 */
+/** AI 回复的参考资料及本轮选区定位来源快照。 */
 export type ReadingArtifactReference =
   | LocalReadingArtifactReference
   | WebReadingArtifactReference
@@ -234,10 +236,17 @@ export function mergeReadingArtifactQuestionMetadata(
 /** 将聊天消息来源转换为稳定持久化快照，并按原顺序去重。 */
 export function buildReadingArtifactReferences(
   sources: readonly ChatMessageSource[] | undefined,
+  selections: readonly OriginalSelectionSnapshot[] = [],
 ): ReadingArtifactReference[] {
   const references: ReadingArtifactReference[] = []
   const seen = new Set<string>()
-  for (const source of sources ?? []) {
+  const selectionSources: LocalReadingArtifactReference[] = selections.flatMap((selection) => {
+    const filePath = selection.filePath?.trim()
+    if (!filePath || !isValidLineRange(selection.startLine, selection.endLine)) return []
+    return [{ kind: 'local', filePath, fileName: filePath.replace(/\\/g, '/').split('/').pop()!,
+      startLine: selection.startLine!, endLine: selection.endLine! }]
+  })
+  for (const source of [...(sources ?? []), ...selectionSources]) {
     if (source.kind === 'web') {
       const title = source.title.trim()
       const url = source.url.trim()
@@ -294,15 +303,39 @@ export function getReadingArtifactQuestion(artifact: ReadingArtifact): string | 
   return typeof question === 'string' && question.trim() ? question : null
 }
 
+export function getReadingArtifactOriginalSelections(artifact: ReadingArtifact): OriginalSelectionSnapshot[] {
+  return isPlainObject(artifact.structuredContent) ? decodeOriginalSelections(artifact.structuredContent.originalSelections) : []
+}
+
+/** 附加快照保留候选来源顺序及既有引用 ID，不把选区插入 sources。 */
+export function mergeReadingArtifactSelectionMetadata(
+  structuredContent: Record<string, unknown>,
+  selections: readonly OriginalSelectionSnapshot[] | undefined,
+  sources: readonly ChatMessageSource[] | undefined,
+  referencedSourceIds: readonly SourceReferenceId[] | undefined,
+): Record<string, unknown> {
+  return {
+    ...structuredContent,
+    ...(selections?.length ? { originalSelections: decodeOriginalSelections(selections) } : {}),
+    ...(sources?.length ? { sourceCandidates: sources.map((source) => source.kind === 'web' ? { ...source } : { ...source, ...(source.titlePath ? { titlePath: [...source.titlePath] } : {}) }) } : {}),
+    ...(referencedSourceIds ? { referencedSourceIds: [...referencedSourceIds] } : {}),
+  }
+}
+
+export function getReadingArtifactReferencedSourceIds(artifact: ReadingArtifact): SourceReferenceId[] | undefined {
+  if (!isPlainObject(artifact.structuredContent) || !Array.isArray(artifact.structuredContent.referencedSourceIds)) return undefined
+  return artifact.structuredContent.referencedSourceIds.filter((id): id is SourceReferenceId => typeof id === 'string' && /^S[1-9]\d*$/.test(id))
+}
+
 /** 安全读取成果来源；旧成果或损坏项降级为空数组。 */
 export function getReadingArtifactReferences(artifact: ReadingArtifact): ReadingArtifactReference[] {
   if (!isPlainObject(artifact.structuredContent)) return []
   const value = artifact.structuredContent.references
-  if (!Array.isArray(value)) return []
-  return value.flatMap((item) => {
+  const references = Array.isArray(value) ? value.flatMap((item) => {
     const decoded = decodeReadingArtifactReference(item)
     return decoded ? [decoded] : []
-  })
+  }) : []
+  return buildReadingArtifactReferences(references, getReadingArtifactOriginalSelections(artifact))
 }
 
 function decodeReadingArtifactReference(value: unknown): ReadingArtifactReference | null {

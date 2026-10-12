@@ -1,4 +1,5 @@
-import { Check, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, FileText, Filter } from 'lucide-react'
+import { ArtifactFilterMenu } from './ArtifactFilterMenu'
+import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, FileText, Filter } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import ReactMarkdown from 'react-markdown'
@@ -23,6 +24,7 @@ import {
   listArtifactDocuments,
   listArtifactsByDocument,
   type ReadingArtifactDocumentRef,
+  type ReadingArtifactLocation,
   type ReadingArtifactItem,
   type ReadingArtifactItemType,
 } from '@/services/readingArtifactCenter'
@@ -33,6 +35,10 @@ import { useAppStore } from '@/stores/appStore'
 import { useReadingArtifactsStore } from '@/stores/readingArtifactsStore'
 import { useReadingMarksStore } from '@/stores/readingMarksStore'
 import { MORPHING_MOTION_TOKENS } from '@/components/common/useMorphingMotion'
+import { ArtifactCategoryLabels, ArtifactOrganizationActions, ArtifactOrganizationToolbar, useArtifactOrganization } from './ArtifactOrganizationControls'
+import type { ArtifactOrganizationFilter } from '@/services/database/artifactOrganization'
+import { OriginalSelections } from '@/components/ai/OriginalSelections'
+import './readingArtifactPaging.css'
 
 type DocumentAvailability = 'checking' | 'available' | 'unavailable'
 type CenterView = 'recent' | 'documents' | 'detail' | 'focus'
@@ -171,7 +177,7 @@ export function ReadingArtifactCenter({
   focusKey,
   onCloseFocus,
 }: {
-  onOpenAiSource: (artifact: ReadingArtifact, documentRef: ReadingArtifactDocumentRef) => void | Promise<void>
+  onOpenAiSource: (artifact: ReadingArtifact, documentRef: ReadingArtifactDocumentRef, location?: ReadingArtifactLocation) => void | Promise<void>
   focusKey?: string | null
   onCloseFocus?: () => void
 }) {
@@ -205,6 +211,8 @@ export function ReadingArtifactCenter({
   const [itemsTotal, setItemsTotal] = useState(0)
   const [itemsLoading, setItemsLoading] = useState(true)
   const [itemsLoadingMore, setItemsLoadingMore] = useState(false)
+  const [itemsHasMore, setItemsHasMore] = useState(false)
+  const [enteringItems, setEnteringItems] = useState<ReadonlyMap<string, number>>(() => new Map())
   const [itemsError, setItemsError] = useState<string | null>(null)
   const [documentPage, setDocumentPage] = useState<ReadingArtifactDocumentPage>({ documents: [], total: 0, hasMore: false })
   const [documentsLoading, setDocumentsLoading] = useState(true)
@@ -212,12 +220,14 @@ export function ReadingArtifactCenter({
   const loadedAiArtifactsRef = useRef<ReadingArtifact[]>([])
   const documentPageRef = useRef<ReadingArtifactDocumentPage>({ documents: [], total: 0, hasMore: false })
   const requestSequenceRef = useRef(0)
+  const appendRequestRef = useRef<number | null>(null)
   const documentRequestSequenceRef = useRef(0)
   const searchDebounceRef = useRef<number | null>(null)
   const [expandedAiKey, setExpandedAiKey] = useState<string | null>(null)
   const reducedMotion = useReducedMotion() ?? false
   const rootRef = useRef<HTMLDivElement>(null)
   const contentScrollerRef = useRef<HTMLDivElement>(null)
+  const prefetchCardRef = useRef<HTMLDivElement>(null)
   const detailHeadingRef = useRef<HTMLHeadingElement>(null)
   const returnFocusRef = useRef<HTMLButtonElement | null>(null)
   const previousViewRef = useRef<CenterView>('recent')
@@ -225,6 +235,11 @@ export function ReadingArtifactCenter({
   const focusReturnViewRef = useRef<CenterView>('recent')
   const [focusLoading, setFocusLoading] = useState(false)
   const [focusError, setFocusError] = useState<string | null>(null)
+  const organization = useArtifactOrganization()
+  const organizationRevisionRef = useRef(0)
+  const dataRevisionRef = useRef({ marks: marksRevision, artifacts: artifactsRevision })
+  const [organizationFilter, setOrganizationFilter] = useState<ArtifactOrganizationFilter>({ collection: 'all' })
+  const organizationByKey = useMemo(() => new Map(organization.entries.map((entry) => [entry.artifactKey, entry])), [organization.entries])
 
   const activeTypes = useMemo(() => {
     if (view !== 'detail' || detailFilter === 'all') return [...selectedTypes]
@@ -233,6 +248,7 @@ export function ReadingArtifactCenter({
   }, [detailFilter, selectedTypes, view])
 
   const queryOptions = useMemo(() => ({
+    ...organizationFilter,
     view: view === 'detail' ? 'detail' as const : 'recent' as const,
     document: view === 'detail' ? selectedDocument : undefined,
     documentId: view === 'detail' ? (selectedDocument?.documentId ?? null) : undefined,
@@ -243,18 +259,39 @@ export function ReadingArtifactCenter({
     types: activeTypes,
     sort: view === 'detail' ? detailSort : 'time' as const,
     limit: 40,
-  }), [activeTypes, detailSort, query, selectedDocument, view])
+  }), [activeTypes, detailSort, organizationFilter, query, selectedDocument, view])
 
-  const loadItems = useCallback(async (append: boolean) => {
+  const loadItems = useCallback(async (append: boolean, quiet = false) => {
+    if (append && appendRequestRef.current !== null) return
     const offset = append ? loadedItemsRef.current.length : 0
+    const limit = view === 'recent' ? 5 : queryOptions.limit
     const requestId = ++requestSequenceRef.current
+    appendRequestRef.current = append ? requestId : null
     if (append) setItemsLoadingMore(true)
-    else setItemsLoading(true)
+    else if (!quiet) setItemsLoading(true)
     setItemsError(null)
     let detailSnapshot: ReadingArtifactItem[] | null = null
     try {
-      const result = await loadReadingArtifactCenterItemsPage({ ...queryOptions, offset })
+      // Refresh the loaded range in bounded pages so mutations do not collapse it.
+      const refreshCount = !append && quiet && view === 'recent'
+        ? Math.max(limit, loadedItemsRef.current.length)
+        : limit
+      const result = await loadReadingArtifactCenterItemsPage({ ...queryOptions, offset, limit })
       if (requestId !== requestSequenceRef.current) return
+      let fetched = result.marks.length + result.artifacts.length
+      while (fetched < refreshCount && result.hasMore) {
+        const page = await loadReadingArtifactCenterItemsPage({
+          ...queryOptions, offset: fetched, limit: Math.min(queryOptions.limit, refreshCount - fetched),
+        })
+        if (requestId !== requestSequenceRef.current) return
+        result.marks.push(...page.marks)
+        result.artifacts.push(...page.artifacts)
+        result.total = page.total
+        result.hasMore = page.hasMore
+        const count = page.marks.length + page.artifacts.length
+        if (count === 0) break
+        fetched += count
+      }
       const projected = buildReadingArtifactItems(
         result.marks,
         result.artifacts,
@@ -264,7 +301,11 @@ export function ReadingArtifactCenter({
       const next = view === 'detail'
         ? listArtifactsByDocument(filtered, selectedDocument?.documentId ?? null)
         : filtered
-      const combined = append ? [...loadedItemsRef.current, ...next] : next
+      const existingKeys = new Set(loadedItemsRef.current.map((item) => item.key))
+      const added = append ? next.filter((item) => !existingKeys.has(item.key)) : next
+      const combined = append ? [...loadedItemsRef.current, ...added] : next
+      setEnteringItems(new Map(append ? added.map((item, index) => [item.key, index]) : []))
+      setItemsHasMore(result.hasMore && added.length > 0)
       const nextArtifacts = append
         ? [...loadedAiArtifactsRef.current, ...result.artifacts.filter((artifact) => !loadedAiArtifactsRef.current.some((current) => current.id === artifact.id))]
         : result.artifacts
@@ -277,6 +318,7 @@ export function ReadingArtifactCenter({
     } catch (error) {
       if (requestId === requestSequenceRef.current) setItemsError(error instanceof Error ? error.message : String(error))
     } finally {
+      if (appendRequestRef.current === requestId) appendRequestRef.current = null
       if (requestId === requestSequenceRef.current) {
         setItemsLoading(false)
         setItemsLoadingMore(false)
@@ -332,13 +374,13 @@ export function ReadingArtifactCenter({
       })
   }, [focusKey, view, workspaceRoots])
 
-  const loadDocuments = useCallback(async (append: boolean) => {
+  const loadDocuments = useCallback(async (append: boolean, quiet = false) => {
     const offset = append ? documentPageRef.current.documents.length : 0
     const requestId = ++documentRequestSequenceRef.current
-    setDocumentsLoading(true)
+    if (!quiet) setDocumentsLoading(true)
     setItemsError(null)
     try {
-      const result = await loadReadingArtifactDocumentSummariesPage({ query, types: activeTypes, limit: 40, offset })
+      const result = await loadReadingArtifactDocumentSummariesPage({ ...organizationFilter, query, types: activeTypes, limit: 40, offset })
       if (requestId !== documentRequestSequenceRef.current) return
       const nextPage = {
         ...result,
@@ -351,7 +393,7 @@ export function ReadingArtifactCenter({
     } finally {
       if (requestId === documentRequestSequenceRef.current) setDocumentsLoading(false)
     }
-  }, [activeTypes, query])
+  }, [activeTypes, organizationFilter, query])
 
   useEffect(() => {
     if (view !== 'documents') {
@@ -365,10 +407,20 @@ export function ReadingArtifactCenter({
   }, [loadDocuments, view])
 
   useEffect(() => {
-    if (marksRevision === 0 && artifactsRevision === 0) return
+    if (organization.revision === organizationRevisionRef.current) return
+    organizationRevisionRef.current = organization.revision
+    if (view === 'focus') return
+    if (view === 'documents') void loadDocuments(false, true)
+    else void loadItems(false, true)
+  }, [organization.revision, loadDocuments, loadItems, view])
+
+  useEffect(() => {
+    const previous = dataRevisionRef.current
+    if (previous.marks === marksRevision && previous.artifacts === artifactsRevision) return
+    dataRevisionRef.current = { marks: marksRevision, artifacts: artifactsRevision }
     if (view === 'focus') return
     if (view === 'documents') void loadDocuments(false)
-    else void loadItems(false)
+    else void loadItems(false, true)
   }, [artifactsRevision, loadDocuments, loadItems, marksRevision, view])
 
   useEffect(() => {
@@ -380,6 +432,17 @@ export function ReadingArtifactCenter({
   const aiById = useMemo(() => new Map(loadedAiArtifacts.map((artifact) => [artifact.id, artifact])), [loadedAiArtifacts])
   const items = loadedItems
   const recentItems = useMemo(() => listRecentArtifacts(items), [items])
+  useEffect(() => {
+    const scroller = contentScrollerRef.current
+    const target = prefetchCardRef.current
+    if (view !== 'recent' || itemsLoading || itemsLoadingMore || itemsError || !itemsHasMore || !scroller || !target) return
+    let cancelled = false
+    const observer = new IntersectionObserver((entries) => {
+      if (!cancelled && entries.some((entry) => entry.isIntersecting)) void loadItems(true)
+    }, { root: scroller })
+    observer.observe(target)
+    return () => { cancelled = true; observer.disconnect() }
+  }, [view, itemsLoading, itemsLoadingMore, itemsError, itemsHasMore, recentItems, loadItems])
   const documentSummaries = useMemo(() => documentPage.documents.map((summary) => ({
       documentRef: summary.documentId === '__independent__' ? null : {
         documentId: documentIdForSummary(summary),
@@ -408,10 +471,11 @@ export function ReadingArtifactCenter({
       setAvailability((current) => current[ref.documentId] ? current : { ...current, [ref.documentId]: 'checking' })
       void fileExists(ref.filePath)
         .then((exists) => {
-          if (!cancelled) setAvailability((current) => ({ ...current, [ref.documentId]: exists ? 'available' : 'unavailable' }))
+          const status = exists ? 'available' : 'unavailable'
+          if (!cancelled) setAvailability((current) => current[ref.documentId] === status ? current : { ...current, [ref.documentId]: status })
         })
         .catch(() => {
-          if (!cancelled) setAvailability((current) => ({ ...current, [ref.documentId]: 'unavailable' }))
+          if (!cancelled) setAvailability((current) => current[ref.documentId] === 'unavailable' ? current : { ...current, [ref.documentId]: 'unavailable' })
         })
     }
     return () => { cancelled = true }
@@ -525,6 +589,7 @@ export function ReadingArtifactCenter({
   }
 
   useEffect(() => () => {
+    requestSequenceRef.current += 1
     if (searchDebounceRef.current !== null) window.clearTimeout(searchDebounceRef.current)
   }, [])
 
@@ -561,6 +626,8 @@ export function ReadingArtifactCenter({
       currentDocument={currentDocument}
       reducedMotion={reducedMotion}
       expanded={item.source === 'ai' && expandedAiKey === item.key}
+      renderActions={(remove) => <ArtifactOrganizationActions artifactKey={item.key} title={item.title || TYPE_LABELS[item.type]} organization={organization} entry={organizationByKey.get(item.key)} categoryId={organizationFilter.categoryId} onDelete={remove} />}
+      categoryLabels={<ArtifactCategoryLabels categories={organization.categories} entry={organizationByKey.get(item.key)} onSelect={(categoryId) => { setOrganizationFilter({ collection: 'all', categoryId }); if (view === 'focus') onCloseFocus?.(); changeView('recent') }} />}
       onToggleExpand={item.source === 'ai' ? () => setExpandedAiKey((current) => current === item.key ? null : item.key) : undefined}
       onNavigateMark={() => void openReadingMark(item.id)}
       onUpdateMark={(color, note) => {
@@ -568,14 +635,19 @@ export function ReadingArtifactCenter({
         if (!path) return Promise.reject(new Error('来源文档不可用'))
         return updateMark(item.id, path, { ...(color ? { color } : {}), ...(note !== undefined ? { note } : {}) })
       }}
-      onDeleteMark={() => {
+      onDeleteMark={async () => {
         const path = item.documentRefs[0]?.filePath
-        return path ? removeMark(item.id, path) : Promise.reject(new Error('来源文档不可用'))
+        if (!path) throw new Error('来源文档不可用')
+        await removeMark(item.id, path)
+        if (view === 'focus') { setLoadedItems([]); loadedItemsRef.current = [] }
       }}
-      onDeleteAi={() => deleteAiArtifact(item.id)}
-      onOpenAiSource={(ref) => {
+      onDeleteAi={async () => {
+        await deleteAiArtifact(item.id)
+        if (view === 'focus') { setLoadedItems([]); loadedItemsRef.current = [] }
+      }}
+      onOpenAiSource={(ref, location) => {
       const artifact = aiById.get(item.id)
-        if (artifact) return onOpenAiSource(artifact, ref)
+        if (artifact) return onOpenAiSource(artifact, ref, location)
       }}
     />
   )
@@ -635,13 +707,13 @@ export function ReadingArtifactCenter({
             </motion.div>
           )}
 
+          {view !== 'focus' && <ArtifactOrganizationToolbar organization={organization} filter={organizationFilter} onFilter={setOrganizationFilter}>
+            {view === 'detail' && selectedDocument && <SortMenu value={detailSort} onChange={changeDetailSort} />}
+          </ArtifactOrganizationToolbar>}
           {view === 'detail' && (
             <DetailControls
-              independent={!selectedDocument}
               filter={detailFilter}
-              sort={detailSort}
               onFilter={changeDetailFilter}
-              onSort={changeDetailSort}
               reducedMotion={reducedMotion}
             />
           )}
@@ -649,7 +721,7 @@ export function ReadingArtifactCenter({
 
       <div ref={contentScrollerRef} role="region" aria-label="阅读成果内容" tabIndex={0} className="min-h-0 flex-1 overflow-y-auto px-4 pb-3 outline-none">
           {loading ? <EmptyState text="正在加载阅读成果…" /> : view === 'recent' ? (
-            <RecentView items={recentItems} renderCard={renderCard} />
+            <RecentView items={recentItems} renderCard={renderCard} prefetchCardRef={prefetchCardRef} scrollerRef={contentScrollerRef} enteringItems={enteringItems} reducedMotion={reducedMotion} />
           ) : view === 'documents' ? (
             <DocumentView summaries={documentSummaries} availability={availability} onOpen={openDocument} />
           ) : view === 'focus' ? (
@@ -667,10 +739,15 @@ export function ReadingArtifactCenter({
           {itemsError && (
             <div className="mt-3 flex items-center justify-center gap-2 text-micro text-gm-error">
               <span>加载失败：{itemsError}</span>
-              <button type="button" className="underline underline-offset-2" onClick={() => void (view === 'documents' ? loadDocuments(false) : loadItems(false))}>重试</button>
+              <button type="button" className="underline underline-offset-2" onClick={() => void (view === 'documents' ? loadDocuments(false) : loadItems(view === 'recent' && items.length > 0))}>重试</button>
             </div>
           )}
-          {view !== 'documents' && items.length > 0 && items.length < itemsTotal && (
+          {view === 'recent' && !loading && items.length > 0 && (
+            <div role="status" aria-live="polite" className="flex h-12 items-center justify-center text-caption text-gm-text-tertiary">
+              {itemsLoadingMore ? <><span className="sr-only">正在加载更多阅读成果</span><span aria-hidden="true" className="gm-artifact-loading-dots"><i /><i /><i /></span></> : !itemsHasMore && !itemsError ? '没有更多了' : null}
+            </div>
+          )}
+          {view === 'detail' && items.length > 0 && items.length < itemsTotal && (
             <button type="button" disabled={itemsLoadingMore} onClick={() => void loadItems(true)} className="mt-3 w-full rounded-md border border-gm-border py-2 text-caption text-gm-text-secondary hover:bg-gm-surface-hover disabled:opacity-50">{itemsLoadingMore ? '加载中…' : '加载更多'}</button>
           )}
           {view === 'documents' && documentPage.documents.length > 0 && documentPage.documents.length < documentPage.total && (
@@ -696,14 +773,58 @@ function FilterCheck({ type, checked, onToggle }: { type: ReadingArtifactItemTyp
   return <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-caption hover:bg-gm-surface-hover"><input type="checkbox" checked={checked} onChange={() => onToggle(type)} />{TYPE_LABELS[type]}</label>
 }
 
-function RecentView({ items, renderCard }: { items: ReadingArtifactItem[]; renderCard: (item: ReadingArtifactItem) => React.ReactNode }) {
+function RecentView({ items, renderCard, prefetchCardRef, scrollerRef, enteringItems, reducedMotion }: { items: ReadingArtifactItem[]; renderCard: (item: ReadingArtifactItem) => React.ReactNode; prefetchCardRef: React.RefObject<HTMLDivElement>; scrollerRef: React.RefObject<HTMLDivElement>; enteringItems: ReadonlyMap<string, number>; reducedMotion: boolean }) {
+  const entranceQueue = useRef(new Map<string, { element: HTMLDivElement; start: (delay: number) => void }>())
+  const nextEntranceAt = useRef(0)
+  const registerEntrance = useCallback((key: string, element: HTMLDivElement, start: (delay: number) => void) => {
+    const entry = { element, start }
+    entranceQueue.current.set(key, entry)
+    return () => { if (entranceQueue.current.get(key) === entry) entranceQueue.current.delete(key) }
+  }, [])
+  const revealThrough = useCallback((key: string) => {
+    const queue = [...entranceQueue.current.entries()].sort(([, left], [, right]) =>
+      left.element.compareDocumentPosition(right.element) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1)
+    const last = queue.findIndex(([pendingKey]) => pendingKey === key)
+    if (last < 0) return
+    const now = performance.now()
+    let startAt = Math.max(now, nextEntranceAt.current)
+    for (const [pendingKey, entry] of queue.slice(0, last + 1)) {
+      entranceQueue.current.delete(pendingKey)
+      entry.start(startAt - now)
+      startAt += 50
+    }
+    nextEntranceAt.current = startAt
+  }, [])
   if (items.length === 0) return <EmptyState text="当前条件下没有阅读成果" />
   const dates = new Map<string, ReadingArtifactItem[]>()
   for (const item of items) {
     const date = dateGroupLabel(item.createdAt)
     dates.set(date, [...(dates.get(date) ?? []), item])
   }
-  return <div className="space-y-6">{[...dates].map(([date, grouped]) => <section key={date}><h3 className="mb-2 text-caption font-bold text-gm-text-secondary">{date}</h3><div className="space-y-2">{grouped.map((item) => renderCard(item))}</div></section>)}</div>
+  const prefetchKey = items[Math.max(0, items.length - 2)]?.key
+  return <div className="space-y-6">{[...dates].map(([date, grouped]) => <section key={date}><h3 className="mb-2 text-caption font-bold text-gm-text-secondary">{date}</h3><div className="space-y-2">{grouped.map((item) => <div key={item.key} ref={item.key === prefetchKey ? prefetchCardRef : undefined}><RecentCardEntrance artifactKey={item.key} index={enteringItems.get(item.key)} scrollerRef={scrollerRef} reducedMotion={reducedMotion} registerEntrance={registerEntrance} revealThrough={revealThrough}>{renderCard(item)}</RecentCardEntrance></div>)}</div></section>)}</div>
+}
+
+function RecentCardEntrance({ artifactKey, index, scrollerRef, reducedMotion, registerEntrance, revealThrough, children }: { artifactKey: string; index?: number; scrollerRef: React.RefObject<HTMLDivElement>; reducedMotion: boolean; registerEntrance: (key: string, element: HTMLDivElement, start: (delay: number) => void) => () => void; revealThrough: (key: string) => void; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const delay = useRef(0)
+  const [phase, setPhase] = useState(index !== undefined && !reducedMotion ? 'pending' : 'done')
+  useEffect(() => {
+    if (phase !== 'pending' || reducedMotion || !ref.current || !scrollerRef.current) return
+    const unregister = registerEntrance(artifactKey, ref.current, (wait) => {
+      delay.current = wait
+      setPhase('entering')
+    })
+    let cancelled = false
+    const observer = new IntersectionObserver((entries) => {
+      if (!cancelled && entries.some((entry) => entry.isIntersecting)) {
+        revealThrough(artifactKey)
+      }
+    }, { root: scrollerRef.current })
+    observer.observe(ref.current)
+    return () => { cancelled = true; observer.disconnect(); unregister() }
+  }, [phase, reducedMotion, scrollerRef, artifactKey, registerEntrance, revealThrough])
+  return <div ref={ref} className={reducedMotion || phase === 'done' ? undefined : phase === 'pending' ? 'gm-artifact-card-pending' : 'gm-artifact-card-enter'} style={{ '--gm-artifact-enter-delay': `${delay.current}ms` } as CSSProperties} onAnimationEnd={(event) => { if (event.target === event.currentTarget) setPhase('done') }}>{children}</div>
 }
 
 function DocumentView({ summaries, availability, onOpen }: { summaries: ReturnType<typeof listArtifactDocuments>; availability: Record<string, DocumentAvailability>; onOpen: (ref: ReadingArtifactDocumentRef | null, origin?: HTMLButtonElement) => void }) {
@@ -714,7 +835,7 @@ function DocumentView({ summaries, availability, onOpen }: { summaries: ReturnTy
   })}</div>
 }
 
-function DetailControls({ independent, filter, sort, onFilter, onSort, reducedMotion }: { independent: boolean; filter: DetailFilter; sort: 'source' | 'time'; onFilter: (value: DetailFilter) => void; onSort: (value: 'source' | 'time') => void; reducedMotion: boolean }) {
+function DetailControls({ filter, onFilter, reducedMotion }: { filter: DetailFilter; onFilter: (value: DetailFilter) => void; reducedMotion: boolean }) {
   return (
     <div className="mb-3 flex min-h-8 flex-wrap items-start gap-2">
       <nav aria-label="成果分类" role="tablist" className="flex min-w-0 flex-[1_1_12rem] flex-wrap items-center gap-1">
@@ -732,7 +853,6 @@ function DetailControls({ independent, filter, sort, onFilter, onSort, reducedMo
           </button>
         ))}
       </nav>
-      {!independent && <SortMenu value={sort} onChange={onSort} />}
     </div>
   )
 }
@@ -759,72 +879,10 @@ function DetailView({ reducedMotion, contentPending, contentVersion, positioned,
 }
 
 function SortMenu({ value, onChange }: { value: 'source' | 'time'; onChange: (value: 'source' | 'time') => void }) {
-  const [open, setOpen] = useState(false)
-  const rootRef = useRef<HTMLDivElement>(null)
-  const triggerRef = useRef<HTMLButtonElement>(null)
   const label = value === 'source' ? '原文顺序' : '时间顺序'
-
-  useEffect(() => {
-    if (!open) return
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      setOpen(false)
-      triggerRef.current?.focus()
-    }
-    document.addEventListener('pointerdown', closeOnOutsidePointer)
-    document.addEventListener('keydown', closeOnEscape)
-    return () => {
-      document.removeEventListener('pointerdown', closeOnOutsidePointer)
-      document.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [open])
-
-  const select = (next: 'source' | 'time') => {
-    onChange(next)
-    setOpen(false)
-    triggerRef.current?.focus()
-  }
-
-  return (
-    <div ref={rootRef} className="relative ml-auto shrink-0">
-      <button
-        ref={triggerRef}
-        type="button"
-        aria-label={`排序：${label}`}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-        className="flex h-8 items-center gap-1.5 rounded-md border border-gm-border bg-gm-surface px-2.5 text-micro font-bold text-gm-text-secondary outline-none transition-colors hover:bg-gm-surface-hover focus-visible:border-gm-primary focus-visible:ring-1 focus-visible:ring-gm-primary/30"
-      >
-        <span>{label}</span>
-        <ChevronDown size={14} strokeWidth={1.8} className={`transition-transform duration-150 ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
-      </button>
-      {open && (
-        <div role="menu" aria-label="排序方式" className="absolute right-0 top-full z-30 mt-1 min-w-full whitespace-nowrap rounded-lg border border-gm-border bg-gm-surface-elevated p-1 shadow-lg">
-          {(['source', 'time'] as const).map((option) => {
-            const optionLabel = option === 'source' ? '原文顺序' : '时间顺序'
-            const selected = value === option
-            return (
-              <button
-                key={option}
-                type="button"
-                role="menuitemradio"
-                aria-checked={selected}
-                onClick={() => select(option)}
-                className={`flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-micro outline-none transition-colors hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover ${selected ? 'font-bold text-gm-primary' : 'text-gm-text-secondary'}`}
-              >
-                <span>{optionLabel}</span>
-                <Check size={13} strokeWidth={2} className={selected ? 'opacity-100' : 'opacity-0'} aria-hidden="true" />
-              </button>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
+  return <ArtifactFilterMenu value={value} label={label} ariaLabel={`排序：${label}`} menuLabel="排序方式"
+    options={[{ value: 'source', label: '原文顺序' }, { value: 'time', label: '时间顺序' }]}
+    onChange={(next) => onChange(next as 'source' | 'time')} />
 }
 
 function ExpandableText({
@@ -849,6 +907,8 @@ function ExpandableText({
   const measure = useCallback(() => {
     const element = textRef.current
     if (!element) return
+    // Retained pages have no layout while hidden; keep the last visible measurement.
+    if (element.closest('[hidden]')) return
     const computed = window.getComputedStyle(element)
     const fontSize = Number.parseFloat(computed.fontSize) || 14
     const lineHeight = Number.parseFloat(computed.lineHeight) || fontSize * 1.5
@@ -902,20 +962,21 @@ function ExpandableText({
   )
 }
 
-function ArtifactCard({ item, availability, anchorStatus, currentDocument, reducedMotion, expanded, onToggleExpand, onNavigateMark, onUpdateMark, onDeleteMark, onDeleteAi, onOpenAiSource }: { item: ReadingArtifactItem; availability: Record<string, DocumentAvailability>; anchorStatus?: SourceAnchorStatus; currentDocument?: ReadingArtifactDocumentRef | null; reducedMotion: boolean; expanded: boolean; onToggleExpand?: () => void; onNavigateMark: () => void; onUpdateMark: (color?: ReadingMarkColor, note?: string) => Promise<unknown>; onDeleteMark: () => Promise<void>; onDeleteAi: () => Promise<void>; onOpenAiSource: (ref: ReadingArtifactDocumentRef) => void | Promise<void> }) {
+function ArtifactCard({ renderActions, categoryLabels, item, availability, anchorStatus, currentDocument, reducedMotion, expanded, onToggleExpand, onNavigateMark, onUpdateMark, onDeleteMark, onDeleteAi, onOpenAiSource }: { renderActions: (remove: () => void) => React.ReactNode; categoryLabels: React.ReactNode; item: ReadingArtifactItem; availability: Record<string, DocumentAvailability>; anchorStatus?: SourceAnchorStatus; currentDocument?: ReadingArtifactDocumentRef | null; reducedMotion: boolean; expanded: boolean; onToggleExpand?: () => void; onNavigateMark: () => void; onUpdateMark: (color?: ReadingMarkColor, note?: string) => Promise<unknown>; onDeleteMark: () => Promise<void>; onDeleteAi: () => Promise<void>; onOpenAiSource: (ref: ReadingArtifactDocumentRef, location?: ReadingArtifactLocation) => void | Promise<void> }) {
   const [editing, setEditing] = useState(false)
   const [note, setNote] = useState(item.content ?? '')
   const [contentOverflow, setContentOverflow] = useState<Record<string, boolean>>({})
   const [manualExpanded, setManualExpanded] = useState(false)
+  const [questionExpanded, setQuestionExpanded] = useState(false)
   const isUser = item.source === 'user'
-  const refs = currentDocument ? [currentDocument] : item.documentRefs
+  const refs = item.documentRefs
   const webReferences = item.references?.filter((reference) => reference.kind === 'web') ?? []
   const question = item.question?.trim() || ''
   const collapsedTitle = question || item.title || '未记录原问题'
   const replyPreview = getAiReplyPreview(item.content)
   const remove = () => {
-    const message = isUser ? '确认删除这条人工成果吗？正文中的高亮或批注也会同步移除。' : '确认删除这条 AI 阅读成果吗？多文档入口会一并移除。'
-    if (window.confirm(message)) void (isUser ? onDeleteMark() : onDeleteAi())
+    const message = isUser ? '确认删除这条人工成果吗？正文中的高亮或批注也会同步移除，原文内容不会改变。' : '确认删除这条 AI 阅读成果吗？多文档入口会一并移除，原文内容不会改变。'
+    if (window.confirm(message)) void (isUser ? onDeleteMark() : onDeleteAi()).catch(() => toast.error('删除成果失败，请重试'))
   }
   const contentId = `reading-artifact-${item.id}`
   const triggerId = `${contentId}-trigger`
@@ -928,6 +989,7 @@ function ArtifactCard({ item, availability, anchorStatus, currentDocument, reduc
   useEffect(() => {
     setContentOverflow({})
     setManualExpanded(false)
+    setQuestionExpanded(false)
     setEditing(false)
     setNote(item.content ?? '')
   }, [item.content, item.id])
@@ -937,34 +999,57 @@ function ArtifactCard({ item, availability, anchorStatus, currentDocument, reduc
   return <article data-state={isUser ? undefined : expanded ? 'open' : 'closed'} className="overflow-hidden rounded-2xl border border-gm-border-subtle bg-gm-surface shadow-[0_7px_20px_rgba(72,58,42,0.08)]" style={isUser ? { backgroundColor: 'color-mix(in srgb, var(--gm-surface) 96%, #fff5e6 4%)', borderColor: 'color-mix(in srgb, var(--gm-border-subtle) 76%, #d7b98c 24%)' } : { backgroundColor: 'color-mix(in srgb, var(--gm-surface) 97%, var(--gm-primary) 3%)', borderColor: 'color-mix(in srgb, var(--gm-border-subtle) 78%, var(--gm-primary) 22%)' }}>
     {isUser ? (
       <div className="p-3.5 sm:p-4">
-        <div className="flex items-center gap-2 border-b border-gm-border-subtle/80 pb-2.5"><span className={`h-2.5 w-2.5 rounded-full ${COLOR_STYLES[color]}`} /><span className="text-caption font-bold text-gm-text-secondary">{TYPE_LABELS[item.type]}</span><span className="ml-auto text-micro text-gm-text-tertiary">{new Date(item.createdAt).toLocaleDateString('zh-CN')}</span></div>
-        {(item.quote || editing || item.content) && <div id={contentId} className="mt-3 space-y-3">
+        <div className="flex items-center gap-2 border-b border-gm-border-subtle/80 pb-2.5"><span className={`h-2.5 w-2.5 rounded-full ${COLOR_STYLES[color]}`} /><span className="text-caption font-bold text-gm-text-secondary">{TYPE_LABELS[item.type]}</span><span className="ml-auto text-micro text-gm-text-tertiary">{new Date(item.createdAt).toLocaleDateString('zh-CN')}</span>{renderActions(remove)}</div>
+        {(item.quote || editing || item.content) && <div id={contentId} className="mt-3 select-text space-y-3">
           {item.quote && <div className="relative pl-3.5"><span className={`absolute inset-y-1 left-0 w-1 rounded-full ${COLOR_RAIL_STYLES[color]}`} /><ExpandableText text={`“${item.quote}”`} lines={item.type === 'annotation' ? 3 : 6} expanded={contentExpanded || editing} reducedMotion={reducedMotion} onOverflowChange={(value) => updateContentOverflow('quote', value)} className="whitespace-pre-wrap break-words font-serif text-body leading-[1.65] text-gm-text" /></div>}
           {item.type === 'annotation' && <section className="rounded-xl border px-3 py-2.5" style={COLOR_NOTE_STYLES[color]}><h4 className="mb-1.5 text-micro font-bold tracking-wide text-gm-primary">我的批注</h4>{editing ? <div><textarea value={note} onChange={(event) => setNote(event.target.value)} className="min-h-24 w-full resize-y rounded-lg border border-gm-border-subtle bg-gm-canvas/65 p-2.5 text-caption leading-relaxed text-gm-text outline-none focus:border-gm-primary" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }} /><div className="mt-2 flex justify-end gap-2"><button type="button" onClick={() => { setNote(item.content ?? ''); setEditing(false) }} className="rounded-md px-2 py-1 text-micro text-gm-text-tertiary hover:bg-gm-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-primary/40">取消</button><button type="button" onClick={() => void onUpdateMark(undefined, note).then(() => setEditing(false))} className="rounded-md px-2 py-1 text-micro font-bold text-gm-primary hover:bg-gm-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-primary/40">保存</button></div></div> : item.content && <ExpandableText text={item.content} lines={5} expanded={contentExpanded} reducedMotion={reducedMotion} onOverflowChange={(value) => updateContentOverflow('note', value)} className="whitespace-pre-wrap break-words text-caption leading-[1.65] text-gm-text" />}</section>}
         </div>}
         {canExpand && !editing && <button type="button" aria-expanded={contentExpanded} aria-controls={contentId} onClick={() => { if (isUser) setManualExpanded((value) => !value); else onToggleExpand?.() }} className="mt-2 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-micro font-bold text-gm-primary outline-none transition-colors hover:bg-gm-primary/5 focus-visible:ring-1 focus-visible:ring-gm-primary/40 active:scale-[0.98]"><span>{contentExpanded ? '收起' : '展开全文'}</span><ChevronDown size={14} strokeWidth={1.8} className={`transition-transform duration-200 ${contentExpanded ? 'rotate-180' : ''}`} aria-hidden="true" /></button>}
         {refs.length > 0 && <div className="mt-3 flex flex-wrap gap-1.5">{refs.map((ref) => <button key={ref.documentId} type="button" disabled={!ref.filePath || availability[ref.documentId] === 'unavailable'} onClick={onNavigateMark} className="flex min-w-0 max-w-full items-center gap-2 rounded-xl border border-gm-border-subtle/80 bg-gm-canvas/45 px-2.5 py-2 text-left text-micro text-gm-text-secondary transition-colors hover:border-gm-primary/35 hover:text-gm-primary disabled:cursor-not-allowed disabled:text-gm-warning"><FileText size={15} strokeWidth={1.7} aria-hidden="true" /><span className="truncate">{availability[ref.documentId] === 'unavailable' ? `${ref.fileName} · 来源文档不可用` : `${ref.fileName} · 查看原文`}</span><ChevronRight size={14} strokeWidth={1.8} className="ml-auto shrink-0 text-gm-text-tertiary" aria-hidden="true" /></button>)}</div>}
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-gm-border-subtle/80 pt-3">{(['yellow', 'green', 'blue', 'pink'] as const).map((nextColor) => <button key={nextColor} type="button" aria-label={`改为${nextColor}`} onClick={() => void onUpdateMark(nextColor)} className={`h-4 w-4 rounded-full outline-none transition-transform hover:scale-110 focus-visible:ring-2 focus-visible:ring-gm-primary/50 focus-visible:ring-offset-2 ${COLOR_STYLES[nextColor]} ${color === nextColor ? 'ring-2 ring-gm-primary ring-offset-1' : ''}`} />)}{item.type === 'annotation' && <button type="button" onClick={() => setEditing(true)} className="ml-1 rounded-md px-2 py-1 text-micro font-bold text-gm-primary hover:bg-gm-primary/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-primary/40">编辑批注</button>}<button type="button" onClick={remove} className="ml-auto rounded-md px-2 py-1 text-micro text-gm-text-tertiary hover:bg-gm-error/10 hover:text-gm-error focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-error/40">删除</button></div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-gm-border-subtle/80 pt-3">{(['yellow', 'green', 'blue', 'pink'] as const).map((nextColor) => <button key={nextColor} type="button" aria-label={`改为${nextColor}`} onClick={() => void onUpdateMark(nextColor)} className={`h-4 w-4 rounded-full outline-none transition-transform hover:scale-110 focus-visible:ring-2 focus-visible:ring-gm-primary/50 focus-visible:ring-offset-2 ${COLOR_STYLES[nextColor]} ${color === nextColor ? 'ring-2 ring-gm-primary ring-offset-1' : ''}`} />)}{item.type === 'annotation' && <button type="button" onClick={() => setEditing(true)} className="ml-1 rounded-md px-2 py-1 text-micro font-bold text-gm-primary hover:bg-gm-primary/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-primary/40">编辑批注</button>}<div className="ml-auto">{categoryLabels}</div></div>
       </div>
     ) : (
       <>
-        <button id={triggerId} type="button" aria-expanded={expanded} aria-controls={contentId} onClick={onToggleExpand} className="group/trigger flex w-full items-start gap-3 border-b border-gm-border-subtle/80 px-3.5 py-3.5 text-left outline-none transition-colors duration-150 hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover active:scale-[0.995]">
-          <span className="min-w-0 flex-1">
-            <span className="flex items-center gap-2 text-micro font-bold text-gm-text-secondary"><span className="h-2.5 w-2.5 shrink-0 rounded-full bg-gm-primary" /><span className="rounded-full bg-gm-primary-subtle px-1.5 py-0.5 text-[10px] font-bold tracking-[0.04em] text-gm-primary">AI · {TYPE_LABELS[item.type]}</span>{(refs.length + webReferences.length) > 0 && <span className="font-normal text-gm-text-tertiary">· {refs.length + webReferences.length} 个来源</span>}<span className="ml-auto shrink-0 text-micro font-normal text-gm-text-tertiary">{new Date(item.createdAt).toLocaleDateString('zh-CN')}</span></span>
-            <span className="mt-3 block line-clamp-2 text-caption font-bold leading-relaxed text-gm-text" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}>{collapsedTitle}</span>
-            <span className="mt-1 block truncate text-micro leading-relaxed text-gm-text-tertiary" style={{ fontSize: 'var(--gm-ai-chat-meta-font-size)' }}>{replyPreview}</span>
+        <div>
+        <div className="flex items-center gap-1 px-3.5 pt-3.5"><span className="flex min-h-7 min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 text-micro font-bold text-gm-text-secondary"><span className="h-2.5 w-2.5 shrink-0 rounded-full bg-gm-primary" /><span className="rounded-full bg-gm-primary-subtle px-1.5 py-0.5 text-[10px] font-bold tracking-[0.04em] text-gm-primary">AI · {TYPE_LABELS[item.type]}</span>{(refs.length + webReferences.length) > 0 && <span className="font-normal text-gm-text-tertiary">· {refs.length + webReferences.length} 个来源</span>}<span className="ml-auto shrink-0 text-micro font-normal text-gm-text-tertiary">{new Date(item.createdAt).toLocaleDateString('zh-CN')}</span></span>{renderActions(remove)}</div>
+        <button id={triggerId} type="button" aria-label={`AI · ${TYPE_LABELS[item.type]} ${collapsedTitle} ${expanded ? '收起' : '展开'}`} aria-expanded={expanded} aria-controls={contentId} onClick={(event) => {
+          const selection = window.getSelection()
+          if (event.detail > 0 && selection && !selection.isCollapsed && event.currentTarget.contains(selection.anchorNode)) return
+          setQuestionExpanded(false)
+          onToggleExpand?.()
+        }} className="group/trigger flex w-full items-start gap-3 border-b border-gm-border-subtle/80 px-3.5 pb-3.5 pt-1 text-left outline-none transition-colors duration-150 hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover active:scale-[0.995]">
+          <span className="min-w-0 flex-1 select-text">
+            <span className="mt-3 line-clamp-2 max-h-[3.25em] whitespace-normal break-words text-caption font-bold leading-relaxed text-gm-text" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}>{collapsedTitle}</span>
+            <span className="mt-1 block max-h-[1.625em] truncate text-micro leading-relaxed text-gm-text-tertiary" style={{ fontSize: 'var(--gm-ai-chat-meta-font-size)' }}>{replyPreview}</span>
           </span>
           <span className="flex shrink-0 items-center gap-1.5 pt-0.5 text-micro text-gm-text-tertiary"><span>{expanded ? '收起' : '展开'}</span><ChevronDown size={15} strokeWidth={1.8} className={`transition-transform duration-200 ${expanded ? 'rotate-180 text-gm-primary' : 'group-hover/trigger:translate-y-0.5'}`} aria-hidden="true" /></span>
         </button>
+        </div>
+        {categoryLabels && <div className="px-3.5">{categoryLabels}</div>}
         <AnimatePresence initial={false}>
           {expanded && <motion.div key="details" id={contentId} role="region" aria-labelledby={triggerId} {...contentMotion} className="overflow-hidden">
-            <div className="px-3.5 pb-3.5 pt-3.5">
+            <div className="select-text px-3.5 pb-3.5 pt-3.5">
               <div className="space-y-3">
-                <section className="rounded-xl border px-3 py-2.5" style={AI_QUESTION_STYLES}><h4 className="mb-1.5 text-micro font-bold tracking-wide text-gm-primary">原问题</h4><p className="text-caption leading-[1.65] text-gm-text" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}>{question || '未记录原问题'}</p></section>
+                <section className="rounded-xl border px-3 py-2.5" style={AI_QUESTION_STYLES}>
+                  <h4 className="mb-1.5 text-micro font-bold tracking-wide text-gm-primary">原问题</h4>
+                  <div id={`${contentId}-question`}>
+                    <ExpandableText text={question || '未记录原问题'} lines={5} expanded={questionExpanded} reducedMotion={reducedMotion} onOverflowChange={(value) => updateContentOverflow('question', value)} className="whitespace-pre-wrap break-words text-[length:var(--gm-ai-chat-font-size)] leading-[1.65] text-gm-text" />
+                  </div>
+                  {contentOverflow.question && <button type="button" aria-expanded={questionExpanded} aria-controls={`${contentId}-question`} onClick={() => setQuestionExpanded((value) => !value)} className="mt-2 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-micro font-bold text-gm-primary outline-none transition-colors hover:bg-gm-primary/5 focus-visible:ring-1 focus-visible:ring-gm-primary/40"><span>{questionExpanded ? '收起原问题' : '展开原问题'}</span><ChevronDown size={14} strokeWidth={1.8} className={`transition-transform duration-200 ${questionExpanded ? 'rotate-180' : ''}`} aria-hidden="true" /></button>}
+                </section>
+                <OriginalSelections selections={item.originalSelections ?? []} />
                 <section className="rounded-xl border px-3 py-2.5" style={AI_REPLY_STYLES}><h4 className="mb-1.5 text-micro font-bold tracking-wide text-gm-primary">AI 回复</h4>{item.content?.trim() ? <div tabIndex={0} aria-label="AI 回复正文" className="max-h-80 overflow-y-auto pr-1 prose max-w-none text-caption leading-[1.65] text-gm-text [&_p]:my-1.5 [&_p]:text-[length:var(--gm-ai-chat-font-size)] [&_li]:text-[length:var(--gm-ai-chat-font-size)] [&_ul]:my-1.5 [&_ol]:my-1.5 [&_pre]:max-w-full [&_pre]:overflow-x-auto" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown></div> : <p className="text-caption text-gm-text-tertiary" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }}>暂无 AI 回复内容</p>}</section>
-                <section><h4 className="mb-1.5 text-micro font-bold tracking-wide text-gm-text-tertiary">参考资料</h4><div className="flex flex-wrap gap-1.5">{refs.map((ref) => <button key={ref.documentId} type="button" aria-label={!ref.filePath || availability[ref.documentId] === 'unavailable' ? `${ref.fileName} · 来源文档不可用` : `${ref.fileName} · 查看原文`} disabled={!ref.filePath || availability[ref.documentId] === 'unavailable'} onClick={() => void onOpenAiSource(ref)} className="flex min-w-0 max-w-full items-center gap-2 rounded-xl border border-gm-border-subtle/80 bg-gm-canvas/45 px-2.5 py-2 text-left text-micro text-gm-text-secondary transition-colors hover:border-gm-primary/35 hover:text-gm-primary disabled:cursor-not-allowed disabled:text-gm-warning"><FileText size={15} strokeWidth={1.7} aria-hidden="true" /><span className="truncate">{availability[ref.documentId] === 'unavailable' || !ref.filePath ? `${ref.fileName} · 来源文档不可用` : `${ref.fileName} · 查看原文`}</span><ChevronRight size={14} strokeWidth={1.8} className="ml-auto shrink-0 text-gm-text-tertiary" aria-hidden="true" /></button>)}{webReferences.map((reference, index) => <a key={`${reference.url}-${index}`} aria-label={`打开来源 ${reference.title || reference.url}`} href={reference.url} target="_blank" rel="noreferrer" className="flex min-w-0 max-w-full items-center gap-2 rounded-xl border border-gm-border-subtle/80 bg-gm-canvas/45 px-2.5 py-2 text-left text-micro text-gm-text-secondary transition-colors hover:border-gm-primary/35 hover:text-gm-primary"><ExternalLink size={15} strokeWidth={1.7} aria-hidden="true" /><span className="truncate">{reference.title || reference.url}</span><ChevronRight size={14} strokeWidth={1.8} className="ml-auto shrink-0 text-gm-text-tertiary" aria-hidden="true" /></a>)}{refs.length === 0 && webReferences.length === 0 && <span className="text-micro text-gm-text-tertiary">暂无可跳转来源</span>}</div>{anchorStatus === 'changed' && <p className="mt-1.5 text-micro text-gm-warning">原文已变更，定位可能偏移</p>}</section>
+                <section><h4 className="mb-1.5 text-micro font-bold tracking-wide text-gm-text-tertiary">参考资料</h4>{item.referencedSourceIds !== undefined && <p className="mb-1.5 text-micro text-gm-text-tertiary">{item.referencedSourceIds.length ? `已确认引用：${item.referencedSourceIds.map((id) => `[${id}]`).join("、")}；其余为候选资料` : "候选资料 · 未确认引用"}</p>}<div className="flex flex-wrap gap-1.5">{refs.map((ref) => <div key={ref.documentId} className="min-w-0 max-w-full rounded-xl border border-gm-border-subtle/80 bg-gm-canvas/45 p-1">
+                  {ref.locations.length > 1 && <div className="px-1.5 py-1 text-micro font-bold text-gm-text-secondary">{ref.fileName}</div>}
+                  {(ref.locations.length ? ref.locations : [undefined]).map((location, index) => {
+                    const unavailable = !ref.filePath || availability[ref.documentId] === 'unavailable'
+                    const position = [location?.headingPath?.join(' / '), location?.startLine ? `L${location.startLine}-${location.endLine ?? location.startLine}` : ''].filter(Boolean).join(' · ')
+                    const label = `${ref.fileName}${ref.locations.length > 1 ? ` · ${position || `区块 ${index + 1}`}` : ''} · ${unavailable ? '来源文档不可用' : '查看原文'}`
+                    return <button key={index} type="button" aria-label={label} disabled={unavailable} onClick={() => void onOpenAiSource(ref, location)} className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-1.5 py-1 text-left text-micro transition-colors hover:text-gm-primary disabled:cursor-not-allowed disabled:text-gm-warning ${currentDocument?.documentId === ref.documentId ? 'text-gm-primary' : 'text-gm-text-secondary'}`}><FileText size={15} strokeWidth={1.7} aria-hidden="true" /><span className="min-w-0 flex-1"><span className="block truncate">{label}</span>{position && ref.locations.length <= 1 && <span className="block text-gm-text-tertiary">{position}</span>}</span><ChevronRight size={14} strokeWidth={1.8} className="shrink-0 text-gm-text-tertiary" aria-hidden="true" /></button>
+                  })}
+                </div>)}{webReferences.map((reference, index) => <a key={`${reference.url}-${index}`} aria-label={`打开来源 ${reference.title || reference.url}`} href={reference.url} target="_blank" rel="noreferrer" className="flex min-w-0 max-w-full items-center gap-2 rounded-xl border border-gm-border-subtle/80 bg-gm-canvas/45 px-2.5 py-2 text-left text-micro text-gm-text-secondary transition-colors hover:border-gm-primary/35 hover:text-gm-primary"><ExternalLink size={15} strokeWidth={1.7} aria-hidden="true" /><span className="truncate">{reference.title || reference.url}</span><ChevronRight size={14} strokeWidth={1.8} className="ml-auto shrink-0 text-gm-text-tertiary" aria-hidden="true" /></a>)}{refs.length === 0 && webReferences.length === 0 && <span className="text-micro text-gm-text-tertiary">暂无可跳转来源</span>}</div>{anchorStatus === 'changed' && <p className="mt-1.5 text-micro text-gm-warning">原文已变更，定位可能偏移</p>}</section>
               </div>
-              <div className="mt-3 flex justify-end border-t border-gm-border-subtle/80 pt-3"><button type="button" onClick={remove} className="rounded-md px-2 py-1 text-micro text-gm-text-tertiary hover:bg-gm-error/10 hover:text-gm-error focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-error/40">删除成果</button></div>
+
             </div>
           </motion.div>}
         </AnimatePresence>

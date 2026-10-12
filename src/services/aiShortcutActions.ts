@@ -16,9 +16,9 @@ const DEFAULT_AI_SHORTCUT_ACTIONS: readonly AiShortcutAction[] = [
     prompt: '请结合上下文解释这段内容，优先读取选区附近内容，不要默认阅读全文',
     enabled: true,
   },
-  { id: 'translate', label: '翻译', prompt: '翻译，直接输出译文，并在关键词或专业术语后用括号标注其音标，不要添加任何解释。', enabled: true },
+  { id: 'translate', label: '翻译', prompt: '翻译，直接输出译文（英译中/中译英），并在关键词或专业术语后用括号标注其音标，不要添加任何解释。', enabled: true },
   { id: 'web-search', label: '联网搜索', prompt: '联网搜索', enabled: true },
-  { id: 'knowledge-search', label: '检索知识库相关内容', prompt: '检索知识库中与这有关的内容', enabled: true },
+  { id: 'knowledge-search', label: '检索知识库相关内容', prompt: '检索知识库中相关片段，进行总结', enabled: true },
 ]
 
 export function createDefaultAiShortcutActions(): AiShortcutAction[] {

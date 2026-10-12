@@ -2,13 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Input } from 'animal-island-ui'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
-import { openFile, saveFile, saveFileAs } from '@/services/fileSystem'
+import { openFile } from '@/services/fileSystem'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { exportMarkdownAsHtml } from '@/services/markdownExport'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { SHORTCUTS } from '@/services/shortcuts'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
+import { saveActiveDocument } from '@/services/documentSave'
 
 interface Command {
   id: string
@@ -60,26 +61,7 @@ export function CommandPalette({ open, onClose, mode = 'commands' }: CommandPale
 
   const handleSaveFile = useCallback(async () => {
     onClose()
-    const state = useEditorStore.getState()
-    const tab = state.tabs.find((t) => t.id === state.activeTabId)
-    if (!tab) return
-    try {
-      if (tab.filePath) {
-        await saveFile(tab.filePath, tab.content)
-        scheduleMarkdownDocumentIndex(tab.filePath, tab.title, tab.content)
-        useEditorStore.getState().markTabSaved(tab.id, tab.content)
-      } else {
-        const result = await saveFileAs(tab.content)
-        if (result) {
-          scheduleMarkdownDocumentIndex(result.path, result.name, result.content)
-          useEditorStore.getState().saveTabAs(tab.id, result.path, result.name, result.content)
-        }
-      }
-      toast.success('已保存')
-    } catch (err) {
-      console.error('Save failed:', err)
-      toast.error('保存失败')
-    }
+    await saveActiveDocument()
   }, [onClose])
 
   const handleExportHtml = useCallback(async () => {

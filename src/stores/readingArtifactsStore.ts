@@ -6,6 +6,8 @@
  */
 import { create } from 'zustand'
 import type { ChatMessageSource, ReadingScope } from '@/services/ai/types'
+import type { OriginalSelectionSnapshot } from '@/services/originalSelections'
+import type { SourceReferenceId } from '@/services/ai/sourceReferences'
 import {
   type ReadingArtifact,
   type ReadingArtifactType,
@@ -15,6 +17,7 @@ import {
   buildReadingArtifactReferences,
   mergeReadingArtifactQuestionMetadata,
   mergeReadingArtifactReferencesMetadata,
+  mergeReadingArtifactSelectionMetadata,
   checkReadingArtifactSourceCommand,
   deleteReadingArtifactCommand,
   loadReadingArtifactByIdCommand,
@@ -66,6 +69,8 @@ export interface SaveFromMessageInput {
   question?: string
   /** 类型专属结构化字段，经运行时解码后写入 structured_content */
   structuredContent?: unknown | null
+  originalSelections?: OriginalSelectionSnapshot[]
+  referencedSourceIds?: SourceReferenceId[]
 }
 
 function buildAnchorFromReferences(
@@ -210,7 +215,14 @@ export const useReadingArtifactsStore = create<ReadingArtifactsState>((set, get)
   },
 
   saveArtifactFromMessage: async (input) => {
-    const references = buildReadingArtifactReferences(input.sources)
+    const references = buildReadingArtifactReferences(input.sources, input.originalSelections)
+    const structuredContent = mergeReadingArtifactQuestionMetadata(
+      mergeReadingArtifactSelectionMetadata(
+        mergeReadingArtifactReferencesMetadata(input.structuredContent, references),
+        input.originalSelections, input.sources, input.referencedSourceIds,
+      ),
+      input.question,
+    )
     const { source, contentHashPromise } = buildAnchorFromReferences(
       references,
       input.contextScope,
@@ -225,10 +237,7 @@ export const useReadingArtifactsStore = create<ReadingArtifactsState>((set, get)
       type: input.type,
       title: input.title,
       content: input.content,
-      structuredContent: mergeReadingArtifactQuestionMetadata(
-        mergeReadingArtifactReferencesMetadata(input.structuredContent, references),
-        input.question,
-      ),
+      structuredContent,
       source,
     })
     const saved = await loadReadingArtifactByIdCommand(id)

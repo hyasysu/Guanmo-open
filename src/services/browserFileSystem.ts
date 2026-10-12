@@ -7,6 +7,7 @@ type BrowserFileHandle = {
   getFile: () => Promise<File>
   createWritable?: () => Promise<{ write: (value: string | Blob | ArrayBuffer | ArrayBufferView) => Promise<void>; close: () => Promise<void> }>
   move?: (name: string) => Promise<void>
+  isSameEntry?: (other: BrowserFileHandle) => Promise<boolean>
 }
 
 type BrowserDirectoryHandle = {
@@ -34,6 +35,11 @@ export interface BrowserDirectoryEntry {
 
 const roots = new Map<string, BrowserRoot>()
 const handles = new Map<string, BrowserHandle>()
+const handlePaths = new WeakMap<BrowserHandle, string>()
+function rememberHandle(path: string, handle: BrowserHandle): void {
+  handles.set(pathKey(path), handle)
+  handlePaths.set(handle, path)
+}
 const files = new Map<string, File>()
 
 function newId(prefix: string): string {
@@ -105,7 +111,7 @@ export async function openBrowserFile(): Promise<{ path: string; name: string; c
     if (!handle) return null
     const rootId = newId('file')
     const path = makePath(rootId, [handle.name])
-    handles.set(pathKey(path), handle)
+    rememberHandle(path, handle)
     const content = await readBrowserFile(path)
     return { path, name: handle.name, content }
   }
@@ -143,7 +149,7 @@ export async function pickBrowserDirectory(): Promise<{ path: string; name: stri
   const id = newId('root')
   const path = getBrowserRootPath(id)
   roots.set(id, { id, handle, name: handle.name })
-  handles.set(pathKey(path), handle)
+  rememberHandle(path, handle)
   return { path, name: handle.name }
 }
 
@@ -151,14 +157,14 @@ export function registerBrowserDirectoryHandle(handle: BrowserDirectoryHandle): 
   const id = newId('root')
   const path = getBrowserRootPath(id)
   roots.set(id, { id, handle, name: handle.name })
-  handles.set(pathKey(path), handle)
+  rememberHandle(path, handle)
   return { path, name: handle.name }
 }
 
 export async function registerBrowserFileHandle(handle: BrowserFileHandle): Promise<{ path: string; name: string; content: string }> {
   const rootId = newId('file')
   const path = makePath(rootId, [handle.name])
-  handles.set(pathKey(path), handle)
+  rememberHandle(path, handle)
   return { path, name: handle.name, content: await readBrowserFile(path) }
 }
 
@@ -170,7 +176,7 @@ export async function registerBrowserFile(file: File): Promise<{ path: string; n
   return { path, name: file.name, content: await file.text() }
 }
 
-export async function saveBrowserFileAs(content: string, suggestedName = 'untitled.md'): Promise<{ path: string; name: string; content: string } | null> {
+export async function selectBrowserSaveTarget(suggestedName = 'untitled.md'): Promise<{ path: string; name: string } | null> {
   const record = browserWindow()
   const picker = record?.showSaveFilePicker as ((options?: unknown) => Promise<BrowserFileHandle>) | undefined
   if (typeof picker !== 'function') return null
@@ -179,11 +185,22 @@ export async function saveBrowserFileAs(content: string, suggestedName = 'untitl
     types: [{ description: 'Markdown', accept: { 'text/markdown': ['.md'] } }],
   })
   if (!handle) return null
+  for (const [existingPath, existing] of handles) {
+    if (existing.kind === 'file' && (existing === handle || (handle.isSameEntry && await handle.isSameEntry(existing)))) {
+      return { path: handlePaths.get(existing) ?? existingPath, name: handle.name }
+    }
+  }
   const rootId = newId('file')
   const path = makePath(rootId, [handle.name])
-  handles.set(pathKey(path), handle)
-  await writeBrowserFile(path, content)
-  return { path, name: handle.name, content }
+  rememberHandle(path, handle)
+  return { path, name: handle.name }
+}
+
+export async function saveBrowserFileAs(content: string, suggestedName = 'untitled.md'): Promise<{ path: string; name: string; content: string } | null> {
+  const target = await selectBrowserSaveTarget(suggestedName)
+  if (!target) return null
+  await writeBrowserFile(target.path, content)
+  return { ...target, content }
 }
 
 async function resolveHandle(path: string): Promise<BrowserHandle> {
@@ -202,7 +219,7 @@ async function resolveHandle(path: string): Promise<BrowserHandle> {
     const cached = handles.get(pathKey(nextPath))
     const directory = current as BrowserDirectoryHandle
     current = cached ?? await directory.getDirectoryHandle(segment).catch(() => directory.getFileHandle(segment))
-    handles.set(pathKey(nextPath), current)
+    rememberHandle(nextPath, current)
   }
   return current
 }
@@ -246,7 +263,7 @@ export async function listBrowserDirectory(path: string): Promise<BrowserDirecto
   const entries: BrowserDirectoryEntry[] = []
   for await (const [name, child] of handle.entries()) {
     const childPath = makePath(pathParts(path)?.rootId ?? '', [...(pathParts(path)?.segments ?? []), name])
-    handles.set(pathKey(childPath), child)
+    rememberHandle(childPath, child)
     entries.push({ name, isDirectory: child.kind === 'directory', isFile: child.kind === 'file' })
   }
   return entries
@@ -268,7 +285,7 @@ export async function createBrowserFile(dirPath: string, name: string): Promise<
   const parsed = pathParts(dirPath)
   if (!parsed) throw new Error('浏览器文件路径无效')
   const path = makePath(parsed.rootId, [...parsed.segments, name])
-  handles.set(pathKey(path), handle)
+  rememberHandle(path, handle)
   return path
 }
 
@@ -279,7 +296,7 @@ export async function createBrowserFolder(dirPath: string, name: string): Promis
   const parsed = pathParts(dirPath)
   if (!parsed) throw new Error('浏览器文件路径无效')
   const path = makePath(parsed.rootId, [...parsed.segments, name])
-  handles.set(pathKey(path), handle)
+  rememberHandle(path, handle)
   return path
 }
 
@@ -304,6 +321,6 @@ export async function renameBrowserFile(path: string, nextName: string): Promise
   if (!parsed) throw new Error('浏览器文件路径无效')
   const nextPath = makePath(parsed.rootId, [...parsed.segments.slice(0, -1), nextName])
   handles.delete(pathKey(path))
-  handles.set(pathKey(nextPath), handle)
+  rememberHandle(nextPath, handle)
   return nextPath
 }

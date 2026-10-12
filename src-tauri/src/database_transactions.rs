@@ -3,7 +3,7 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     Row, Sqlite, SqlitePool, Transaction,
 };
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 use tauri::{AppHandle, Manager};
 
 #[derive(Clone, Debug, Deserialize)]
@@ -57,6 +57,147 @@ pub struct BackupPayloadInput {
     reading_reminders: Vec<ReadingReminderInput>,
     #[serde(default, rename = "readingMarks")]
     reading_marks: Vec<ReadingMarkInput>,
+    #[serde(default, rename = "artifactCategories")]
+    artifact_categories: Vec<ArtifactCategoryInput>,
+    #[serde(default, rename = "artifactOrganization")]
+    artifact_organization: Vec<ArtifactOrganizationInput>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ArtifactCategoryInput {
+    id: String,
+    name: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactOrganizationInput {
+    artifact_key: String,
+    favorite: bool,
+    category_ids: Vec<String>,
+}
+
+fn validate_category(category: &ArtifactCategoryInput) -> Result<(), String> {
+    if category.id.trim().is_empty()
+        || category.name.trim().is_empty()
+        || category.name.trim().chars().count() > 40
+    {
+        return Err("分类名称须为 1–40 个字符".into());
+    }
+    Ok(())
+}
+
+async fn write_artifact_organization(
+    transaction: &mut Transaction<'_, Sqlite>,
+    key: &str,
+    favorite: Option<bool>,
+    category_ids: Option<&[String]>,
+) -> Result<(), String> {
+    let (table, id) = match key.split_once(':') {
+        Some(("mark", id)) if !id.is_empty() => ("reading_marks", id),
+        Some(("ai", id)) if !id.is_empty() => ("reading_artifacts", id),
+        _ => return Err("无效的阅读成果标识".into()),
+    };
+    let exists: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE id = ?"))
+        .bind(id)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(|error| error.to_string())?;
+    if exists == 0 {
+        return Err("阅读成果已不存在".into());
+    }
+    if let Some(ids) = category_ids {
+        for category_id in ids {
+            let exists: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM reading_artifact_categories WHERE id = ?")
+                    .bind(category_id)
+                    .fetch_one(&mut **transaction)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            if exists == 0 {
+                return Err("分类已不存在，请重新选择".into());
+            }
+        }
+    }
+    let categories = category_ids
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    sqlx::query(
+        "INSERT INTO reading_artifact_organization (artifact_key, favorite, category_ids) VALUES (?, COALESCE(?, 0), COALESCE(?, '[]')) \
+         ON CONFLICT(artifact_key) DO UPDATE SET favorite = COALESCE(?, favorite), category_ids = COALESCE(?, category_ids)",
+    )
+    .bind(key)
+    .bind(favorite)
+    .bind(&categories)
+    .bind(favorite)
+    .bind(&categories)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_reading_artifact_organization(
+    app: AppHandle,
+    artifact_key: String,
+    favorite: Option<bool>,
+    category_ids: Option<Vec<String>>,
+) -> Result<(), String> {
+    let pool = open_write_pool(database_path(&app)?).await?;
+    let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;
+    write_artifact_organization(
+        &mut transaction,
+        &artifact_key,
+        favorite,
+        category_ids.as_deref(),
+    )
+    .await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn save_reading_artifact_category(
+    app: AppHandle,
+    category: ArtifactCategoryInput,
+) -> Result<(), String> {
+    validate_category(&category)?;
+    let pool = open_write_pool(database_path(&app)?).await?;
+    sqlx::query("INSERT INTO reading_artifact_categories (id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name")
+        .bind(&category.id)
+        .bind(category.name.trim())
+        .execute(&pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+async fn remove_artifact_category(pool: &SqlitePool, id: &str) -> Result<(), String> {
+    let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;
+    sqlx::query("UPDATE reading_artifact_organization SET category_ids = (SELECT json_group_array(value) FROM json_each(reading_artifact_organization.category_ids) WHERE value <> ?)")
+        .bind(id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| error.to_string())?;
+    sqlx::query("DELETE FROM reading_artifact_categories WHERE id = ?")
+        .bind(id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| error.to_string())?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_reading_artifact_category(app: AppHandle, id: String) -> Result<(), String> {
+    let pool = open_write_pool(database_path(&app)?).await?;
+    remove_artifact_category(&pool, &id).await
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -825,6 +966,46 @@ async fn import_backup_rows(
         .await?;
     }
 
+    let mut category_ids = HashMap::new();
+    for category in &payload.artifact_categories {
+        validate_category(category).map_err(sqlx::Error::Protocol)?;
+        // Name takes precedence during backup merging; retain the local category identity.
+        let existing_id: Option<String> =
+            sqlx::query_scalar("SELECT id FROM reading_artifact_categories WHERE name = ?")
+                .bind(category.name.trim())
+                .fetch_optional(&mut **transaction)
+                .await?;
+        let id = if let Some(id) = existing_id {
+            id
+        } else {
+            // An existing ID keeps its local name, so earlier mappings cannot be renamed.
+            sqlx::query("INSERT INTO reading_artifact_categories (id, name) VALUES (?, ?) ON CONFLICT(id) DO NOTHING")
+                .bind(&category.id)
+                .bind(category.name.trim())
+                .execute(&mut **transaction)
+                .await?;
+            category.id.clone()
+        };
+        category_ids.insert(category.id.clone(), id);
+    }
+    for organization in &payload.artifact_organization {
+        let mut mapped_ids = Vec::new();
+        for id in &organization.category_ids {
+            let mapped = category_ids.get(id).unwrap_or(id);
+            if !mapped_ids.contains(mapped) {
+                mapped_ids.push(mapped.clone());
+            }
+        }
+        write_artifact_organization(
+            transaction,
+            &organization.artifact_key,
+            Some(organization.favorite),
+            Some(&mapped_ids),
+        )
+        .await
+        .map_err(sqlx::Error::Protocol)?;
+    }
+
     Ok(BackupImportSummary {
         sessions: session_count,
         messages: message_count,
@@ -949,6 +1130,8 @@ mod tests {
             "CREATE TABLE reading_artifacts (id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL, structured_content TEXT, source_file_path TEXT, source_file_name TEXT, source_content_hash TEXT, source_heading_path TEXT, source_start_line INTEGER, source_end_line INTEGER, source_quote TEXT, source_message_id TEXT, source_scope TEXT, status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
             "CREATE TABLE reading_reminders (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT, due_at_utc INTEGER NOT NULL, created_timezone TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', source_artifact_id TEXT, source_file_path TEXT, source_message_id TEXT, notification_id INTEGER, error_code TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
             "CREATE TABLE reading_marks (id TEXT PRIMARY KEY, document_id TEXT NOT NULL, document_path TEXT NOT NULL, type TEXT NOT NULL, start_block_id TEXT NOT NULL, start_block_offset INTEGER NOT NULL, end_block_id TEXT NOT NULL, end_block_offset INTEGER NOT NULL, start_offset INTEGER NOT NULL, end_offset INTEGER NOT NULL, quote TEXT NOT NULL, context_before TEXT NOT NULL, context_after TEXT NOT NULL, color TEXT NOT NULL, note TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+            "CREATE TABLE reading_artifact_categories (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE)",
+            "CREATE TABLE reading_artifact_organization (artifact_key TEXT PRIMARY KEY, favorite INTEGER NOT NULL DEFAULT 0, category_ids TEXT NOT NULL DEFAULT '[]')",
         ] {
             sqlx::query(statement).execute(&pool).await.unwrap();
         }
@@ -1018,6 +1201,8 @@ mod tests {
             artifacts: Vec::new(),
             reading_reminders: Vec::new(),
             reading_marks: Vec::new(),
+            artifact_categories: Vec::new(),
+            artifact_organization: Vec::new(),
         }
     }
 
@@ -1104,6 +1289,172 @@ mod tests {
         assert!(structured.contains("要点A"));
         assert_eq!(scope, "document");
         assert_eq!(status, "active");
+    }
+
+    #[tokio::test]
+    async fn artifact_organization_partial_updates_category_removal_and_backup() {
+        let pool = test_pool().await;
+        let mut payload = backup_with_artifact();
+        payload.artifact_categories = vec![ArtifactCategoryInput {
+            id: "category-1".into(),
+            name: "主题".into(),
+        }];
+        payload.artifact_organization = vec![ArtifactOrganizationInput {
+            artifact_key: "ai:artifact-1".into(),
+            favorite: true,
+            category_ids: vec!["category-1".into()],
+        }];
+        run_import_backup(&pool, payload).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        write_artifact_organization(&mut tx, "ai:artifact-1", Some(false), None)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let row = sqlx::query("SELECT favorite, category_ids FROM reading_artifact_organization")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<i64, _>("favorite"), 0);
+        assert_eq!(row.get::<String, _>("category_ids"), "[\"category-1\"]");
+        let mut tx = pool.begin().await.unwrap();
+        write_artifact_organization(&mut tx, "ai:artifact-1", Some(true), None)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        remove_artifact_category(&pool, "category-1").await.unwrap();
+        let row = sqlx::query("SELECT favorite, category_ids FROM reading_artifact_organization")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<i64, _>("favorite"), 1);
+        assert_eq!(row.get::<String, _>("category_ids"), "[]");
+        let content: String =
+            sqlx::query_scalar("SELECT content FROM reading_artifacts WHERE id = 'artifact-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(!content.is_empty());
+        let mut tx = pool.begin().await.unwrap();
+        assert!(
+            write_artifact_organization(&mut tx, "ai:missing", Some(true), None)
+                .await
+                .is_err()
+        );
+        assert!(write_artifact_organization(
+            &mut tx,
+            "ai:artifact-1",
+            None,
+            Some(&["missing".into()])
+        )
+        .await
+        .is_err());
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn backup_import_merges_category_names_and_remaps_references() {
+        for (categories, expected_ids) in [
+            (vec![("backup-a", "主题A")], vec!["local-a"]),
+            (vec![("local-a", "主题A")], vec!["local-a"]),
+            (vec![("local-a", "新名称")], vec!["local-a"]),
+            (vec![("local-a", "主题B")], vec!["local-b"]),
+            (
+                vec![("local-a", "主题B"), ("local-b", "主题A")],
+                vec!["local-b", "local-a"],
+            ),
+            (
+                vec![("backup-a", "主题A"), ("backup-b", "主题A")],
+                vec!["local-a"],
+            ),
+            (
+                vec![("backup-a", "主题A"), ("local-a", "新名称")],
+                vec!["local-a"],
+            ),
+        ] {
+            let pool = test_pool().await;
+            for (id, name) in [("local-a", "主题A"), ("local-b", "主题B")] {
+                sqlx::query("INSERT INTO reading_artifact_categories (id, name) VALUES (?, ?)")
+                    .bind(id)
+                    .bind(name)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+            // Repeated imports must remain idempotent and keep local category rows.
+            for _ in 0..2 {
+                let mut payload = backup_with_artifact();
+                payload.artifact_categories = categories
+                    .iter()
+                    .map(|(id, name)| ArtifactCategoryInput {
+                        id: (*id).into(),
+                        name: (*name).into(),
+                    })
+                    .collect();
+                payload.artifact_organization = vec![ArtifactOrganizationInput {
+                    artifact_key: "ai:artifact-1".into(),
+                    favorite: true,
+                    category_ids: categories.iter().map(|(id, _)| (*id).into()).collect(),
+                }];
+                let summary = run_import_backup(&pool, payload).await.unwrap();
+                assert_eq!(summary.artifacts, 1);
+                let (favorite, ids): (i64, String) = sqlx::query_as(
+                    "SELECT favorite, category_ids FROM reading_artifact_organization WHERE artifact_key = 'ai:artifact-1'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(favorite, 1);
+                assert_eq!(
+                    serde_json::from_str::<Vec<String>>(&ids).unwrap(),
+                    expected_ids
+                );
+                let count: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM reading_artifact_categories")
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(count, 2);
+                let names: Vec<(String, String)> =
+                    sqlx::query_as("SELECT id, name FROM reading_artifact_categories ORDER BY id")
+                        .fetch_all(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(
+                    names,
+                    vec![
+                        ("local-a".into(), "主题A".into()),
+                        ("local-b".into(), "主题B".into())
+                    ]
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn artifact_organization_invalid_backup_rolls_back_sources_and_categories() {
+        let pool = test_pool().await;
+        let mut payload = backup_with_artifact();
+        payload.artifact_categories = vec![ArtifactCategoryInput {
+            id: "category-1".into(),
+            name: "主题".into(),
+        }];
+        payload.artifact_organization = vec![ArtifactOrganizationInput {
+            artifact_key: "ai:artifact-1".into(),
+            favorite: true,
+            category_ids: vec!["missing".into()],
+        }];
+        assert!(run_import_backup(&pool, payload).await.is_err());
+        for table in [
+            "reading_artifacts",
+            "reading_artifact_categories",
+            "reading_artifact_organization",
+        ] {
+            let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(count, 0);
+        }
     }
 
     #[tokio::test]

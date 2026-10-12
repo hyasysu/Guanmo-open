@@ -10,7 +10,7 @@ import type {
 } from '../types'
 import { AiAuthError, AiError, AiNetworkError } from '../errors'
 import { parseOpenAIResponsesSSEStream } from '../stream'
-import { ExternalHttpError, externalFetch, UnsupportedCapabilityError } from '../../externalHttp'
+import { ExternalHttpError, UnsupportedCapabilityError } from '../../externalHttp'
 import { supportsReasoning } from '../reasoningAdapter'
 import { OpenAICompatibleProvider } from './openaiCompatible'
 
@@ -135,9 +135,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     signal: AbortSignal,
     retryWithoutReasoning: boolean,
   ): Promise<Response> {
-    let response = await externalFetch(`${this.baseUrl}/responses`, {
-      method: 'POST',
-      headers: this.headers,
+    let response = await this.fetch('chat', {
       body: JSON.stringify(body),
       signal,
       timeoutMs: this.config.timeout,
@@ -149,9 +147,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       && (response.status === 400 || response.status === 422)
     ) {
       delete body.reasoning
-      response = await externalFetch(`${this.baseUrl}/responses`, {
-        method: 'POST',
-        headers: this.headers,
+      response = await this.fetch('chat', {
         body: JSON.stringify(body),
         signal,
         timeoutMs: this.config.timeout,
@@ -220,8 +216,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
 
   async validateConfig(): Promise<ValidateResult> {
     try {
-      const response = await externalFetch(`${this.baseUrl}/models`, {
-        headers: this.headers,
+      const response = await this.fetch('models', {
         timeoutMs: this.config.timeout,
       })
       if (response.ok) {
@@ -247,9 +242,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), this.config.timeout)
     try {
-      const response = await externalFetch(`${this.baseUrl}/responses`, {
-        method: 'POST',
-        headers: this.headers,
+      const response = await this.fetch('chat', {
         body: JSON.stringify({
           model: this.config.chatModel,
           input: 'hi',

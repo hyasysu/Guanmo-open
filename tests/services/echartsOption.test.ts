@@ -12,6 +12,7 @@ describe('ECharts Markdown 配置解析', () => {
 
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.option.series).toEqual([{ type: 'bar', data: [12, 20] }])
+    if (result.ok) expect(result.option.tooltip).toMatchObject({ show: false, renderMode: 'richText' })
   })
 
   it.each([
@@ -32,5 +33,33 @@ describe('ECharts Markdown 配置解析', () => {
     const result = parseEChartsOption(JSON.stringify({ text: 'x'.repeat(ECHARTS_MAX_SOURCE_LENGTH) }))
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.message).toContain('限制')
+  })
+
+  it('字符串 tooltip 保留内容但始终使用 Canvas richText，不能注入 HTML', () => {
+    const formatter = '<img src=x onerror="window.__attack=1">{b}: {c}'
+    const result = parseEChartsOption(JSON.stringify({
+      tooltip: { renderMode: 'html', formatter },
+      series: [{ type: 'bar', data: [1] }],
+    }))
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.option.tooltip).toMatchObject({ renderMode: 'richText', formatter })
+  })
+
+  it.each([
+    { toolbox: { feature: { dataView: { title: '<img src=x onerror="window.__attack=1">' } } } },
+    { toolbox: [{ feature: { dataView: {} } }] },
+    { title: { link: 'javascript:window.__attack=1' } },
+    { title: { link: 'java\nscript:window.__attack=1' } },
+    { graphic: { style: { image: 'image://https://example.test/a.svg' } } },
+    { graphic: { style: { image: '//example.test/a.svg' } } },
+    { graphic: { style: { image: 'data:image/svg+xml,<svg onload="window.__attack=1"/>' } } },
+  ])('拒绝 HTML dataView 和危险资源入口 %j', (option) => {
+    expect(parseEChartsOption(JSON.stringify(option)).ok).toBe(false)
+  })
+
+  it('拒绝配置时不将原始内容带入错误提示', () => {
+    const result = parseEChartsOption('{"private":"anonymous-sensitive-content",')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).not.toContain('anonymous-sensitive-content')
   })
 })

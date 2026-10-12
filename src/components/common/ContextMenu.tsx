@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 export interface ContextMenuPosition {
   x: number
@@ -50,7 +51,7 @@ export function ContextMenu({
     }
   }, [adjusted.x, adjusted.y, position])
 
-  return (
+  return createPortal(
     <div
       ref={menuRef}
       data-context-menu="true"
@@ -59,7 +60,8 @@ export function ContextMenu({
       onClick={(e) => e.stopPropagation()}
     >
       {children}
-    </div>
+    </div>,
+    document.body,
   )
 }
 

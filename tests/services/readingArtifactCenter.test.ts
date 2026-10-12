@@ -48,6 +48,23 @@ function artifact(overrides: Partial<ReadingArtifact> = {}): ReadingArtifact {
 }
 
 describe('reading artifact center adapter', () => {
+  it('makes an existing selection snapshot navigable alongside retrieved sources without rewriting history', () => {
+    const saved = artifact({ structuredContent: {
+      references: [
+        { kind: 'local', filePath: 'C:/anonymous/A.md', fileName: 'A.md', startLine: 8, endLine: 9 },
+        { kind: 'web', title: '网页', url: 'https://example.com' },
+      ],
+      originalSelections: [{ title: '选区', text: '原文', filePath: 'C:/anonymous/A.md', startLine: 3, endLine: 4, truncated: false, previewOnly: false }],
+      referencedSourceIds: ['S2'],
+    } })
+    const item = adaptAiReadingArtifact(saved)
+    expect(item.documentRefs).toMatchObject([{ filePath: 'C:/anonymous/A.md', locations: [
+      { startLine: 8, endLine: 9 }, { startLine: 3, endLine: 4 },
+    ] }])
+    expect(item.references).toHaveLength(3)
+    expect(item.referencedSourceIds).toEqual(['S2'])
+    expect((saved.structuredContent as { references: unknown[] }).references).toHaveLength(2)
+  })
   it('projects ReadingMark without creating another persistent record', () => {
     expect(adaptReadingMark(mark())).toMatchObject({
       key: 'mark:mark-1',
@@ -91,6 +108,20 @@ describe('reading artifact center adapter', () => {
     }))
     expect(independent.documentRefs).toEqual([])
     expect(unavailable.documentRefs).toMatchObject([{ fileName: '已移动.md' }])
+  })
+
+  it('enriches the same referenced block with its primary annotation offsets instead of duplicating the source', () => {
+    const item = adaptAiReadingArtifact(artifact({ type: 'annotation',
+      source: { filePath: 'C:/anonymous/A.md', fileName: 'A.md', startLine: 1, endLine: 2 },
+      structuredContent: { quote: '匿名原文', note: '解读', startOffset: 0, endOffset: 4, references: [
+        { kind: 'local', filePath: 'C:/anonymous/A.md', fileName: 'A.md', titlePath: ['章节'], startLine: 1, endLine: 2 },
+        { kind: 'local', filePath: 'C:/anonymous/A.md', fileName: 'A.md', startLine: 5, endLine: 6 },
+      ] },
+    }))
+    expect(item.documentRefs[0].locations).toEqual([
+      { headingPath: ['章节'], startLine: 1, endLine: 2, startOffset: 0, endOffset: 4 },
+      { headingPath: undefined, startLine: 5, endLine: 6 },
+    ])
   })
 
   it('lists recent items once while counting multi-document items in each document', () => {

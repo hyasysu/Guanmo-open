@@ -110,14 +110,14 @@ interface PreviewViewportAnchor {
 
 interface PendingPreviewAnchorRestore extends PreviewViewportAnchor {
   container: HTMLElement
-  documentKey: string
+  documentKey?: string
   generation: number
 }
 
 interface PendingPreviewPatch {
   previousModel: MarkdownPreviewModel
   nextContent: string
-  documentKey: string
+  documentKey?: string
   editedBlockId: string
   replacementStart: number
   replacementEnd: number
@@ -242,13 +242,13 @@ function mapSourceOffsetThroughReplacement(
 }
 
 /**
- * 找出一次块编辑后仍可复用的前缀/后缀区块。
+ * 找出内容更新后仍可复用的前缀/后缀区块。
  * 中间区域可能发生拆分、合并或语义变化，必须让虚拟列表重新测量。
  */
 function buildIncrementalBlockMapping(
   previousModel: MarkdownPreviewModel,
   nextModel: MarkdownPreviewModel,
-  editedBlockId: string,
+  editedBlockId?: string,
 ): Map<number, number> | null {
   if (
     previousModel.requiresWholeDocumentRender
@@ -259,13 +259,16 @@ function buildIncrementalBlockMapping(
 
   const oldBlocks = previousModel.blocks
   const newBlocks = nextModel.blocks
-  const editedIndex = oldBlocks.findIndex((block) => block.blockId === editedBlockId)
-  if (editedIndex < 0) return null
+  const editedIndex = editedBlockId
+    ? oldBlocks.findIndex((block) => block.blockId === editedBlockId)
+    : oldBlocks.findIndex((block, index) => !samePreviewBlock(block, newBlocks[index]))
+  if (editedBlockId && editedIndex < 0) return null
+  const prefixEnd = editedIndex < 0 ? oldBlocks.length : editedIndex
 
   const mapping = new Map<number, number>()
   let oldIndex = 0
   let newIndex = 0
-  while (oldIndex < editedIndex) {
+  while (oldIndex < prefixEnd) {
     if (!samePreviewBlock(oldBlocks[oldIndex], newBlocks[newIndex])) return null
     mapping.set(oldIndex, newIndex)
     oldIndex += 1
@@ -274,12 +277,52 @@ function buildIncrementalBlockMapping(
 
   let oldTail = oldBlocks.length - 1
   let newTail = newBlocks.length - 1
-  while (oldTail > editedIndex && newTail >= newIndex && samePreviewBlock(oldBlocks[oldTail], newBlocks[newTail])) {
+  while (oldTail >= newIndex && newTail >= newIndex && samePreviewBlock(oldBlocks[oldTail], newBlocks[newTail])) {
     mapping.set(oldTail, newTail)
     oldTail -= 1
     newTail -= 1
   }
   return mapping
+}
+
+function readPreviewViewportAnchor(
+  model: MarkdownPreviewModel,
+  container: HTMLElement | null,
+  root: HTMLElement | null,
+  blockElements: Map<number, HTMLDivElement | null>,
+  heights: Map<string, number>,
+  estimate: (block: PreviewBlock) => number,
+): PreviewViewportAnchor | null {
+  if (!container || model.blocks.length === 0) return null
+  const fallbackScrollTop = container.scrollTop
+  const visible = computeVisibleRange(model, fallbackScrollTop, fallbackScrollTop + container.clientHeight, heights, estimate, 0)
+  const line = getMountedPreviewLineForTop(model, root, container, fallbackScrollTop)
+  const sourceOffset = typeof line === 'number' ? getSourceOffsetForLine(model, line) : undefined
+  const sourceBlockIndex = typeof sourceOffset === 'number' ? findBlockIndexByOffset(model, sourceOffset) : -1
+  const blockIndex = sourceBlockIndex >= 0 ? sourceBlockIndex : visible.startIndex
+  const block = model.blocks[blockIndex]
+  if (!block) return null
+  const element = blockElements.get(blockIndex)
+  const blockTop = element
+    ? element.getBoundingClientRect().top - container.getBoundingClientRect().top + fallbackScrollTop
+    : visible.blockTops[blockIndex]
+  const exactTop = element && typeof sourceOffset === 'number'
+    ? getMountedSourceRangeTop(element, container, sourceOffset, Math.min(block.endOffset, sourceOffset + 1))
+    : undefined
+  return {
+    blockId: block.blockId, blockIndex, sourceOffset,
+    viewportOffset: fallbackScrollTop - (typeof exactTop === 'number' ? exactTop : blockTop),
+    fallbackScrollTop,
+  }
+}
+
+function getContentReplacement(previous: string, next: string) {
+  let start = 0
+  while (start < previous.length && start < next.length && previous[start] === next[start]) start += 1
+  let end = previous.length
+  let nextEnd = next.length
+  while (end > start && nextEnd > start && previous[end - 1] === next[nextEnd - 1]) { end -= 1; nextEnd -= 1 }
+  return { replacementStart: start, replacementEnd: end, replacementLength: nextEnd - start }
 }
 
 interface StableMarkdownContentProps {
@@ -384,6 +427,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   isVisible = true,
   onFirstVisible,
   onRenderComplete,
+  onSearchModelChange,
   onPositionIntent,
   resource = 'preview',
   readingMarks = [],
@@ -406,6 +450,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const onBlockCommitRef = useRef(onBlockCommit)
   const onFirstVisibleRef = useRef(onFirstVisible)
   const onRenderCompleteRef = useRef(onRenderComplete)
+  const onSearchModelChangeRef = useRef(onSearchModelChange)
+  onSearchModelChangeRef.current = onSearchModelChange
   const firstVisibleRef = useRef(false)
   const lifecycleMetadataRef = useRef({ documentKey, resource })
   const previousDisplayedContentRef = useRef<string | null>(null)
@@ -472,11 +518,12 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const headingScrollCancelRef = useRef<(() => void) | null>(null)
   const sourceRevealTimerRef = useRef<number | null>(null)
   /** 未挂载搜索目标的精确定位校正任务：目标 Range 挂载后执行一次即清空 */
-  const pendingSearchCorrectionRef = useRef<{ from: number; to: number; blockId: string; appliedTop?: number; onApplied?: () => void } | null>(null)
+  const pendingSearchCorrectionRef = useRef<{ from: number; to: number; blockId: string; kind?: 'search'; appliedTop?: number; onApplied?: () => void } | null>(null)
   const blockRefs = useRef<Map<number, HTMLDivElement | null>>(new Map())
   const blockResizeObserverRef = useRef<ResizeObserver | null>(null)
   const measurementKeyRef = useRef<{
     content: string
+    documentKey?: string
     fontSize: number
     lineHeight: number
     fontFamily: string
@@ -533,6 +580,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const modelRef = useRef(model)
   modelRef.current = model
   const searchStateRef = useRef<PreviewSearchState | null>(null)
+  const searchTargetIdentityRef = useRef<{ content: string; documentKey?: string; isVisible: boolean } | null>(null)
   /** 搜索结果按 blockId 建立的索引（查询 O(1)，避免块渲染时扫描全部匹配） */
   const searchMatchesByBlockRef = useRef<Map<string, Array<{ from: number; to: number }>> | null>(null)
   /** 归一化选区（from < to，全文源码 offset）；DOM 卸载不影响其存活 */
@@ -573,6 +621,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const measurementKey = measurementKeyRef.current
   const layoutChanged = Boolean(
     !measurementKey
+    || measurementKey.documentKey !== documentKey
     || measurementKey.fontSize !== fontSize
     || measurementKey.lineHeight !== lineHeight
     || measurementKey.fontFamily !== fontFamily
@@ -588,7 +637,17 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   } else if (contentChanged) {
     pendingObservedHeightsRef.current.clear()
     const previousModel = previousModelRef.current
-    const patch = pendingPreviewPatchRef.current
+    const inlinePatch = pendingPreviewPatchRef.current
+    const patch = inlinePatch ?? (previousModel ? {
+      previousModel,
+      nextContent: displayedContent,
+      documentKey,
+      editedBlockId: undefined,
+      ...getContentReplacement(previousModel.rawContent, displayedContent),
+      anchor: readPreviewViewportAnchor(previousModel, scrollContainerRef.current, rootRef.current, blockRefs.current,
+        measuredHeightsRef.current, (block) => estimatePreviewBlockHeight(block, fontSize, lineHeight)),
+      generation: scrollAnchorGenerationRef.current,
+    } : null)
     const mapping = previousModel && patch
       && patch.documentKey === documentKey
       && patch.nextContent === displayedContent
@@ -605,23 +664,18 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       }
       measuredHeightsRef.current = nextHeights
       const anchor = patch.anchor
+      const mappedSourceOffset = anchor
+        ? mapSourceOffsetThroughReplacement(anchor.sourceOffset ?? previousModel.blocks[anchor.blockIndex].startOffset,
+          patch.replacementStart, patch.replacementEnd, patch.replacementLength)
+        : undefined
+      const mappedSourceBlock = typeof mappedSourceOffset === 'number' ? findBlockIndexByOffset(model, mappedSourceOffset) : -1
       const anchorNewIndex = anchor
-        ? mapping.get(anchor.blockIndex)
+        ? (!inlinePatch && mappedSourceBlock >= 0 ? mappedSourceBlock : mapping.get(anchor.blockIndex))
           ?? [...mapping.entries()].find(([oldIndex]) => oldIndex > anchor.blockIndex)?.[1]
           ?? [...mapping.entries()].reverse().find(([oldIndex]) => oldIndex < anchor.blockIndex)?.[1]
         : undefined
       const anchorBlock = typeof anchorNewIndex === 'number' ? model.blocks[anchorNewIndex] : undefined
       const anchorContainer = scrollContainerRef.current
-      const mappedSourceOffset = anchor
-        && typeof anchor.sourceOffset === 'number'
-        && anchorNewIndex === mapping.get(anchor.blockIndex)
-        ? mapSourceOffsetThroughReplacement(
-            anchor.sourceOffset,
-            patch.replacementStart,
-            patch.replacementEnd,
-            patch.replacementLength,
-          )
-        : undefined
       pendingAnchorRestoreRef.current = anchor
         && typeof anchorNewIndex === 'number'
         && anchorBlock
@@ -631,7 +685,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
             ...anchor,
             blockId: anchorBlock.blockId,
             blockIndex: anchorNewIndex,
-            sourceOffset: mappedSourceOffset,
+            sourceOffset: typeof anchor.sourceOffset === 'number' && (!inlinePatch || anchorNewIndex === mapping.get(anchor.blockIndex))
+              ? mappedSourceOffset : undefined,
             container: anchorContainer,
             documentKey: patch.documentKey,
             generation: patch.generation,
@@ -643,7 +698,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     }
     pendingPreviewPatchRef.current = null
   }
-  measurementKeyRef.current = { content: displayedContent, fontSize, lineHeight, fontFamily, wordWrap, theme: themeId }
+  measurementKeyRef.current = { content: displayedContent, documentKey, fontSize, lineHeight, fontFamily, wordWrap, theme: themeId }
   previousModelRef.current = model
 
   // 交互 HTML 瞬时状态失效：文档内容或文档身份变化即整体清除（渲染期执行，
@@ -1010,6 +1065,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
 
   /** SearchOverlay 入口：基于可见文本投影全文搜索一次并按 blockId 建立匹配索引（O(1) 查询） */
   const setSearchStateImpl = useCallback((state: PreviewSearchState | null) => {
+    // 关闭/自动刷新同时取消旧匹配的虚拟补定位，保留其他定位意图。
+    if (pendingSearchCorrectionRef.current?.kind === 'search') pendingSearchCorrectionRef.current = null
     searchStateRef.current = state && state.query ? state : null
     const query = searchStateRef.current?.query
     const map = new Map<string, Array<{ from: number; to: number }>>()
@@ -1024,8 +1081,20 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       }
     }
     searchMatchesByBlockRef.current = query ? map : null
-    syncAllMountedBlocks({ search: true, selection: false })
+    syncAllMountedBlocks({ search: true, selection: false, sourceReveal: false, readingMarks: false })
   }, [syncAllMountedBlocks])
+
+  // 在虚拟块的 layout 补定位之前废弃旧搜索坐标；其他定位/选区仍由原生命周期管理。
+  useLayoutEffect(() => {
+    const previous = searchTargetIdentityRef.current
+    if (previous?.content === displayedContent && previous.documentKey === documentKey && previous.isVisible === isVisible) return
+    searchTargetIdentityRef.current = { content: displayedContent, documentKey, isVisible }
+    if (pendingSearchCorrectionRef.current?.kind === 'search') pendingSearchCorrectionRef.current = null
+    const hadSearch = searchStateRef.current !== null
+    searchStateRef.current = null
+    searchMatchesByBlockRef.current = null
+    if (hadSearch) syncAllMountedBlocks({ search: true, selection: false, sourceReveal: false, readingMarks: false })
+  }, [displayedContent, documentKey, isVisible, syncAllMountedBlocks])
 
   // 文档内容变化：旧 offset 全部失效，清除搜索索引与选区状态
   useEffect(() => {
@@ -1046,7 +1115,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       sourceRevealTimerRef.current = null
     }
     selectionAnchorRef.current = null
-    if (hadSearch) syncAllMountedBlocks({ search: true, selection: false })
+    if (hadSearch) syncAllMountedBlocks({ search: true, selection: false, sourceReveal: false, readingMarks: false })
     if (hadSelection) syncAllMountedBlocks({ search: false, selection: true })
     if (hadSourceReveal) syncAllMountedBlocks({ search: false, selection: false, sourceReveal: true, readingMarks: false })
     syncAllMountedBlocks({ search: false, selection: false, readingMarks: true })
@@ -1107,7 +1176,12 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     const domBlockTop = element
       ? element.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
       : undefined
-    const blockTop = projected.blockTops[pending.blockIndex]
+    const rootRect = rootRef.current?.getBoundingClientRect()
+    const rootOffset = rootRect && rootRect.height > 0
+      ? rootRect.top - container.getBoundingClientRect().top + container.scrollTop
+      : 0
+    const projectedTop = projected.blockTops[pending.blockIndex]
+    const blockTop = (typeof projectedTop === 'number' ? projectedTop + rootOffset : undefined)
       ?? domBlockTop
       ?? getEstimatedPreviewTopForLine(
           model,
@@ -1365,37 +1439,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   )
 
   const captureViewportAnchor = useCallback((): PreviewViewportAnchor | null => {
-    const container = scrollContainerRef.current
-    if (!container || model.blocks.length === 0) return null
-    const fallbackScrollTop = container.scrollTop
-    const visibleAtTop = computeVisibleRange(
-      model,
-      fallbackScrollTop,
-      fallbackScrollTop + container.clientHeight,
-      measuredHeightsRef.current,
-      estimateBlockHeight,
-      0,
-    )
-    const blockIndex = visibleAtTop.startIndex
-    const block = model.blocks[blockIndex]
-    if (!block) return null
-    const element = blockRefs.current.get(blockIndex)
-    const blockTop = element
-      ? element.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
-      : visibleAtTop.blockTops[blockIndex]
-    const line = getMountedPreviewLineForTop(model, rootRef.current, container, fallbackScrollTop)
-    const sourceOffset = typeof line === 'number' ? getSourceOffsetForLine(model, line) : undefined
-    const exactTop = element && typeof sourceOffset === 'number'
-      ? getMountedSourceRangeTop(element, container, sourceOffset, Math.min(block.endOffset, sourceOffset + 1))
-      : undefined
-    const anchorTop = typeof exactTop === 'number' ? exactTop : blockTop
-    return {
-      blockId: block.blockId,
-      blockIndex,
-      sourceOffset,
-      viewportOffset: fallbackScrollTop - anchorTop,
-      fallbackScrollTop,
-    }
+    return readPreviewViewportAnchor(model, scrollContainerRef.current, rootRef.current, blockRefs.current, measuredHeightsRef.current, estimateBlockHeight)
   }, [estimateBlockHeight, model])
 
   // 编辑与预览共用同一套目录滚动：短距离平滑滚动，长距离渐隐后瞬移并在渐显前校正。
@@ -1640,7 +1684,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       }
       const localSource = model.rawContent.slice(block.startOffset, Math.max(block.startOffset, offset))
       const line = block.startLine + (localSource.match(/\r\n|\r|\n/g)?.length ?? 0)
-      pendingSearchCorrectionRef.current = { from: offset, to, blockId: block.blockId }
+      pendingSearchCorrectionRef.current = { from: offset, to, blockId: block.blockId, kind: 'search' }
       const top = getEstimatedPreviewTopForLine(model, line, estimateBlockHeight, measuredHeightsRef.current)
       if (typeof top === 'number') container.scrollTo({ top: Math.max(0, top - 24) })
     },
@@ -1681,6 +1725,12 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       return applied
     },
   }), [cancelProgrammaticScroll, cancelPendingAnchorRestore, model, estimateBlockHeight, requiresWholeDocumentRender, scrollToLineInternal, revealSourceLinesInternal, setSearchStateImpl, applySelection, navigateToReadingMarkInternal, onPositionIntent])
+
+  // 在旧索引清理 effect 与 handle 安装之后通知搜索框；隐藏实例不提供搜索目标。
+  useEffect(() => {
+    onSearchModelChangeRef.current?.(isVisible ? { documentKey, content: displayedContent } : null)
+    return () => onSearchModelChangeRef.current?.(null)
+  }, [displayedContent, documentKey, isVisible, setSearchStateImpl])
 
   // Visible range
   const visible = useMemo(

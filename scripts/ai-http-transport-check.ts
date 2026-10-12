@@ -13,6 +13,7 @@ import { AI_CHAT_PRESETS, AI_EMBEDDING_PRESETS, type AiConfig } from '../src/ser
 import { readFileSync } from 'node:fs'
 import {
   ExternalHttpError,
+  externalApiFetch,
   externalFetch,
   listAuthorizedApiOrigins,
   setOriginAuthorizationPrompt,
@@ -39,10 +40,13 @@ const builtinOrigins = new Set([
 ])
 const sessionOrigins = new Set<string>()
 const persistedOrigins = new Set<string>()
+const apiConnections = new Map<string, { kind: string; protocol: string; baseUrl: string }>()
+const nativeApiRequests: unknown[] = []
 const requests: Array<{ requestId: string; url: string; method: string; headers: [string, string][]; body?: number[]; timeoutMs?: number }> = []
 const cancelledRequestIds = new Set<string>()
 const acknowledgedRequestIds: string[] = []
 let rejectedReasoningRequests = 0
+let forcedLimitCode = ''
 
 function originOf(value: string) {
   const url = new URL(value)
@@ -129,6 +133,12 @@ function responseBody(url: string, body?: number[]) {
 }
 
 runtime.__TAURI_INVOKE__ = async (command, args = {}) => {
+  if (command === 'configure_api_connection') {
+    const { connection } = args.request as { connection: { kind: string; protocol: string; baseUrl: string } }
+    const configId = JSON.stringify(connection)
+    apiConnections.set(configId, connection)
+    return { configId, configured: true }
+  }
   if (command === 'acknowledge_external_http_stream') {
     acknowledgedRequestIds.push(args.requestId as string)
     return true
@@ -156,12 +166,33 @@ runtime.__TAURI_INVOKE__ = async (command, args = {}) => {
   }
   if (command !== 'external_http_stream') throw new Error(`unexpected command: ${command}`)
 
-  const request = args.request as { requestId: string; url: string; method: string; headers: [string, string][]; body?: number[]; timeoutMs?: number }
+  const request = structuredClone(args.request) as { requestId: string; url: string; method: string; headers: [string, string][]; body?: number[]; timeoutMs?: number }
+  const api = (request as typeof request & { api?: { configId: string; operation: string; query?: string; count?: number } }).api
+  if (api) {
+    nativeApiRequests.push(structuredClone(request))
+    assert(!request.url && !request.method && request.headers.length === 0, '凭据请求不得携带 URL、方法或鉴权头')
+    const connection = apiConnections.get(api.configId)!
+    const suffix = {
+      chat: connection.protocol === 'openai-responses' ? '/responses' : '/chat/completions',
+      models: '/models',
+      embedding: '/embeddings',
+      search: '',
+    }[api.operation] || ''
+    request.url = connection.baseUrl.replace(/\/+$/, '') + suffix
+    request.method = api.operation === 'models' || (api.operation === 'search' && ['brave', 'custom'].includes(connection.protocol)) ? 'GET' : 'POST'
+    if (api.query !== undefined) request.url += `?q=${encodeURIComponent(api.query)}&count=${api.count}`
+  } else if (!request.url.startsWith('https://api.github.com/repos/we-used-to-be/Guanmo-open/releases/')) {
+    throw nativeError('OPERATION_NOT_ALLOWED', '无鉴权代理仅允许更新查询')
+  }
   const channel = args.onEvent as { onmessage?: (event: unknown) => void }
   const origin = originOf(request.url)
   requests.push(request)
   queueMicrotask(() => {
-    if (request.url.endsWith('/slow')) {
+    if (forcedLimitCode) {
+      channel.onmessage?.({ event: 'error', error: nativeError(forcedLimitCode, 'API 使用上限') })
+      return
+    }
+    if (request.url.includes('/slow/')) {
       setTimeout(() => {
         if (!cancelledRequestIds.has(request.requestId)) {
           channel.onmessage?.({ event: 'start', status: 200, headers: [] })
@@ -173,7 +204,7 @@ runtime.__TAURI_INVOKE__ = async (command, args = {}) => {
       channel.onmessage?.({ event: 'error', error: nativeError('ORIGIN_NOT_AUTHORIZED', '未授权', origin) })
       return
     }
-    if (request.url.endsWith('/redirect')) {
+    if (request.url.includes('/redirect/')) {
       channel.onmessage?.({ event: 'start', status: 302, headers: [['location', 'https://other.example/final']] })
       channel.onmessage?.({ event: 'end' })
       return
@@ -208,7 +239,7 @@ const config: AiConfig = {
   temperature: 0.7,
   topP: 1,
   embedding: {
-    protocol: 'openai-embedding', provider: 'custom', baseUrl: '', apiKey: '', embeddingModel: 'embed', timeout: 45000,
+    protocol: 'openai-embedding', provider: 'custom', baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3', apiKey: '', embeddingModel: 'embed', timeout: 45000,
   },
 }
 
@@ -317,6 +348,11 @@ const responsesConfig: AiConfig = {
 }
 const responsesProvider = new OpenAIResponsesProvider(responsesConfig)
 assert(createChatProvider(responsesConfig) instanceof OpenAIResponsesProvider, 'Responses 协议应创建专用 Provider')
+assert(
+  (responsesProvider as unknown as { config: AiConfig }).config.apiKey === '',
+  'Responses Provider 不得保留前端明文 API Key',
+)
+const responsesRequestStart = nativeApiRequests.length
 
 const responseTools = [{
   type: 'function' as const,
@@ -343,6 +379,20 @@ assert(responseChat.content === '完成', 'Responses 非流式输出应读取 ou
 assert(responseChat.toolCalls?.[0]?.name === 'get_weather', 'Responses 非流式输出应读取 function_call')
 assert(responseChat.toolCalls?.[0]?.args.city === 'Beijing', 'Responses 工具参数应解析为对象')
 assert(responseChat.usage?.totalTokens === 5, 'Responses 用量应映射为统一格式')
+const boundResponseRequest = nativeApiRequests[responsesRequestStart] as {
+  url: string
+  method: string
+  headers: unknown[]
+  api: { configId: string; operation: string }
+}
+assert(
+  boundResponseRequest.api.operation === 'chat'
+    && apiConnections.get(boundResponseRequest.api.configId)?.protocol === 'openai-responses'
+    && !boundResponseRequest.url
+    && !boundResponseRequest.method
+    && boundResponseRequest.headers.length === 0,
+  'Responses 请求必须使用 Rust 绑定配置，不能覆盖 URL、方法或鉴权头',
+)
 
 const responseRequest = requests.find((request) => (
   request.url.endsWith('/responses')
@@ -430,9 +480,12 @@ assert(
 )
 
 let promptCount = 0
+const fetchModels = (baseUrl: string, signal?: AbortSignal) => externalApiFetch(
+  { kind: 'chat', protocol: 'openai-chat', baseUrl }, 'models', { signal },
+)
 const restoreCancelPrompt = setOriginAuthorizationPrompt(async () => 'cancel')
 let unauthorizedCode = ''
-try { await externalFetch('https://custom.example/v1/models') } catch (error) { unauthorizedCode = (error as ExternalHttpError).code }
+try { await fetchModels('https://custom.example/v1') } catch (error) { unauthorizedCode = (error as ExternalHttpError).code }
 restoreCancelPrompt()
 assert(unauthorizedCode === 'ORIGIN_NOT_AUTHORIZED', '自定义 HTTPS 首次请求应返回 ORIGIN_NOT_AUTHORIZED，拒绝后不得中断应用')
 
@@ -450,17 +503,17 @@ const restorePrompt = setOriginAuthorizationPrompt(async () => {
   promptCount += 1
   return 'permanent'
 })
-await externalFetch('https://custom.example/v1/models')
+await fetchModels('https://custom.example/v1')
 assert(promptCount === 1 && persistedOrigins.has('https://custom.example:443'), '自定义 HTTPS 应在确认后永久授权')
 sessionOrigins.clear()
-await externalFetch('https://custom.example/v1/models')
+await fetchModels('https://custom.example/v1')
 assert(promptCount === 1, '永久授权应在模拟重启后继续生效')
 assert((await listAuthorizedApiOrigins()).some((item) => item.origin === 'https://custom.example:443'), '设置页应能读取永久授权')
 restorePrompt()
 
 const restoreSessionPrompt = setOriginAuthorizationPrompt(async () => 'session')
-await externalFetch('http://localhost:11435/v1/models')
-await externalFetch('http://192.168.1.20:11434/v1/models')
+await fetchModels('http://localhost:11435/v1')
+await fetchModels('http://192.168.1.20:11434/v1')
 assert(sessionOrigins.has('http://localhost:11435') && sessionOrigins.has('http://192.168.1.20:11434'), 'localhost 和私网 HTTP 应仅在用户授权后放行')
 restoreSessionPrompt()
 
@@ -471,17 +524,19 @@ for (const [url, code] of [
 ] as const) {
   const restore = setOriginAuthorizationPrompt(async () => 'session')
   let actual = ''
-  try { await externalFetch(url) } catch (error) { actual = (error as ExternalHttpError).code }
+  try { await fetchModels(url) } catch (error) { actual = (error as ExternalHttpError).code }
   restore()
   assert(actual === code, `${url} 应被 Rust 授权边界拒绝`)
 }
 
-const redirect = await externalFetch('https://custom.example/redirect')
+const redirect = await fetchModels('https://custom.example/redirect')
 assert(redirect.status === 302 && !requests.some((item) => item.url === 'https://other.example/final'), '跨 Origin 重定向不得自动跟随')
 
 const cancellation = new AbortController()
-const cancelledRequest = externalFetch('https://custom.example/slow', { signal: cancellation.signal })
-await Promise.resolve()
+const beforeCancellation = requests.length
+const cancelledRequest = fetchModels('https://custom.example/slow', cancellation.signal)
+for (let i = 0; i < 20 && requests.length === beforeCancellation; i += 1) await Promise.resolve()
+assert(requests.length === beforeCancellation + 1, '取消探针必须先等凭据配置与请求注册完成')
 cancellation.abort()
 let cancelled = false
 try { await cancelledRequest } catch (error) { cancelled = (error as Error).name === 'AbortError' }
@@ -490,6 +545,21 @@ assert(
   cancelled && cancelledNativeRequest && cancelledRequestIds.has(cancelledNativeRequest.requestId),
   '前端取消必须携带 requestId 调用 Rust 取消命令并终止待处理请求',
 )
+
+for (const code of ['RATE_LIMIT_EXCEEDED', 'SESSION_LIMIT_EXCEEDED']) {
+  forcedLimitCode = code
+  let authorizationPrompts = 0
+  const restore = setOriginAuthorizationPrompt(async () => { authorizationPrompts += 1; return 'session' })
+  const before = requests.length
+  let actual = ''
+  try { await provider.chat({ messages: [{ role: 'user', content: 'anonymous' }] }) } catch (error) {
+    actual = (error as ExternalHttpError).code
+  }
+  restore()
+  assert(actual === code && requests.length === before + 1 && authorizationPrompts === 0,
+    '限额必须明确传到调用方，不能授权重试或供应商参数回退')
+}
+forcedLimitCode = ''
 
 runtime.__TEST_TAURI__ = false
 for (const action of [

@@ -39,7 +39,7 @@ import {
   LOCAL_RESEARCH_ANSWER_PROMPT,
   WEB_COMPARISON_ANSWER_PROMPT,
 } from './answerInstructions'
-import { dropOldestCompleteTurns, isModelContextOverflowError } from '@/services/ai/contextBudget'
+import { markCurrentTurnStart, withContextOverflowRecovery } from '@/services/ai/contextBudget'
 import { extractReadingArtifactReferences, mergeReadingArtifactReferences } from './readingArtifactReferences'
 import {
   finishAgentTrace,
@@ -137,6 +137,9 @@ actionMessage 必须是简短的单行行动说明，只描述接下来要做的
 3. read_context_file 用于读取用户已添加到聊天框上下文的精确文件内容；文件未打开但已添加为上下文时，仍可以调用 read_context_file 读取磁盘内容。
 4. 只有需要精确读取整份未授权文件、或需要修改文件时，才要求用户添加目标文件上下文；修改文件还必须目标文件已打开。
 5. 如果 search_knowledge 只返回片段而不足以完整总结整篇文章，应基于片段说明当前结论范围，并提示用户添加目标文件以读取完整原文。
+6. 用户询问具体日期、编号或名称时，先检查本轮已返回的全部知识库片段，定位直接包含目标条目的正文或表格行；不得仅按相关度顺序采用背景块，也不得用周目标、概述或验收替代具体条目。
+7. 日期匹配应识别 10.11、10/11、10月11日等月日写法；有年份时必须核对年份。读取表格时结合表头理解匹配行，保留必做、选做等列的区别，不得混入其他日期的任务。
+8. 已返回片段包含直接证据时，直接据此回答并引用对应来源；用户指出遗漏时先复查已有结果，不必重复检索。只有现有片段缺少直接证据或目标内容被截断时，才使用目标日期、编号、名称或其等价写法重新检索；仍无依据时说明缺口，不得猜测。
 
 工具安全规则：
 1. 查询工具可以自动执行；write_local、schedule 等副作用工具必须返回已注册的确认提案，模型 JSON 不得直接触发执行。
@@ -942,13 +945,14 @@ async function runAgentInternal({
   const llmTools = candidateTools.length > 0 ? getToolsForLLM(activeToolNames) : []
 
   const contextMessage = buildUntrustedContextMessage(untrustedContext || '')
-  const messages: ChatMessage[] = [
+  let messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
     ...chatHistory,
     ...(contextMessage ? [contextMessage] : []),
     ...(answerInstruction ? [{ role: 'user' as const, content: answerInstruction }] : []),
     { role: 'user', content: query },
   ]
+  markCurrentTurnStart(messages[1 + chatHistory.length])
 
   const steps: AgentStep[] = []
   let toolCalls = 0
@@ -1008,7 +1012,9 @@ async function runAgentInternal({
   })
 
   const requestAgentCompletion = async () => {
+    let hasPublishedContent = false
     const send = async (currentMessages: ChatMessage[]) => {
+      if (signal?.aborted) throw new DOMException('Agent cancelled', 'AbortError')
       if (remainingDeadlineMs() <= 0) throw new DOMException('Agent deadline exceeded', 'TimeoutError')
       const canStreamAnswer = checkRequiredCapabilities(mergedRequired, calledToolNames).length === 0
       const modelSpanId = startAgentTraceSpan(diagnosticRunId, 'model_request', {
@@ -1050,7 +1056,10 @@ async function runAgentInternal({
           }
           if (chunk.content) {
             content += chunk.content
-            if (canStreamAnswer) onStreamContent?.(content)
+            if (canStreamAnswer && !signal?.aborted) {
+              hasPublishedContent = true
+              onStreamContent?.(content)
+            }
           }
           if (chunk.done) break
         }
@@ -1081,13 +1090,14 @@ async function runAgentInternal({
       }
     }
 
-    try {
-      return await send(messages)
-    } catch (error) {
-      if (!isModelContextOverflowError(error) || signal?.aborted) throw error
-      console.warn('[Agent context] provider reported context overflow; retrying after dropping oldest turn')
-      return send(dropOldestCompleteTurns(messages))
-    }
+    return withContextOverflowRecovery(messages, send, {
+      isCancelled: () => Boolean(signal?.aborted) || remainingDeadlineMs() <= 0,
+      onRetry: (reduced) => {
+        messages = reduced
+        if (hasPublishedContent) onStreamContent?.('')
+        hasPublishedContent = false
+      },
+    })
   }
 
   const repairUnmetReadCapabilities = async (): Promise<boolean> => {
@@ -1175,26 +1185,20 @@ async function runAgentInternal({
     })
 
     try {
-      let response
-      try {
-        response = await client.chat({
-          messages,
+      const response = await withContextOverflowRecovery(messages, async (currentMessages) => {
+        if (signal?.aborted) throw new DOMException('Agent cancelled', 'AbortError')
+        if (remainingDeadlineMs() <= 0) throw new DOMException('Agent deadline exceeded', 'TimeoutError')
+        return client.chat({
+          messages: currentMessages,
           signal,
           temperature,
           tools: [],
           toolChoice: 'none',
         })
-      } catch (error) {
-        if (!isModelContextOverflowError(error) || signal?.aborted) throw error
-        console.warn('[Agent context] provider reported context overflow; retrying after dropping oldest turn')
-        response = await client.chat({
-          messages: dropOldestCompleteTurns(messages),
-          signal,
-          temperature,
-          tools: [],
-          toolChoice: 'none',
-        })
-      }
+      }, {
+        isCancelled: () => Boolean(signal?.aborted) || remainingDeadlineMs() <= 0,
+        onRetry: (reduced) => { messages = reduced },
+      })
 
       return {
         answer: response.content,

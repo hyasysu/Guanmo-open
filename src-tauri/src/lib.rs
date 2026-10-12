@@ -14,7 +14,9 @@ use std::{
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_fs::FsExt;
 
+mod api_credentials;
 mod api_http;
+mod api_http_limits;
 mod background_library;
 mod database_transactions;
 mod diagnostics;
@@ -174,18 +176,6 @@ struct DirectoryEntry {
     is_directory: bool,
     #[serde(rename = "isFile")]
     is_file: bool,
-}
-
-fn ensure_allowed_secret_key(key: &str) -> Result<(), String> {
-    let valid = !key.is_empty()
-        && key.len() <= 128
-        && key
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'));
-    if !valid {
-        return Err("secret key is not allowed".into());
-    }
-    Ok(())
 }
 
 fn ensure_allowed_text_file_path(path: &Path) -> Result<(), String> {
@@ -965,8 +955,10 @@ fn read_secret_map(path: &PathBuf) -> Result<HashMap<String, Vec<u8>>, String> {
 }
 
 fn write_secret_map(path: &PathBuf, secrets: &HashMap<String, Vec<u8>>) -> Result<(), String> {
-    let text = serde_json::to_string(secrets).map_err(|err| err.to_string())?;
-    fs::write(path, text).map_err(|err| err.to_string())
+    let text = serde_json::to_string(secrets).map_err(|_| "安全存储编码失败")?;
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, text).map_err(|_| "安全存储写入失败")?;
+    fs::rename(&temporary, path).map_err(|_| "安全存储更新失败".into())
 }
 
 #[cfg(target_os = "windows")]
@@ -1029,45 +1021,14 @@ fn unprotect_secret(value: &[u8]) -> Result<String, String> {
 
 #[cfg(not(target_os = "windows"))]
 fn protect_secret(value: &str) -> Result<Vec<u8>, String> {
-    Ok(value.as_bytes().to_vec())
+    let _ = value;
+    Err("当前平台不支持系统安全存储".into())
 }
 
 #[cfg(not(target_os = "windows"))]
 fn unprotect_secret(value: &[u8]) -> Result<String, String> {
-    String::from_utf8(value.to_vec()).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-fn save_secret(app: tauri::AppHandle, key: String, value: String) -> Result<(), String> {
-    ensure_allowed_secret_key(&key)?;
-    let path = secret_file_path(&app)?;
-    let mut secrets = read_secret_map(&path)?;
-    if value.is_empty() {
-        secrets.remove(&key);
-    } else {
-        secrets.insert(key, protect_secret(&value)?);
-    }
-    write_secret_map(&path, &secrets)
-}
-
-#[tauri::command]
-fn load_secret(app: tauri::AppHandle, key: String) -> Result<Option<String>, String> {
-    ensure_allowed_secret_key(&key)?;
-    let path = secret_file_path(&app)?;
-    let secrets = read_secret_map(&path)?;
-    secrets
-        .get(&key)
-        .map(|value| unprotect_secret(value))
-        .transpose()
-}
-
-#[tauri::command]
-fn delete_secret(app: tauri::AppHandle, key: String) -> Result<(), String> {
-    ensure_allowed_secret_key(&key)?;
-    let path = secret_file_path(&app)?;
-    let mut secrets = read_secret_map(&path)?;
-    secrets.remove(&key);
-    write_secret_map(&path, &secrets)
+    let _ = value;
+    Err("当前平台不支持系统安全存储".into())
 }
 
 #[tauri::command]
@@ -1917,9 +1878,7 @@ pub fn run() {
             reading_reminder_notifications::schedule_reading_reminder_notification,
             reading_reminder_notifications::list_pending_reading_reminder_notification_ids,
             reading_reminder_notifications::cancel_reading_reminder_notification,
-            save_secret,
-            load_secret,
-            delete_secret,
+            api_credentials::configure_api_connection,
             authorize_workspace_path,
             authorize_selected_path,
             migrate_legacy_file_access,
@@ -1955,6 +1914,9 @@ pub fn run() {
             database_transactions::load_reading_marks,
             database_transactions::load_reading_marks_page,
             database_transactions::delete_reading_mark,
+            database_transactions::set_reading_artifact_organization,
+            database_transactions::save_reading_artifact_category,
+            database_transactions::delete_reading_artifact_category,
             rag_index::get_rag_index_state,
             rag_index::initialize_rag_index,
             rag_index::cancel_rag_index_initialization,
