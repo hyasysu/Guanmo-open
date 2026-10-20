@@ -11,6 +11,7 @@ import { extractToc, type TocItem } from '@/services/markdownToc'
 import { toggleMarkdownTaskAtLine } from '@/services/markdownTasks'
 import { saveExternalImageForMarkdown, saveImageFileForMarkdown } from '@/services/markdownImages'
 import { toast } from '@/services/toast'
+import { requestOpenAiChat } from '@/services/aiPanelNavigation'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { openFileDialog } from '@/hooks/useTauri'
 import { eventMarker } from '@/services/eventMarker'
@@ -29,6 +30,7 @@ import type { MarkdownDiffViewHandle } from './MarkdownDiffView'
 import { SearchOverlay, type SearchRequest } from './SearchOverlay'
 import { TabBar } from './TabBar'
 import { useScheduledPreviewContent } from './useScheduledPreviewContent'
+import { usePreviewSwitchSnapshot } from './usePreviewSwitchSnapshot'
 import { useEditorResourceLifecycle } from './useEditorResourceLifecycle'
 import { getPreviewTopForLine, useReadingPositionBridge } from './useReadingPositionBridge'
 import { usePreviewSelectionBridge } from './usePreviewSelectionBridge'
@@ -470,6 +472,11 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
     ? `${activeTab.id}:${activeContentSignature}:${activeOriginalSignature}`
     : null
 
+  const prepareModePrewarm = useCallback(async (mode: PrewarmTargetMode) => {
+    if (mode === 'diff-preview') await import('./MarkdownDiffView')
+    else await import('./MarkdownPreview')
+  }, [])
+
   useEditorResourceLifecycle({
     activeTab,
     activeTabId: activeTabId ?? null,
@@ -488,6 +495,7 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
     modeResourcePolicy,
     viewModeUsage,
     getModeRenderKey,
+    prepareModePrewarm,
     warmScope,
     leftPreviewMounted,
     rightPreviewMounted,
@@ -613,6 +621,8 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
     rightTab?.id
     && restoredPreviewKeysRef.current.right !== getPreviewRestoreKey(rightTab.id, viewMode)
   )
+
+  usePreviewSwitchSnapshot(leftPreviewRef, activeTab?.id, viewMode === 'preview', leftPreviewMasked)
 
   // 文件/模式切换恢复阅读位置；同文档刷新由 MarkdownPreview 保持当前视口，
   // 不重播旧位置，也取消上一轮恢复留下的迟到布局校正。
@@ -1637,7 +1647,7 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
                 </Suspense>
               </div>
             )}
-            <div className={`${viewMode === 'diff-preview' ? 'hidden' : 'flex'} flex-1 overflow-hidden bg-gm-surface`}>
+            <div className={`${viewMode === 'diff-preview' ? 'hidden' : 'flex'} flex-1 overflow-hidden bg-gm-surface relative`}>
             {(editorMounted || editorVisible) && (
             <div className={`${editorVisible ? (viewMode === 'edit-preview' ? 'min-w-0 flex-1 border-r border-gm-border-subtle' : 'flex-1') : 'hidden'} ${isFullscreen ? 'gm-fullscreen-editor-content' : ''} ${isFullscreen && viewMode === 'edit-preview' ? 'gm-fullscreen-content-split-left' : ''} ${fullscreenTocExpanded && viewMode === 'edit' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-hidden relative`}>
               {activeTab && (
@@ -2017,7 +2027,10 @@ function WelcomeScreen() {
           onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', ctrlKey: true, bubbles: true }))}
           icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>}
         />
-        <ActionItem label="AI 对话" shortcut="Ctrl+J" onClick={toggleAiPanel}
+        <ActionItem label="AI 对话" shortcut="Ctrl+J" onClick={() => {
+          if (!useAppStore.getState().aiPanelOpen) toggleAiPanel()
+          requestOpenAiChat(true)
+        }}
           icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" /></svg>}
         />
       </div>

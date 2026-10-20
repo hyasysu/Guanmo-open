@@ -399,6 +399,15 @@ export async function loadRagStatsAggregate(): Promise<{
   }
 }
 
+/** Scalar-only estimate for optional native index initialization; never loads content. */
+export async function estimateRagWarmupMb(): Promise<number> {
+  if (!isDatabaseReady()) return Number.POSITIVE_INFINITY
+  // Rust owns the estimate used by both optional warmup and foreground admission.
+  const budget = await invoke<unknown>('estimate_rag_index_memory')
+  return typeof budget === 'number' && Number.isSafeInteger(budget) && budget >= 128
+    ? budget : Number.POSITIVE_INFINITY
+}
+
 export async function loadDocumentFilePaths(): Promise<string[]> {
   if (!isDatabaseReady()) return []
   const db = getDatabase()

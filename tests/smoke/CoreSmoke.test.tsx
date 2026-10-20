@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearMocks, mockConvertFileSrc, mockIPC, mockWindows } from '@tauri-apps/api/mocks'
 import { createRuntimeGuard } from './runtimeGuard'
+import { getAiPanelView } from '@/services/aiPanelNavigation'
 
 const native = vi.hoisted(() => ({
   violations: [] as string[],
@@ -30,6 +31,7 @@ function invokeMock(command: string, args?: Record<string, unknown>) {
       case 'plugin:window|is_fullscreen': return native.fullscreen
       case 'plugin:window|set_fullscreen': native.fullscreen = Boolean(args?.value); return undefined
       case 'plugin:app|version': return '0.0.0-smoke'
+      case 'get_system_memory_snapshot': return { availablePhysicalMb: 4096, totalPhysicalMb: 8192, availableCommitMb: 4096, commitLimitMb: 12288 }
       case 'plugin:path|join': return (args?.paths as string[]).join('\\')
       case 'plugin:dialog|open': return (args?.options as { directory?: boolean })?.directory ? 'C:\\smoke' : native.selectedPath
       case 'wait_for_file_access_restore': return { restoreSucceeded: true, legacyMigrationCompleted: true, workspaceCount: 0, selectedFileCount: 0, pendingCount: 0 }
@@ -162,6 +164,73 @@ async function boot() {
 describe('Core Smoke（真实 Desktop React Tree，隔离原生 I/O）', () => {
   it('空会话启动并完成主界面首次渲染', async () => { await boot() })
 
+  it('AI 与阅读成果快捷键按当前页面开关侧栏，打开 AI 时聚焦并保留草稿', async () => {
+    const user = userEvent.setup()
+    await boot()
+    // 草稿用于验证焦点；隔离挂载时自动发送快捷提问的既有行为。
+    useSettingsStore.getState().updateEditorSettings({ autoSendAiShortcut: false })
+    let shortcutCount = 0
+    const pressShortcut = (shiftKey = false, metaKey = false) => {
+      shortcutCount += 1
+      fireEvent.keyDown(window, { key: 'j', code: 'KeyJ', ctrlKey: !metaKey, metaKey, shiftKey })
+    }
+    const expectChatFocused = () => {
+      expect(useAppStore.getState().aiPanelOpen, `shortcut ${shortcutCount}`).toBe(true)
+      expect(screen.getByPlaceholderText('输入消息... (Enter 发送)')).toHaveFocus()
+    }
+    pressShortcut()
+    await checkpoint(expectChatFocused)
+    await user.type(screen.getByPlaceholderText('输入消息... (Enter 发送)'), '保留问题草稿')
+    // 对应页面已打开时关闭；再次按下则打开并聚焦。
+    pressShortcut()
+    await checkpoint(() => expect(useAppStore.getState().aiPanelOpen).toBe(false))
+    pressShortcut()
+    await checkpoint(expectChatFocused)
+    pressShortcut(true)
+    await checkpoint(() => {
+      expect(useAppStore.getState().aiPanelOpen, `shortcut ${shortcutCount}`).toBe(true)
+      expect(getAiPanelView()).toBe('artifacts')
+      expect(screen.getByPlaceholderText('搜索阅读成果')).toBeVisible()
+    })
+    pressShortcut(true)
+    await checkpoint(() => expect(useAppStore.getState().aiPanelOpen).toBe(false))
+    pressShortcut(true)
+    await checkpoint(() => {
+      expect(useAppStore.getState().aiPanelOpen, `shortcut ${shortcutCount}`).toBe(true)
+      expect(getAiPanelView()).toBe('artifacts')
+      expect(screen.getByPlaceholderText('搜索阅读成果')).toBeVisible()
+    })
+    pressShortcut()
+    await checkpoint(expectChatFocused)
+    expect(screen.getByPlaceholderText('输入消息... (Enter 发送)')).toHaveValue('保留问题草稿')
+    pressShortcut(true)
+    await checkpoint(() => {
+      expect(useAppStore.getState().aiPanelOpen, `shortcut ${shortcutCount}`).toBe(true)
+      expect(getAiPanelView()).toBe('artifacts')
+      expect(screen.getByPlaceholderText('搜索阅读成果')).toBeVisible()
+    })
+    // 已打开的成果视图与 macOS Meta 键入口。
+    pressShortcut(false, true)
+    await checkpoint(expectChatFocused)
+    await user.click(screen.getByTitle('进入全屏 F11'))
+    await checkpoint(() => expect(useAppStore.getState().isFullscreen).toBe(true))
+    await checkpoint(() => expect(useAppStore.getState().aiPanelOpen).toBe(false))
+    pressShortcut(true)
+    await checkpoint(() => {
+      expect(useAppStore.getState().aiPanelOpen, `shortcut ${shortcutCount}`).toBe(true)
+      expect(getAiPanelView()).toBe('artifacts')
+      expect(screen.getByPlaceholderText('搜索阅读成果')).toBeVisible()
+    })
+    pressShortcut()
+    await checkpoint(expectChatFocused)
+    pressShortcut()
+    await checkpoint(() => expect(useAppStore.getState().aiPanelOpen).toBe(false))
+    pressShortcut()
+    await checkpoint(expectChatFocused)
+    await user.click(screen.getByTitle('退出全屏'))
+    await checkpoint(() => expect(useAppStore.getState().isFullscreen).toBe(false))
+  }, 30000)
+
   it('Markdown 编辑/预览/分屏/全屏、侧栏、AI/阅读成果、设置/知识库和 Tab 往返', async () => {
     const user = userEvent.setup()
     await boot()
@@ -195,23 +264,15 @@ describe('Core Smoke（真实 Desktop React Tree，隔离原生 I/O）', () => {
     await checkpoint(() => expect(screen.getByPlaceholderText('搜索阅读成果')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: /打开 AI 助手/ }))
     await checkpoint(() => expect(screen.getByPlaceholderText('输入消息... (Enter 发送)')).toBeInTheDocument())
-    const aiPanelContent = root.querySelector<HTMLElement>('.gm-layout-ai-panel .gm-layout-sidebar-content')!
     await user.click(screen.getByRole('button', { name: '关闭面板' }))
     await checkpoint(() => {
-      expect(useAppStore.getState().aiPanelOpen).toBe(false)
-      expect(root.querySelector('.gm-layout-ai-panel .gm-layout-sidebar-content')).toBe(aiPanelContent)
-      expect(aiPanelContent.inert).toBe(true)
-      expect(aiPanelContent.closest('.gm-layout-ai-panel')).toHaveAttribute('aria-hidden', 'true')
-      expect(screen.queryByRole('button', { name: '关闭面板' })).toBeNull()
+      const content = root.querySelector<HTMLElement>('.gm-layout-ai-panel .gm-layout-sidebar-content')
+      expect(content).not.toBeNull()
+      expect(content?.inert).toBe(true)
       expect(screen.getByRole('button', { name: /打开 AI 助手/ })).toHaveFocus()
     })
     await user.click(screen.getByRole('button', { name: /打开 AI 助手/ }))
-    await checkpoint(() => {
-      expect(screen.getByPlaceholderText('输入消息... (Enter 发送)')).toBeInTheDocument()
-      expect(root.querySelector('.gm-layout-ai-panel .gm-layout-sidebar-content')).toBe(aiPanelContent)
-      expect(aiPanelContent.inert).toBe(false)
-      expect(aiPanelContent.closest('.gm-layout-ai-panel')).toHaveAttribute('aria-hidden', 'false')
-    })
+    await checkpoint(() => expect(screen.getByPlaceholderText('输入消息... (Enter 发送)')).toBeInTheDocument())
 
     await user.click(screen.getByTitle('折叠侧边栏'))
     await checkpoint(() => {

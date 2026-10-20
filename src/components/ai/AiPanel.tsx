@@ -1,4 +1,4 @@
-import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type CSSProperties, type PointerEventHandler } from 'react'
+import { memo, useId, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type CSSProperties, type PointerEventHandler } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { motion } from 'motion/react'
 import { useAppStore } from '@/stores/appStore'
@@ -7,12 +7,14 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import type { RagSource, TimelineItem, PendingEdit } from '@/stores/chatStore'
 import { useAiChat } from '@/hooks/useAiChat'
 import { Button } from 'animal-island-ui'
-import { BookOpen } from 'lucide-react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { AssistantVisual } from '@/components/ai/AssistantVisual'
+import type { AssistantReaction } from '@/components/ai/AiSprite'
 import { SmoothStreamingText, StreamingBubbleContent } from '@/components/ai/SmoothStreamingText'
 import { PromptComposer } from '@/components/ai/PromptComposer'
+import { FullscreenPanelNavigation } from './FullscreenPanelNavigation'
+import { ContextMenu, ContextMenuItem } from '@/components/common/ContextMenu'
 import { readRememberedMarkdownFileForOpen } from '@/services/markdownFileOpenPolicy'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { useEditorStore } from '@/stores/editorStore'
@@ -37,6 +39,7 @@ import {
   OPEN_READING_REMINDERS_EVENT,
   TOGGLE_AI_CHAT_EVENT,
   TOGGLE_READING_ARTIFACTS_EVENT,
+  TOGGLE_READING_REMINDERS_EVENT,
   requestOpenReadingArtifact,
   reportAiPanelView,
   type AiPanelView,
@@ -74,6 +77,7 @@ import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
 import { createMorphingSurfaceMotion } from '@/components/common/useMorphingMotion'
 
 type AiPanelProps = {
+  productTourActive?: boolean
   fullscreenDragHandleProps?: {
     onPointerDown: PointerEventHandler<HTMLDivElement>
     onPointerMove: PointerEventHandler<HTMLDivElement>
@@ -142,8 +146,9 @@ export function buildUserSelectionMap(messages: ChatMessage[]): Map<string, Orig
     .map((message) => [message.id!, buildOriginalSelections(message.tags)]))
 }
 
-export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
+export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }: AiPanelProps = {}) {
   const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
+  const aiPanelOpen = useAppStore((s) => s.aiPanelOpen)
   const { messages, streaming, error, timeline, sendMessage, cancelStream } = useAiChat()
   const databaseEnabled = getRuntimeCapabilities().database
   const assistantVisualId = useSettingsStore((s) => s.appearance.assistantVisualId)
@@ -183,6 +188,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const [reasoningMode, setReasoningMode] = useState<'off' | 'on'>('off')
   const [resetManualToggle, setResetManualToggle] = useState(0)
   const [panelView, setPanelView] = useState<AiPanelView>('chat')
+  const [inputFocusRequest, setInputFocusRequest] = useState(0)
   const [artifactsVisited, setArtifactsVisited] = useState(false)
   useEffect(() => { if (panelView === 'artifacts') setArtifactsVisited(true) }, [panelView])
   useEffect(() => { reportAiPanelView(panelView) }, [panelView])
@@ -296,10 +302,11 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   }, [databaseEnabled, panelView])
 
   useEffect(() => {
-    const applyNavigation = (navigation: { mode: 'open' | 'toggle'; view: AiPanelView; artifactKey?: string }) => {
+    const applyNavigation = (navigation: { mode: 'open' | 'toggle'; view: AiPanelView; artifactKey?: string; focusInput?: boolean }) => {
       if (navigation.view === 'artifacts' && !databaseEnabled) return
       if (navigation.mode === 'open') {
         setPanelView(navigation.view)
+        if (navigation.view === 'chat' && navigation.focusInput) setInputFocusRequest((request) => request + 1)
         if (navigation.view === 'artifacts' && navigation.artifactKey) setArtifactFocusKey(navigation.artifactKey)
       } else if (panelView === navigation.view) {
         useAppStore.getState().closeAiPanel()
@@ -316,6 +323,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     const handleOpenReadingArtifacts = () => handleNavigation({ mode: 'open', view: 'artifacts' })
     const handleOpenReadingReminders = () => handleNavigation({ mode: 'open', view: 'reminders' })
     const handleToggleReadingArtifacts = () => handleNavigation({ mode: 'toggle', view: 'artifacts' })
+    const handleToggleReadingReminders = () => handleNavigation({ mode: 'toggle', view: 'reminders' })
     const pendingNavigation = consumePendingPanelNavigation()
     if (pendingNavigation) applyNavigation(pendingNavigation)
     window.addEventListener(OPEN_AI_CHAT_EVENT, handleOpenAiChat)
@@ -323,12 +331,14 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     window.addEventListener(OPEN_READING_ARTIFACTS_EVENT, handleOpenReadingArtifacts)
     window.addEventListener(OPEN_READING_REMINDERS_EVENT, handleOpenReadingReminders)
     window.addEventListener(TOGGLE_READING_ARTIFACTS_EVENT, handleToggleReadingArtifacts)
+    window.addEventListener(TOGGLE_READING_REMINDERS_EVENT, handleToggleReadingReminders)
     return () => {
       window.removeEventListener(OPEN_AI_CHAT_EVENT, handleOpenAiChat)
       window.removeEventListener(TOGGLE_AI_CHAT_EVENT, handleToggleAiChat)
       window.removeEventListener(OPEN_READING_ARTIFACTS_EVENT, handleOpenReadingArtifacts)
       window.removeEventListener(OPEN_READING_REMINDERS_EVENT, handleOpenReadingReminders)
       window.removeEventListener(TOGGLE_READING_ARTIFACTS_EVENT, handleToggleReadingArtifacts)
+      window.removeEventListener(TOGGLE_READING_REMINDERS_EVENT, handleToggleReadingReminders)
     }
   }, [databaseEnabled, panelView])
 
@@ -919,46 +929,52 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
         '--gm-ai-chat-meta-font-size': `calc(${assistantFontSize}px - 2px)`,
       } as CSSProperties}
     >
+      {fullscreenDragHandleProps && aiPanelOpen && panelView === 'chat' && messages.length > 0 && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 top-0 z-20 h-16 backdrop-blur-[6px]"
+          style={{
+            maskImage: 'linear-gradient(to bottom, black, transparent)',
+            WebkitMaskImage: 'linear-gradient(to bottom, black, transparent)',
+          }}
+        />
+      )}
       {/* Header */}
       <div
-        className={`flex items-center border-b border-gm-border-subtle bg-gm-surface relative z-10 ${
-          fullscreenDragHandleProps ? 'h-9 cursor-grab touch-none px-3 active:cursor-grabbing' : 'h-10 px-4'
+        className={`flex items-center ${
+          fullscreenDragHandleProps ? 'absolute inset-x-0 top-0 z-30 h-6 cursor-grab touch-none bg-transparent px-3 active:cursor-grabbing' : 'relative z-10 h-10 border-b border-gm-border-subtle bg-gm-surface px-4'
         }`}
         aria-label={fullscreenDragHandleProps ? '拖动 AI 助手' : undefined}
+        data-fullscreen-ai-drag-handle={fullscreenDragHandleProps ? '' : undefined}
         {...fullscreenDragHandleProps}
       >
-        <div className="flex items-center gap-2">
-          <span className="text-body font-bold text-gm-text">
-            {panelView === 'artifacts' ? '阅读成果' : panelView === 'reminders' ? '阅读提醒' : 'AI 助手'}
-          </span>
-          {streaming && (
-            <span className="text-caption text-gm-primary animate-pulse">生成中...</span>
+        <div className={`flex min-w-0 items-center gap-2 ${fullscreenDragHandleProps ? 'flex-1 justify-center' : ''}`}>
+          {fullscreenDragHandleProps ? (
+            <FullscreenPanelNavigation
+              productTourActive={productTourActive}
+              active={aiPanelOpen}
+              view={panelView}
+              databaseEnabled={databaseEnabled}
+              onSelect={(view) => {
+                if (view === panelView) return
+                if (view === 'chat') handleReturnToChat()
+                else setPanelView(view)
+              }}
+            />
+          ) : (
+            <span className="text-body font-bold text-gm-text">
+              {panelView === 'artifacts' ? '阅读成果' : panelView === 'reminders' ? '阅读提醒' : 'AI 助手'}
+            </span>
+          )}
+          {streaming && !fullscreenDragHandleProps && (
+            <span className="text-caption text-gm-primary animate-pulse">
+              <span>生成中...</span>
+            </span>
           )}
         </div>
-        <div className="flex-1" />
-        <div className="flex items-center" onPointerDown={(e) => e.stopPropagation()}>
-          <Button
-            type={panelView === 'artifacts' ? 'default' : 'text'}
-            size="small"
-            disabled={!databaseEnabled}
-            onClick={() => { if (databaseEnabled) setPanelView('artifacts') }}
-            title={databaseEnabled ? '阅读成果' : '阅读成果仅桌面版可用'}
-            icon={<BookOpen size={15} strokeWidth={1.7} aria-hidden="true" />}
-          />
-          <Button
-            type={panelView === 'reminders' ? 'default' : 'text'}
-            size="small"
-            disabled={!databaseEnabled}
-            onClick={() => { if (databaseEnabled) setPanelView('reminders') }}
-            title={databaseEnabled ? '阅读提醒（功能开发中）' : '阅读提醒仅桌面版可用'}
-            icon={
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M18 8a6 6 0 00-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
-                <path d="M13.73 21a2 2 0 01-3.46 0" />
-              </svg>
-            }
-          />
-          {panelView === 'chat' && messages.length > 0 ? (
+        {!fullscreenDragHandleProps && <div className="flex-1" />}
+        <div className={`flex items-center ${fullscreenDragHandleProps ? 'pointer-events-none ml-auto [&_button]:pointer-events-auto' : ''}`} onPointerDown={(e) => e.stopPropagation()}>
+          {!fullscreenDragHandleProps && panelView === 'chat' && messages.length > 0 && (
             <Button
               type="text"
               size="small"
@@ -974,20 +990,8 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
                 </svg>
               }
             />
-          ) : panelView !== 'chat' ? (
-            <Button
-              type="text"
-              size="small"
-              onClick={handleReturnToChat}
-              title="返回"
-              icon={
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M19 12H5M12 19l-7-7 7-7" />
-                </svg>
-              }
-            />
-          ) : null}
-          <Button
+          )}
+          {!fullscreenDragHandleProps && <Button
             type="text"
             size="small"
             onClick={toggleAiPanel}
@@ -997,15 +1001,15 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
                 <path d="M18 6L6 18M6 6l12 12" />
               </svg>
             }
-          />
+          />}
         </div>
       </div>
 
-      {panelView === 'chat' && <AgentTimeline timeline={timeline} />}
+      {panelView === 'chat' && !fullscreenDragHandleProps && <AgentTimeline timeline={timeline} />}
 
       {(artifactsVisited || panelView === 'artifacts') && (
-        <div hidden={panelView !== 'artifacts'} className={panelView === 'artifacts' ? 'flex-1 min-h-0 overflow-hidden min-w-0 bg-gm-surface' : 'hidden'}>
-          <ReadingArtifactCenter onOpenAiSource={handleOpenArtifactSource} focusKey={artifactFocusKey} onCloseFocus={() => setArtifactFocusKey(null)} />
+        <div hidden={panelView !== 'artifacts'} className={panelView === 'artifacts' ? `flex-1 min-h-0 overflow-hidden min-w-0 bg-gm-canvas ${fullscreenDragHandleProps ? 'pt-3' : ''}` : 'hidden'}>
+          <ReadingArtifactCenter active={aiPanelOpen && panelView === 'artifacts'} onOpenAiSource={handleOpenArtifactSource} focusKey={artifactFocusKey} onCloseFocus={() => setArtifactFocusKey(null)} />
         </div>
       )}
 
@@ -1181,6 +1185,8 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
       {/* Prompt Composer */}
       {panelView === 'chat' && (
         <PromptComposer
+          focusRequest={inputFocusRequest}
+          subtleBorder={Boolean(fullscreenDragHandleProps)}
           onSend={handleSend}
           streaming={streaming}
           onCancel={cancelStream}
@@ -1914,6 +1920,7 @@ export const ChatBubble = memo(function ChatBubble({
   const messageSources = buildReadingArtifactReferences(displayedSources.sources, originalSelections)
   const bubbleRef = useRef<HTMLDivElement>(null)
   const saveMenuRef = useRef<HTMLDivElement>(null)
+  const saveMenuId = useId()
   const saveControlsHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [saveMenuOpen, setSaveMenuOpen] = useState(false)
   const [saveControlsVisible, setSaveControlsVisible] = useState(false)
@@ -1954,28 +1961,6 @@ export const ChatBubble = memo(function ChatBubble({
   }, [clearSaveControlsHideTimer, saveMenuOpen])
 
   useEffect(() => clearSaveControlsHideTimer, [clearSaveControlsHideTimer])
-
-  useEffect(() => {
-    if (!saveMenuOpen) return
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!saveMenuRef.current?.contains(event.target as Node)) {
-        setSaveMenuOpen(false)
-        setSaveControlsVisible(false)
-      }
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setSaveMenuOpen(false)
-        setSaveControlsVisible(false)
-      }
-    }
-    document.addEventListener('pointerdown', closeOnOutsidePointer)
-    document.addEventListener('keydown', closeOnEscape)
-    return () => {
-      document.removeEventListener('pointerdown', closeOnOutsidePointer)
-      document.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [saveMenuOpen])
 
   const runSaveAction = (action: () => void) => {
     setSaveMenuOpen(false)
@@ -2064,6 +2049,7 @@ export const ChatBubble = memo(function ChatBubble({
               aria-label="保存回复"
               aria-expanded={saveMenuOpen}
               aria-haspopup="menu"
+              aria-controls={saveMenuOpen ? saveMenuId : undefined}
               className="!h-6 !w-6 !min-w-0 !rounded-full !p-0"
             >
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -2073,21 +2059,21 @@ export const ChatBubble = memo(function ChatBubble({
               </svg>
             </Button>
             {saveMenuOpen && (
-              <div role="menu" className="absolute bottom-full right-0 mb-1 min-w-32 rounded-lg border border-gm-border bg-gm-surface-elevated p-1 shadow-lg">
+              <ContextMenu id={saveMenuId} aria-label="保存回复格式" anchor={saveMenuRef.current?.querySelector('button')} placement="top-end" minWidth={144} onClose={() => { setSaveMenuOpen(false); setSaveControlsVisible(false) }}>
                 {onSaveAsMarkdown && (
-                  <Button role="menuitem" type="text" size="small" className="w-full justify-start hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover" onClick={() => runSaveAction(onSaveAsMarkdown)}>Markdown</Button>
+                  <ContextMenuItem onClick={() => runSaveAction(onSaveAsMarkdown)}>Markdown</ContextMenuItem>
                 )}
                 {onSaveAsArtifact && (
                   <>
-                    <Button role="menuitem" type="text" size="small" className="w-full justify-start hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover" onClick={() => runSaveAction(() => onSaveAsArtifact('summary'))}>摘要</Button>
-                    <Button role="menuitem" type="text" size="small" className="w-full justify-start hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover" onClick={() => runSaveAction(() => onSaveAsArtifact('question_set'))}>问题集</Button>
+                    <ContextMenuItem onClick={() => runSaveAction(() => onSaveAsArtifact('summary'))}>摘要</ContextMenuItem>
+                    <ContextMenuItem onClick={() => runSaveAction(() => onSaveAsArtifact('question_set'))}>问题集</ContextMenuItem>
                     {hasLocalSource && (
-                      <Button role="menuitem" type="text" size="small" className="w-full justify-start hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover" onClick={() => runSaveAction(() => onSaveAsArtifact('annotation'))}>AI 解读</Button>
+                      <ContextMenuItem onClick={() => runSaveAction(() => onSaveAsArtifact('annotation'))}>AI 解读</ContextMenuItem>
                     )}
-                    <Button role="menuitem" type="text" size="small" className="w-full justify-start hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover" onClick={() => runSaveAction(() => onSaveAsArtifact('note'))}>阅读笔记</Button>
+                    <ContextMenuItem onClick={() => runSaveAction(() => onSaveAsArtifact('note'))}>阅读笔记</ContextMenuItem>
                   </>
                 )}
-              </div>
+              </ContextMenu>
             )}
           </div>
         )}
@@ -2151,6 +2137,26 @@ function AiAvatar({
   streaming?: boolean
   visualId?: string | null
 }) {
+  const interactive = size === 'message' && animated && !streaming
+  const [reaction, setReaction] = useState<AssistantReaction | null>(null)
+  const reactionTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (!interactive) setReaction(null)
+    return () => {
+      if (reactionTimer.current !== null) clearTimeout(reactionTimer.current)
+    }
+  }, [interactive])
+
+  const playReaction = () => {
+    if (reactionTimer.current !== null) clearTimeout(reactionTimer.current)
+    setReaction((previous) => {
+      const choices = (['heart', 'happy', 'wink', 'star', 'shy'] as const).filter((value) => value !== previous)
+      return choices[Math.floor(Math.random() * choices.length)]
+    })
+    reactionTimer.current = setTimeout(() => setReaction(null), 1400)
+  }
+
   const className = size === 'empty'
     ? 'gm-ai-empty-icon-shell w-16 h-16 rounded-2xl flex items-center justify-center mb-4'
     : 'gm-ai-avatar w-9 h-9 rounded-xl flex items-center justify-center mr-2 flex-shrink-0 mt-1'
@@ -2158,14 +2164,26 @@ function AiAvatar({
   // 历史消息头像固定 idle 静态展示，最新回复使用 idle 动画，当前流式消息跟随实时状态。
   const forceIdle = size === 'message' && !streaming
   const spriteClassName = size === 'message' ? `${className} gm-ai-avatar--sprite` : className
+  const visual = (
+    <AssistantVisual
+      visualId={visualId}
+      size={size === 'empty' ? 56 : 44}
+      state={forceIdle ? 'idle' : undefined}
+      animated={animated}
+      reaction={interactive ? reaction : null}
+    />
+  )
+  if (interactive) {
+    return (
+      <button type="button" className={`${spriteClassName} gm-ai-avatar--interactive`}
+        aria-label="逗逗 AI 助手" onClick={playReaction}>
+        {visual}
+      </button>
+    )
+  }
   return (
     <div className={spriteClassName}>
-      <AssistantVisual
-        visualId={visualId}
-        size={size === 'empty' ? 56 : 44}
-        state={forceIdle ? 'idle' : undefined}
-        animated={animated}
-      />
+      {visual}
     </div>
   )
 }

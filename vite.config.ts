@@ -3,14 +3,27 @@ import react from '@vitejs/plugin-react'
 import path from 'path'
 import { addWebCsp } from './scripts/webCsp'
 
-export default defineConfig(({ mode, command }) => {
-  process.env.GUANMO_BUILD_MODE = mode
-  return ({
+export default defineConfig(({ mode, command }) => ({
   base: './',
   plugins: [
     react(),
     {
       name: 'guanmo-build-mode',
+      config(config) {
+        // Web shims replace these desktop modules; Tailwind must not scan them.
+        process.env.GUANMO_TAILWIND_EXCLUDES = JSON.stringify(mode === 'web'
+          ? [
+              ...Object.keys(config.resolve?.alias ?? {}).filter((alias) => alias.startsWith('@/'))
+                .map((alias) => `!./src/${alias.slice(2)}.{ts,tsx}`),
+              // The settings entry and desktop-only children are not direct @/ aliases.
+              '!./src/features/settings/{SettingsPage,ThemeManager,DiagnosticsSettings,DesktopApiKeyControl,UsageReceiptDialog,AdvancedTimeoutSettings}.tsx',
+              '!./src/components/reading-artifacts/**',
+              '!./src/components/update/**',
+              '!./src/components/legacy/**',
+              '!./src/App.tsx',
+            ]
+          : [])
+      },
       transformIndexHtml: {
         order: 'pre',
         handler(html) {
@@ -27,6 +40,24 @@ export default defineConfig(({ mode, command }) => {
         handler(html) {
           return mode === 'web' ? addWebCsp(html, command === 'serve') : html
         },
+      },
+    },
+    {
+      name: 'guanmo-web-css-optimize',
+      enforce: 'post',
+      apply: 'build',
+      async generateBundle(_options, bundle) {
+        if (mode !== 'web') return
+        // Optimize after extraction so rules from separate source files can merge.
+        const [{ default: postcss }, { default: cssnano }] = await Promise.all([
+          import('postcss'),
+          import('cssnano'),
+        ])
+        for (const asset of Object.values(bundle)) {
+          if (asset.type !== 'asset' || !asset.fileName.endsWith('.css') || typeof asset.source !== 'string') continue
+          const result = await postcss([cssnano({ preset: 'default' })]).process(asset.source, { from: undefined })
+          asset.source = result.css
+        }
       },
     },
   ],
@@ -81,6 +112,7 @@ export default defineConfig(({ mode, command }) => {
     },
   },
   build: {
+    cssCodeSplit: mode !== 'web',
     rollupOptions: {
       output: {
         manualChunks: mode === 'web'
@@ -94,5 +126,4 @@ export default defineConfig(({ mode, command }) => {
       },
     },
   },
-  })
-})
+}))

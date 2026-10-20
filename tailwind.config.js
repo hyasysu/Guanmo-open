@@ -3,15 +3,9 @@ export default {
   content: [
     './index.html',
     './src/**/*.{js,ts,jsx,tsx}',
+    ...JSON.parse(process.env.GUANMO_TAILWIND_EXCLUDES ?? '[]'),
     // DEV-only panels are absent from production JS and must not add utilities to its CSS.
     ...(process.env.NODE_ENV === 'production' ? ['!./src/components/devtools/**'] : []),
-    // These desktop pages are replaced by Web adapters in vite.config.ts.
-    ...(process.env.GUANMO_BUILD_MODE === 'web' ? [
-      '!./src/App.tsx',
-      '!./src/components/reading-artifacts/**',
-      '!./src/features/settings/{SettingsPage,KnowledgeBaseManager,UsageActivity,DiagnosticsSettings,DesktopApiKeyControl,ThemeManager}.tsx',
-      '!./src/components/legacy/**',
-    ] : []),
   ],
   theme: {
     extend: {

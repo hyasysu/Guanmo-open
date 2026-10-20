@@ -197,6 +197,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
   ))
   const fullscreenAiPositionRef = useRef(fullscreenAiPosition)
   const fullscreenAiSizeRef = useRef(fullscreenAiSize)
+  const fullscreenAiDragFrameRef = useRef<number | null>(null)
   const fullscreenAiDragRef = useRef<{
     pointerId: number
     startX: number
@@ -229,6 +230,30 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     latestPosition: FullscreenAiPosition
   } | null>(null)
   const fullscreenAiPanelRef = useRef<HTMLDivElement | null>(null)
+
+  const finishFullscreenAiDrag = useCallback(() => {
+    if (fullscreenAiDragFrameRef.current !== null) {
+      cancelAnimationFrame(fullscreenAiDragFrameRef.current)
+      fullscreenAiDragFrameRef.current = null
+    }
+    const drag = fullscreenAiDragRef.current
+    if (!drag) return
+    fullscreenAiDragRef.current = null
+    const position = drag.latestPosition
+    const panel = fullscreenAiPanelRef.current
+    if (panel) {
+      // 先落地坐标再清理临时位移，避免等 React 提交时回跳。
+      panel.style.left = `${position.x}px`
+      panel.style.top = `${position.y}px`
+      panel.style.translate = ''
+      panel.style.willChange = ''
+    }
+    document.body.style.userSelect = ''
+    setFullscreenAiPosition(position)
+    persistFullscreenAiPosition(position)
+  }, [persistFullscreenAiPosition])
+
+  useEffect(() => () => finishFullscreenAiDrag(), [isFullscreen, aiPanelOpen, finishFullscreenAiDrag])
 
   useEffect(() => {
     if (isFullscreen) {
@@ -364,11 +389,12 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     }
     const sidebar = tourSurface === 'sidebar'
     if (app.sidebarCollapsed === sidebar) app.toggleSidebar()
-    const ai = tourSurface === 'ai-chat' || tourSurface === 'artifacts'
+    const ai = tourSurface === 'ai-chat' || tourSurface === 'artifacts' || tourSurface === 'reminders'
     if (ai && !app.aiPanelOpen) app.toggleAiPanel()
     if (!ai && app.aiPanelOpen) app.closeAiPanel()
     if (tourSurface === 'ai-chat') requestOpenAiChat()
     if (tourSurface === 'artifacts') requestOpenReadingArtifacts()
+    if (tourSurface === 'reminders') requestOpenReadingReminders()
   }, [productTourOpen, tourSurface])
 
   useEffect(() => {
@@ -448,6 +474,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
   useEffect(() => {
     if (!isFullscreen) return
     const handleResize = () => {
+      finishFullscreenAiDrag()
       const { fullscreenAiSize: savedSize, fullscreenAiPosition: savedPosition } = useAppStore.getState()
       const size = clampFullscreenAiSize(
         savedSize?.width ?? fullscreenAiSizeRef.current.width,
@@ -465,9 +492,10 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     }
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
-  }, [isFullscreen])
+  }, [isFullscreen, finishFullscreenAiDrag])
 
   const handleFullscreenAiDragStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (fullscreenAiDragRef.current || fullscreenAiResizeRef.current) return
     e.preventDefault()
     e.currentTarget.setPointerCapture(e.pointerId)
     fullscreenAiDragRef.current = {
@@ -479,6 +507,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
       latestPosition: fullscreenAiPositionRef.current,
       dragged: false,
     }
+    if (fullscreenAiPanelRef.current) fullscreenAiPanelRef.current.style.willChange = 'translate'
     document.body.style.userSelect = 'none'
   }, [])
 
@@ -495,20 +524,27 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     )
     drag.latestPosition = position
     fullscreenAiPositionRef.current = position
-    setFullscreenAiPosition(position)
+    if (fullscreenAiDragFrameRef.current === null) {
+      fullscreenAiDragFrameRef.current = requestAnimationFrame(() => {
+        fullscreenAiDragFrameRef.current = null
+        const current = fullscreenAiDragRef.current
+        const panel = fullscreenAiPanelRef.current
+        if (!current || !panel) return
+        // 独立 translate 不覆盖小窗开关使用的 transform 动画。
+        panel.style.translate = `${current.latestPosition.x - current.originX}px ${current.latestPosition.y - current.originY}px`
+      })
+    }
   }, [])
 
   const handleFullscreenAiDragEnd = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const drag = fullscreenAiDragRef.current
-    if (drag?.pointerId === e.pointerId) {
-      fullscreenAiDragRef.current = null
-      document.body.style.userSelect = ''
-      persistFullscreenAiPosition(drag.latestPosition)
+    if (drag && drag.pointerId === e.pointerId) {
+      finishFullscreenAiDrag()
       if (e.currentTarget.hasPointerCapture(e.pointerId)) {
         e.currentTarget.releasePointerCapture(e.pointerId)
       }
     }
-  }, [persistFullscreenAiPosition])
+  }, [finishFullscreenAiDrag])
 
   const handleFullscreenAiResizeStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -688,7 +724,23 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
       }
       toggleSidebar()
     },
-    'CTRL+J': () => toggleAiPanel(),
+    'CTRL+J': () => {
+      if (useAppStore.getState().aiPanelOpen && getAiPanelView() === 'chat') {
+        useAppStore.getState().closeAiPanel()
+        return
+      }
+      if (!useAppStore.getState().aiPanelOpen) toggleAiPanel()
+      requestOpenAiChat(true)
+    },
+    'CTRL+SHIFT+J': () => {
+      if (!getRuntimeCapabilities().database) return
+      if (useAppStore.getState().aiPanelOpen && getAiPanelView() === 'artifacts') {
+        useAppStore.getState().closeAiPanel()
+        return
+      }
+      if (!useAppStore.getState().aiPanelOpen) toggleAiPanel()
+      requestOpenReadingArtifacts()
+    },
     'CTRL+N': () => handleNewFile(),
     'CTRL+O': () => void handleOpenFile(),
     'CTRL+S': () => handleSaveFile(),
@@ -786,7 +838,8 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
           data-fullscreen-ai-panel="true"
           aria-hidden={!aiPanelOpen}
           ref={fullscreenAiPanelRef}
-          className={`gm-layout-ai-panel gm-layout-ai-panel--fullscreen fixed z-[45] flex flex-col overflow-hidden rounded-2xl border border-gm-border bg-gm-surface/92 shadow-lg backdrop-blur-xl ${aiPanelOpen ? '' : 'gm-layout-ai-panel--closed'}`}
+          onLostPointerCapture={handleFullscreenAiDragEnd}
+          className={`gm-layout-ai-panel gm-layout-ai-panel--fullscreen fixed z-[45] flex flex-col overflow-hidden rounded-2xl border border-gm-border bg-gm-surface shadow-lg ${aiPanelOpen ? '' : 'gm-layout-ai-panel--closed'}`}
           style={{
             left: fullscreenAiPosition.x,
             top: fullscreenAiPosition.y,
@@ -799,6 +852,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
             <>
               <div ref={fullscreenAiContentRef} className="min-h-0 min-w-0 flex-1">
                 <Suspense fallback={<AiPanelFallback />}><AiPanel
+                  productTourActive={productTourOpen}
                   fullscreenDragHandleProps={{
                     onPointerDown: handleFullscreenAiDragStart,
                     onPointerMove: handleFullscreenAiDragMove,
@@ -809,6 +863,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
               </div>
               <div
                 aria-label="调整 AI 助手窗口大小"
+                data-fullscreen-ai-resize-handle=""
                 className="absolute bottom-0 right-0 z-30 flex h-5 w-5 cursor-grab items-center justify-center text-gm-text-secondary touch-none hover:text-gm-primary active:cursor-grabbing"
                 onPointerDown={handleFullscreenAiResizeStart}
                 onPointerMove={handleFullscreenAiResizeMove}

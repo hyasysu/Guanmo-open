@@ -1857,7 +1857,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     if (!rootRect) return
     const bcr = target.getBoundingClientRect()
     const next = {
-      top: bcr.top - rootRect.top,
+      top: getInlineEditTop(target, rootRef.current!, activeEdit.block),
       left: bcr.left - rootRect.left,
       width: bcr.width,
     }
@@ -2028,7 +2028,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       if (rootRect) {
         const bcr = blockWrapper.getBoundingClientRect()
         setOverlayRect({
-          top: bcr.top - rootRect.top,
+          top: getInlineEditTop(blockWrapper, rootRef.current!, block),
           left: bcr.left - rootRect.left,
           width: bcr.width,
         })
@@ -2150,6 +2150,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       if (offset === null) return
       // 命中标注文本：接管选区（阻止原生 DOM Selection 启动）
       event.preventDefault()
+      // 接管拖选后同步接管键盘焦点，避免 Ctrl+C 仍发送给此前的编辑器或输入框。
+      root.focus({ preventScroll: true })
       const current = selectionRangeRef.current
       const anchor = event.shiftKey && current
         ? (selectionAnchorRef.current ?? current.from)
@@ -2725,6 +2727,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   return (
     <div
       ref={rootRef}
+      tabIndex={-1}
       data-md-render-mode={requiresWholeDocumentRender ? 'whole' : 'virtual'}
       className="prose gm-markdown-preview max-w-none min-w-0 text-gm-text"
       style={{ fontSize: `${fontSize}px`, lineHeight, fontFamily, position: 'relative' }}
@@ -2876,7 +2879,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
           className="gm-inline-edit-overlay"
           style={{
             position: 'absolute',
-            top: overlayRect.top - 12,
+            top: overlayRect.top,
             left: overlayRect.left,
             width: overlayRect.width,
             zIndex: 10,
@@ -3021,6 +3024,13 @@ function getMountedPreviewLineForTop(
     return Math.round(block.startLine + (block.endLine - block.startLine) * progress)
   }
   return undefined
+}
+
+function getInlineEditTop(element: HTMLElement, root: HTMLElement, block: PreviewBlock): number {
+  const textTop = getMountedSourceRangeTop(element, root, block.startOffset, block.endOffset)
+  if (textTop !== undefined) return textTop - root.scrollTop
+  const contentRect = (element.firstElementChild ?? element).getBoundingClientRect()
+  return contentRect.top - root.getBoundingClientRect().top
 }
 
 function getMountedSourceRangeTop(

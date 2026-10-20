@@ -54,6 +54,38 @@
 @tailwind components;
 @tailwind utilities;
 
+.gm-menu-option {
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.gm-menu-option[data-selected='true'] {
+  background-color: var(--gm-primary-subtle);
+  color: var(--gm-primary);
+  font-weight: 700;
+}
+
+.gm-menu-option:not(:disabled):hover,
+.gm-menu-option:focus-visible {
+  background-color: var(--gm-surface-hover) !important;
+  color: var(--gm-text) !important;
+}
+
+.gm-menu-option:not(:disabled):active {
+  background-color: var(--gm-primary-subtle) !important;
+}
+
+.gm-menu-option[data-danger='true'],
+.gm-menu-option[data-danger='true']:hover,
+.gm-menu-option[data-danger='true']:focus-visible {
+  color: var(--gm-error) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gm-menu-option {
+    transition: none;
+  }
+}
+
 /* === Global Reset & Base Styles === */
 *,
 *::before,
@@ -864,23 +896,23 @@ html[data-fullscreen-transition-phase='focusing'] #root {
   fill: #1B3B37;
 }
 
-[data-theme='dark'] .gm-manual-tool-toggle {
+[data-theme='dark'] .gm-manual-tool-toggle:not(.gm-manual-tool-toggle--icon) {
   color: #A6C9C4 !important;
   background: rgba(88, 184, 174, 0.12) !important;
   border-color: rgba(132, 190, 184, 0.16) !important;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14) !important;
 }
 
-[data-theme='dark'] .gm-manual-tool-toggle:hover:not(:disabled) {
+[data-theme='dark'] .gm-manual-tool-toggle:not(.gm-manual-tool-toggle--icon):hover:not(:disabled) {
   color: #C2DED9 !important;
   background: rgba(88, 184, 174, 0.18) !important;
   border-color: rgba(132, 190, 184, 0.22) !important;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16) !important;
 }
 
-[data-theme='dark'] .gm-manual-tool-toggle--active,
-[data-theme='dark'] .gm-manual-tool-toggle--active:hover:not(:disabled),
-[data-theme='dark'] .gm-manual-tool-toggle--active:active:not(:disabled) {
+[data-theme='dark'] .gm-manual-tool-toggle--active:not(.gm-manual-tool-toggle--icon),
+[data-theme='dark'] .gm-manual-tool-toggle--active:not(.gm-manual-tool-toggle--icon):hover:not(:disabled),
+[data-theme='dark'] .gm-manual-tool-toggle--active:not(.gm-manual-tool-toggle--icon):active:not(:disabled) {
   color: #F8FFFF !important;
   background: #3F7771 !important;
   border-color: #3F7771 !important;
@@ -1745,6 +1777,11 @@ html[data-gm-runtime='web'] .gm-settings-tabs--web > div:nth-child(2) {
   color: var(--gm-text);
 }
 
+/* 正文容器接管复制焦点时不绘制整篇外框，内部控件仍保留焦点提示。 */
+.gm-markdown-preview:focus-visible {
+  outline: none;
+}
+
 .gm-fullscreen-spacing-card {
   color: var(--gm-text);
   background: var(--gm-fullscreen-control-bg);
@@ -1787,16 +1824,23 @@ html[data-gm-runtime='web'] .gm-settings-tabs--web > div:nth-child(2) {
   visibility: hidden;
 }
 
+/* 分屏外框等宽，避免预览外层 padding 参与 flex 剩余空间分配后把中线挤偏。 */
+.gm-fullscreen-content-split-left,
+.gm-fullscreen-content-split-right {
+  flex: 0 0 50%;
+}
+
 /* 分屏模式：内侧边距固定 15px，外侧保持全量 */
 .gm-fullscreen-content-split-left.gm-fullscreen-editor-content .cm-content,
 .gm-fullscreen-content-split-left.gm-fullscreen-preview-content {
   padding-right: 15px;
 }
 
-/* 分屏左栏为编辑器时，行号槽在布局流中占据宽度（由 CodeMirrorEditor 实测为 --gm-cm-gutter-width），
+/* 编辑正文的百分比基于半屏 scroller，需翻倍以匹配预览基于整个分屏容器的外侧留白。
+   行号槽在布局流中占据宽度（由 CodeMirrorEditor 实测为 --gm-cm-gutter-width），
    外侧留白需扣除行号槽宽度，使编辑栏文本起点与预览栏文本终点到屏幕边缘的距离一致、两栏文本列等宽 */
 .gm-fullscreen-content-split-left.gm-fullscreen-editor-content .cm-content {
-  padding-left: max(15px, calc(var(--gm-fullscreen-content-padding-percent, 7%) - var(--gm-cm-gutter-width, 0px)));
+  padding-left: max(15px, calc(var(--gm-fullscreen-content-padding-percent, 7%) * 2 - var(--gm-cm-gutter-width, 0px)));
 }
 
 .gm-fullscreen-content-split-right.gm-fullscreen-editor-content .cm-content,

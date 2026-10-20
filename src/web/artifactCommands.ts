@@ -1,9 +1,9 @@
 import { UnsupportedCapabilityError } from './externalHttp'
+export { buildReadingArtifactReferences } from '@/services/ai/sourceReferences'
 import type {
   LoadReadingArtifactsPageOptions,
   ReadingArtifactsPage,
 } from '@/services/database/readingArtifacts'
-export { buildReadingArtifactReferences } from '@/services/database/readingArtifacts'
 
 export type ReadingArtifactType = 'summary' | 'question_set' | 'annotation' | 'note'
 export type SourceAnchorStatus = 'valid' | 'changed' | 'missing'

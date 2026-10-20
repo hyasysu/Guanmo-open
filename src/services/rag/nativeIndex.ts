@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { isTauri } from '@/hooks/useTauri'
 import { UnsupportedCapabilityError } from '@/services/externalHttp'
+import { useToastStore } from '@/stores/toastStore'
 import type { Chunk, NeighborContextChunk, SearchResult } from './types'
 
 export type RagIndexStatus = 'idle' | 'initializing' | 'ready' | 'failed'
@@ -158,16 +159,34 @@ export async function prepareNativeRagIndex(
   if (state.status !== 'ready') {
     onProgress?.('initializing')
     try {
-      await initializeNativeRagIndex(signal)
+      const initialized = await initializeNativeRagIndex(signal)
+      if (initialized.status !== 'ready') {
+        notifyInitializationMemoryRejection(initialized.error)
+        onProgress?.('fallback')
+        return 'fallback'
+      }
       onProgress?.('ready')
       return 'ready'
     } catch (error) {
       if (signal?.aborted) throw error
+      notifyInitializationMemoryRejection(error)
       onProgress?.('fallback')
       return 'fallback'
     }
   }
   return 'already_ready'
+}
+
+function notifyInitializationMemoryRejection(error: unknown): void {
+  const reason = error instanceof Error ? error.message : error
+  if (reason !== 'RAG index memory budget unavailable' && reason !== 'RAG index memory pressure') return
+  useToastStore.getState().addToast({
+    id: 'rag-index-memory-admission',
+    type: 'warning',
+    duration: 8000,
+    title: '知识库初始化暂缓',
+    message: '系统内存余量不足，暂时无法初始化知识库索引，本次将使用关键词检索。关闭部分程序后可重试。',
+  })
 }
 
 export async function refreshNativeRagIndexDocument(path: string): Promise<void> {

@@ -9,7 +9,7 @@
  * - 支持任务提升优先级
  */
 
-type TaskFn = () => Promise<void>
+type TaskFn = () => Promise<void | 'skipped'>
 
 interface ScheduledTask {
   id: string
@@ -20,6 +20,7 @@ interface ScheduledTask {
   startedAt?: number
   completedAt?: number
   error?: unknown
+  transient?: boolean
 }
 
 class IdleScheduler {
@@ -27,6 +28,27 @@ class IdleScheduler {
   private isRunning = false
   private startedAt = 0
   private completionCallbacks = new Map<string, () => void>()
+  private nextTransientId = 0
+
+  /** Optional work shares this queue, but does not retain completed closures. */
+  enqueueOptional(fn: TaskFn, priority: number, label: string): () => void {
+    let cancelled = false
+    const task: ScheduledTask = {
+      id: `optional-${++this.nextTransientId}`,
+      fn: async () => cancelled ? 'skipped' : fn(),
+      priority,
+      label,
+      status: 'pending',
+      transient: true,
+    }
+    this.queue.push(task)
+    this.queue.sort((a, b) => a.priority - b.priority)
+    if (!this.isRunning) void this.start()
+    return () => {
+      cancelled = true
+      if (task.status === 'pending') this.queue = this.queue.filter((entry) => entry !== task)
+    }
+  }
 
   /**
    * 添加任务到队列
@@ -133,10 +155,10 @@ class IdleScheduler {
       task.startedAt = performance.now()
 
       try {
-        await this.executeWithYield(task.fn)
+        const result = await this.executeWithYield(task.fn)
         task.status = 'completed'
         task.completedAt = performance.now()
-        console.log(`[IdleScheduler] ✓ ${task.label}: ${Math.round(task.completedAt - task.startedAt!)}ms`)
+        console.log(`[IdleScheduler] ${result === 'skipped' ? '跳过' : '✓'} ${task.label}: ${Math.round(task.completedAt - task.startedAt!)}ms`)
       } catch (error) {
         task.status = 'failed'
         task.error = error
@@ -151,6 +173,8 @@ class IdleScheduler {
         this.completionCallbacks.delete(task.id)
       }
 
+      if (task.transient) this.queue = this.queue.filter((entry) => entry !== task)
+
       // 任务完成后让出主线程，避免连续任务堆积
       await this.yieldToMain()
     }
@@ -162,13 +186,14 @@ class IdleScheduler {
   /**
    * 执行任务并主动让出主线程
    */
-  private async executeWithYield(fn: TaskFn): Promise<void> {
+  private async executeWithYield(fn: TaskFn): Promise<void | 'skipped'> {
     // 等待浏览器空闲或超时（缩短超时时间，更频繁地让出主线程）
     await this.waitForIdle(200)
     // 执行任务
-    await fn()
+    const result = await fn()
     // 执行后再次让出主线程
     await this.yieldToMain()
+    return result
   }
 
   /**

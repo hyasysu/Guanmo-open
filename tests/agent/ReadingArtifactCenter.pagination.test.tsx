@@ -22,38 +22,36 @@ const originalDelete = useReadingArtifactsStore.getState().deleteArtifact
 const originalRemove = useReadingMarksStore.getState().remove
 let artifacts: ReadingArtifact[]
 let marks: ReadingMark[]
-let observers: { callback: IntersectionObserverCallback; disconnected: boolean }[]
+let observers: { callback: IntersectionObserverCallback; target?: Element; disconnected: boolean }[]
 
-async function loadNextPage(count: number) {
-  await waitFor(() => expect(observers.some((observer) => !observer.disconnected)).toBe(true))
-  act(() => {
-    for (const observer of observers.filter((entry) => !entry.disconnected)) {
-      observer.callback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver)
-    }
-  })
-  await waitFor(() => expect(screen.getAllByRole('article')).toHaveLength(count))
+function prefetchNextPage() {
+  const observer = [...observers].reverse().find((entry) => !entry.disconnected && entry.target && !entry.target.classList.contains('gm-artifact-card-pending'))
+  expect(observer).toBeDefined()
+  act(() => observer!.callback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver))
 }
 
 describe('ReadingArtifactCenter recent pagination refresh', () => {
   beforeEach(() => {
     observers = []
+    // Keep every loaded card in view so these fixtures isolate pagination refresh.
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(10_000)
     vi.stubGlobal('IntersectionObserver', class {
       entry: typeof observers[number]
       constructor(callback: IntersectionObserverCallback) {
         this.entry = { callback, disconnected: false }
         observers.push(this.entry)
       }
-      observe() {}
+      observe(target: Element) { this.entry.target = target }
       disconnect() { this.entry.disconnected = true }
     })
-    artifacts = Array.from({ length: 19 }, (_, index) => ({
+    artifacts = Array.from({ length: 54 }, (_, index) => ({
       id: `artifact-${index}`, type: 'summary', title: `匿名成果 ${index}`,
       content: '匿名内容', source: null, status: 'active',
       createdAt: 1000 - index, updatedAt: 1000 - index,
     }))
     marks = [{
       id: 'mark-1', documentId: 'path:c:/anonymous/a.md', documentPath: 'C:/anonymous/A.md',
-      type: 'annotation', color: 'yellow', note: '追加的人工批注', createdAt: 992.5, updatedAt: 992.5,
+      type: 'annotation', color: 'yellow', note: '追加的人工批注', createdAt: 995.5, updatedAt: 995.5,
       anchor: {
         range: { startBlockId: 'pb-0', startOffset: 0, endBlockId: 'pb-0', endOffset: 4 },
         startOffset: 0, endOffset: 4, quote: '匿名原文', contextBefore: '', contextAfter: '',
@@ -97,30 +95,32 @@ describe('ReadingArtifactCenter recent pagination refresh', () => {
   it.each(['ai', 'mark'] as const)('retains loaded cards and scroll after deleting an appended %s card', async (kind) => {
     render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
     await waitFor(() => expect(screen.getAllByRole('article')).toHaveLength(5))
-    expect(mocks.loadPage).toHaveBeenCalledWith(expect.objectContaining({ limit: 5, offset: 0 }))
-    for (const count of [10, 15]) {
-      await loadNextPage(count)
+    for (let count = 10; count <= 50; count += 5) {
+      prefetchNextPage()
+      await waitFor(() => expect(screen.getAllByRole('article')).toHaveLength(count))
     }
     const scroller = screen.getByRole('region', { name: '阅读成果内容' })
     scroller.scrollTop = 1800
-    const retainedCard = screen.getByText('匿名成果 12').closest('article')
-    const target = screen.getByText(kind === 'ai' ? '匿名成果 8' : '追加的人工批注').closest('article')!
+    const retainedCard = screen.getByText('匿名成果 45').closest('article')
+    const target = screen.getByText(kind === 'ai' ? '匿名成果 10' : '追加的人工批注').closest('article')!
     fireEvent.click(within(target).getByRole('button', { name: /^成果操作 / }))
-    fireEvent.click(screen.getByRole('button', { name: '删除成果' }))
-    await waitFor(() => expect(screen.queryByText(kind === 'ai' ? '匿名成果 8' : '追加的人工批注')).not.toBeInTheDocument())
-    expect(screen.getAllByRole('article')).toHaveLength(15)
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除成果' }))
+    await waitFor(() => expect(screen.queryByText(kind === 'ai' ? '匿名成果 10' : '追加的人工批注')).not.toBeInTheDocument())
+    expect(screen.getAllByRole('article')).toHaveLength(50)
     expect(retainedCard).toBeInTheDocument()
     expect(scroller.scrollTop).toBe(1800)
     expect(mocks.loadPage.mock.calls.every(([options]) => options.limit <= 40)).toBe(true)
-    await loadNextPage(19)
-    expect(new Set(screen.getAllByRole('article').map((card) => card.textContent)).size).toBe(19)
+    prefetchNextPage()
+    await waitFor(() => expect(screen.getAllByRole('article')).toHaveLength(54))
+    expect(new Set(screen.getAllByRole('article').map((card) => card.textContent)).size).toBe(54)
     expect(screen.getByText('没有更多了')).toBeInTheDocument()
   })
 
   it('starts a new search at the first page after a data refresh', async () => {
     render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
     await waitFor(() => expect(screen.getAllByRole('article')).toHaveLength(5))
-    await loadNextPage(10)
+    prefetchNextPage()
+    await waitFor(() => expect(screen.getAllByRole('article')).toHaveLength(10))
     act(() => useReadingArtifactsStore.setState({ dataRevision: 1 }))
     await waitFor(() => expect(mocks.loadPage.mock.calls.filter(([options]) => options.offset === 0)).toHaveLength(2))
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: '匿名成果' } })
@@ -132,7 +132,8 @@ describe('ReadingArtifactCenter recent pagination refresh', () => {
   it('discards a delayed refresh page after switching views', async () => {
     render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
     await waitFor(() => expect(screen.getAllByRole('article')).toHaveLength(5))
-    await loadNextPage(10)
+    prefetchNextPage()
+    await waitFor(() => expect(screen.getAllByRole('article')).toHaveLength(10))
     const loadPage = mocks.loadPage.getMockImplementation()!
     let resume!: () => void
     mocks.loadPage.mockImplementation(async (options) => {
@@ -141,7 +142,6 @@ describe('ReadingArtifactCenter recent pagination refresh', () => {
       return page
     })
     act(() => useReadingArtifactsStore.setState({ dataRevision: 1 }))
-    await waitFor(() => expect(mocks.loadPage).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 5, limit: 5 })))
     await waitFor(() => expect(resume).toBeDefined())
     fireEvent.click(screen.getByRole('tab', { name: '按文档' }))
     await act(async () => { resume() })

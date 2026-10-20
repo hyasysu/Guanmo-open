@@ -3,6 +3,7 @@ export const TOGGLE_AI_CHAT_EVENT = 'guanmo:toggle-ai-chat'
 export const OPEN_READING_ARTIFACTS_EVENT = 'guanmo:open-reading-artifacts'
 export const TOGGLE_READING_ARTIFACTS_EVENT = 'guanmo:toggle-reading-artifacts'
 export const OPEN_READING_REMINDERS_EVENT = 'guanmo:open-reading-reminders'
+export const TOGGLE_READING_REMINDERS_EVENT = 'guanmo:toggle-reading-reminders'
 
 export type AiPanelView = 'chat' | 'artifacts' | 'reminders'
 let currentPanelView: AiPanelView = 'chat'
@@ -14,6 +15,7 @@ export type AiPanelNavigation = {
   mode: 'open' | 'toggle'
   view: AiPanelView
   artifactKey?: string
+  focusInput?: boolean
 }
 
 let pendingPanelNavigation: AiPanelNavigation | null = null
@@ -35,8 +37,8 @@ export function consumePendingPanelNavigation() {
   return navigation
 }
 
-export function requestOpenAiChat() {
-  requestPanelNavigation(OPEN_AI_CHAT_EVENT, { mode: 'open', view: 'chat' })
+export function requestOpenAiChat(focusInput = false) {
+  requestPanelNavigation(OPEN_AI_CHAT_EVENT, { mode: 'open', view: 'chat', focusInput })
 }
 
 export function requestToggleAiChat() {
@@ -49,6 +51,10 @@ export function requestOpenReadingArtifacts() {
 
 export function requestOpenReadingReminders() {
   requestPanelNavigation(OPEN_READING_REMINDERS_EVENT, { mode: 'open', view: 'reminders' })
+}
+
+export function requestToggleReadingReminders() {
+  requestPanelNavigation(TOGGLE_READING_REMINDERS_EVENT, { mode: 'toggle', view: 'reminders' })
 }
 
 export function requestOpenReadingArtifact(key: string) {
