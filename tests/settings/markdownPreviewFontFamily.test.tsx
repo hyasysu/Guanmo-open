@@ -1,11 +1,22 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { render } from '@testing-library/react'
+import { parse } from 'postcss'
 import { afterEach, describe, expect, it } from 'vitest'
 import { MarkdownPreview } from '@/components/editor/MarkdownPreview'
 
 const CUSTOM_PREVIEW_FONT = "'Custom Preview Font', serif"
-const globalStyles = readFileSync(resolve(process.cwd(), 'src/styles/global.css'), 'utf8')
+const globalStyles = parse(readFileSync(resolve(process.cwd(), 'src/styles/global.css'), 'utf8'))
+
+function githubFontDeclarations(element: Element): string[] {
+  const values: string[] = []
+  globalStyles.walkRules((rule) => {
+    if (rule.selector.includes("[data-light-palette='github-dmmono']") && element.matches(rule.selector)) {
+      rule.walkDecls('font-family', ({ value }) => { values.push(value) })
+    }
+  })
+  return values
+}
 
 describe('Markdown 预览字体', () => {
   afterEach(() => {
@@ -21,14 +32,11 @@ describe('Markdown 预览字体', () => {
       <MarkdownPreview content={'# 标题\n\n正文中的 `代码`'} fontFamily={CUSTOM_PREVIEW_FONT} />,
     )
     const preview = container.querySelector('.gm-markdown-preview') as HTMLElement
-    const githubPreviewStyles = globalStyles.slice(
-      globalStyles.indexOf(":root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview {"),
-      globalStyles.indexOf('.gm-code-block {'),
-    )
+    const inlineCode = preview.querySelector('p code')!
 
     expect(preview.style.fontFamily).toContain('Custom Preview Font')
-    expect(githubPreviewStyles).toMatch(/\.gm-markdown-preview \{[\s\S]*?font-family: inherit;/)
-    expect(githubPreviewStyles).toMatch(/\.gm-markdown-preview p code \{[\s\S]*?font-family: inherit;/)
-    expect(githubPreviewStyles).not.toContain('DMMono Nerd Font')
+    expect(inlineCode).toBeInTheDocument()
+    expect(githubFontDeclarations(preview)).toEqual(['inherit'])
+    expect(githubFontDeclarations(inlineCode)).toEqual(['inherit'])
   })
 })
