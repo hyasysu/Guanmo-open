@@ -625,15 +625,101 @@ export interface Memory {
   updatedAt: number
 }
 
-export async function persistMemory(memory: Memory): Promise<void> {
-  if (!isDatabaseReady()) return
+export interface MemorySourceSnapshot {
+  id: string
+  sessionId: string
+  role: 'user' | 'assistant'
+  parentId: string | null
+  content: string
+  metadata: string | null
+  createdAt: number
+}
+
+export interface MemorySourceGuard {
+  id: string
+  content: string
+  snapshots?: readonly MemorySourceSnapshot[]
+  lease?: { key: string; value: string }
+}
+
+// Snapshots are bound only to this statement, never stored as another copy of the conversation.
+function encodeSourceSnapshots(source?: MemorySourceGuard): string | null {
+  if (source?.snapshots === undefined) return null
+  const snapshots = source.snapshots
+  if (snapshots.length === 0 || snapshots.length > 12 || new Set(snapshots.map(item => item.id)).size !== snapshots.length
+    || !snapshots.some(item => item.id === source.id && item.role === 'user' && item.content === source.content)
+    || snapshots.some(item => typeof item.id !== 'string' || !item.id || item.id.length > 300
+      || typeof item.sessionId !== 'string' || !item.sessionId || item.sessionId.length > 300 || item.sessionId !== snapshots[0].sessionId
+      || !['user', 'assistant'].includes(item.role) || typeof item.content !== 'string'
+      || !Number.isSafeInteger(item.createdAt) || item.createdAt <= 0
+      || (item.parentId !== null && typeof item.parentId !== 'string')
+      || (item.metadata !== null && typeof item.metadata !== 'string')
+      || (item.role === 'assistant' && !snapshots.some(parent => parent.id === item.parentId && parent.role === 'user')))) {
+    throw new Error('invalid_memory_source_snapshots')
+  }
+  return JSON.stringify(snapshots)
+}
+
+function sourceSnapshotsCondition(parameter: string): string {
+  return `(${parameter} IS NULL OR NOT EXISTS (SELECT 1 FROM json_each(${parameter}) snapshot
+    WHERE NOT EXISTS (SELECT 1 FROM chat_messages message
+      WHERE message.id = json_extract(snapshot.value, '$.id')
+        AND message.session_id = json_extract(snapshot.value, '$.sessionId')
+        AND message.role = json_extract(snapshot.value, '$.role')
+        AND message.parent_id IS json_extract(snapshot.value, '$.parentId')
+        AND message.content = json_extract(snapshot.value, '$.content')
+        AND message.metadata IS json_extract(snapshot.value, '$.metadata')
+        AND message.created_at = json_extract(snapshot.value, '$.createdAt'))))`
+}
+
+function sourceLeaseParameters(source?: MemorySourceGuard): [string | null, string | null] {
+  if (!source?.lease) return [null, null]
+  const { key, value } = source.lease
+  try {
+    const lease: unknown = JSON.parse(value)
+    if (!/^memory-extraction:v2:window:[a-f0-9]{64}$/.test(key) || !source.snapshots?.length
+      || !lease || typeof lease !== 'object' || Array.isArray(lease)) throw new Error()
+    const item = lease as Record<string, unknown>
+    if (item.version !== 2 || item.status !== 'running' || typeof item.owner !== 'string' || !item.owner
+      || typeof item.windowId !== 'string' || !item.windowId.startsWith(key + ':')
+      || !Number.isSafeInteger(item.leaseUntil) || !Array.isArray(item.sourceIds) || !item.sourceIds.includes(source.id)
+      || item.sourceIds.length < 1 || item.sourceIds.length > 4 || !Array.isArray(item.receiptValues)
+      || item.receiptValues.length !== item.sourceIds.length || item.receiptValues.some(receipt => typeof receipt !== 'string')
+      || !Array.isArray(item.prefixIds) || item.prefixIds.length > 2
+      || (item.prefixIds.length > 0 && (!Array.isArray(item.prefixReceiptValues) || item.prefixReceiptValues.length !== item.prefixIds.length))
+      || (Array.isArray(item.prefixReceiptValues) && item.prefixReceiptValues.some(receipt => typeof receipt !== 'string'))
+      || source.snapshots.some(snapshot => snapshot.sessionId !== item.sessionId)) throw new Error()
+    return [key, value]
+  } catch { throw new Error('invalid_memory_source_lease') }
+}
+
+function sourceLeaseCondition(key: string, value: string): string {
+  return `(${key} IS NULL OR EXISTS (SELECT 1 FROM settings lease_row WHERE lease_row.key = ${key} AND lease_row.value = ${value}
+    AND CASE WHEN json_valid(lease_row.value) THEN json_extract(lease_row.value, '$.status') = 'running'
+      AND json_extract(lease_row.value, '$.leaseUntil') > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+      AND NOT EXISTS (SELECT 1 FROM json_each(lease_row.value, '$.sourceIds') entry
+        WHERE NOT EXISTS (SELECT 1 FROM settings receipt WHERE receipt.key = 'memory-extraction:v2:intake:' || entry.value
+          AND receipt.value = json_extract(lease_row.value, '$.receiptValues[' || entry.key || ']')))
+      AND NOT EXISTS (SELECT 1 FROM json_each(lease_row.value, '$.prefixIds') entry
+        WHERE NOT EXISTS (SELECT 1 FROM settings receipt WHERE receipt.key = 'memory-extraction:v2:intake:' || entry.value
+          AND receipt.value = json_extract(lease_row.value, '$.prefixReceiptValues[' || entry.key || ']'))) ELSE 0 END))`
+}
+
+export async function persistMemory(memory: Memory, insertOnly = false, source?: MemorySourceGuard): Promise<boolean> {
+  if (!isDatabaseReady()) return false
   const db = getDatabase()
-  await db.execute(
-    `INSERT OR REPLACE INTO memories (
+  const result = await db.execute(
+    `INSERT OR ${insertOnly ? 'IGNORE' : 'REPLACE'} INTO memories (
        id, content, category, source, locked, status, scope_type, scope_key,
        subject, fact_key, fact_value, confidence, evidence, supersedes_id,
        embedding, embedding_model, content_hash, created_at, updated_at
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+     ) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+       WHERE ($20 IS NULL OR EXISTS (SELECT 1 FROM chat_messages WHERE id = $20 AND role = 'user' AND content = $21))
+       AND ${sourceSnapshotsCondition('$23')}
+       AND ${sourceLeaseCondition('$24', '$25')}
+       AND ($22 = 0 OR NOT EXISTS (SELECT 1 FROM memories existing WHERE existing.status = 'active'
+         AND existing.category = $3 AND COALESCE(existing.scope_type, 'global') = $7 AND COALESCE(existing.scope_key, '') = COALESCE($8, '')
+         AND lower(trim(existing.subject)) = lower(trim($9)) AND lower(trim(existing.fact_key)) = lower(trim($10)) AND existing.id <> $1))`,
     [
       memory.id,
       memory.content,
@@ -654,8 +740,72 @@ export async function persistMemory(memory: Memory): Promise<void> {
       memory.contentHash || null,
       memory.createdAt,
       memory.updatedAt,
+      source?.id || null,
+      source?.content || null,
+      memory.status === 'active' && memory.source === 'auto_extracted' ? 1 : 0,
+      encodeSourceSnapshots(source),
+      ...sourceLeaseParameters(source),
     ]
   )
+  return result.rowsAffected === 1
+}
+
+/** Optimistic single-row update: background work cannot overwrite manual edits or recreate a deleted row. */
+export async function updateMemoryIfUnchanged(memory: Memory, expected: Memory, source?: MemorySourceGuard): Promise<boolean> {
+  if (!isDatabaseReady()) return false
+  const result = await getDatabase().execute(
+    `UPDATE memories SET content = $1, subject = $2, fact_key = $3, fact_value = $4,
+       confidence = $5, evidence = $6, supersedes_id = $7, embedding = $8,
+       embedding_model = $9, content_hash = $10, updated_at = $11, status = $21
+     WHERE id = $12 AND content = $13 AND status = $14 AND source = $15
+       AND locked = 0 AND CASE WHEN updated_at > 0 AND updated_at < 1000000000000 THEN updated_at * 1000 ELSE updated_at END = $16
+       AND COALESCE(scope_type, 'global') = $17 AND COALESCE(scope_key, '') = $18
+       AND ($19 IS NULL OR EXISTS (SELECT 1 FROM chat_messages WHERE id = $19 AND role = 'user' AND content = $20))
+       AND ${sourceSnapshotsCondition('$23')}
+       AND ${sourceLeaseCondition('$24', '$25')}
+       AND ($21 <> 'active' OR NOT EXISTS (SELECT 1 FROM memories existing WHERE existing.status = 'active'
+         AND existing.category = $22 AND COALESCE(existing.scope_type, 'global') = $17 AND COALESCE(existing.scope_key, '') = $18
+         AND lower(trim(existing.subject)) = lower(trim($2)) AND lower(trim(existing.fact_key)) = lower(trim($3)) AND existing.id <> $12))`,
+    [memory.content, memory.subject || null, memory.factKey || null, memory.factValue || null,
+      memory.confidence ?? 0.7, memory.evidence || null, memory.supersedesId || null,
+      memory.embedding ? JSON.stringify(memory.embedding) : null, memory.embeddingModel || null,
+      memory.contentHash || null, memory.updatedAt, expected.id, expected.content,
+      expected.status, expected.source, expected.updatedAt, expected.scopeType || 'global', expected.scopeKey || '', source?.id || null, source?.content || null,
+      memory.status, memory.category, encodeSourceSnapshots(source), ...sourceLeaseParameters(source)],
+  )
+  return result.rowsAffected === 1
+}
+
+export async function removeMemoryIfUnchanged(expected: Memory, source?: MemorySourceGuard): Promise<boolean> {
+  if (!isDatabaseReady()) return false
+  const result = await getDatabase().execute(
+    `DELETE FROM memories WHERE id = $1 AND content = $2
+       AND CASE WHEN updated_at > 0 AND updated_at < 1000000000000 THEN updated_at * 1000 ELSE updated_at END = $3
+       AND source = 'auto_extracted' AND status = 'candidate' AND locked = 0
+       AND COALESCE(scope_type, 'global') = $4 AND COALESCE(scope_key, '') = $5
+       AND ($6 IS NULL OR EXISTS (SELECT 1 FROM chat_messages WHERE id = $6 AND role = 'user' AND content = $7))
+       AND ${sourceSnapshotsCondition('$8')}
+       AND ${sourceLeaseCondition('$9', '$10')}`,
+    [expected.id, expected.content, expected.updatedAt, expected.scopeType || 'global', expected.scopeKey || '', source?.id || null, source?.content || null,
+      encodeSourceSnapshots(source), ...sourceLeaseParameters(source)],
+  )
+  return result.rowsAffected === 1
+}
+
+/** A cache fill is deliberately not a business-data upsert. */
+export async function persistMemoryEmbedding(
+  memory: Pick<Memory, 'id' | 'content' | 'contentHash'>,
+  embedding: number[],
+  model: string | null,
+  nextHash: string,
+): Promise<boolean> {
+  if (!isDatabaseReady() || !embedding.length || !embedding.every(Number.isFinite)) return false
+  const result = await getDatabase().execute(
+    `UPDATE memories SET embedding = $1, embedding_model = $2, content_hash = $3
+       WHERE id = $4 AND content = $5 AND COALESCE(content_hash, '') = $6 AND status = 'active'`,
+    [JSON.stringify(embedding), model, nextHash, memory.id, memory.content, memory.contentHash || ''],
+  )
+  return result.rowsAffected === 1
 }
 
 export interface LoadMemoryOptions extends Omit<MemoryQueryFilters, 'statuses'> {
@@ -759,6 +909,24 @@ export async function loadMemoryEmbeddings(ids: readonly string[]): Promise<Map<
   }]))
 }
 
+export async function loadMemorySourceMessages(references: readonly { id: string; sessionId: string }[]): Promise<Array<{ id: string; content: string; created_at: number }>> {
+  if (!isDatabaseReady() || references.length === 0) return []
+  const selected = references.slice(0, 2)
+  const params = selected.flatMap(reference => [reference.id, reference.sessionId])
+  const conditions = selected.map((_, index) => `(id = $${index * 2 + 1} AND session_id = $${index * 2 + 2})`).join(' OR ')
+  return getDatabase().select(
+    `SELECT id, created_at, substr(CASE WHEN metadata IS NULL THEN
+       CASE WHEN instr(content, '【上下文') > 0 THEN '' ELSE content END
+     WHEN json_valid(metadata) THEN CASE WHEN json_type(metadata) <> 'object' THEN ''
+       WHEN json_type(metadata, '$.hidden') IS NOT NULL AND json_type(metadata, '$.hidden') <> 'false' THEN ''
+       WHEN json_type(metadata, '$.displayContent') = 'text' THEN json_extract(metadata, '$.displayContent')
+       WHEN json_type(metadata, '$.displayContent') IS NOT NULL OR json_type(metadata, '$.tags') IS NOT NULL
+         OR instr(content, '【上下文') > 0 THEN '' ELSE content END
+     ELSE '' END, 1, 3001) AS content
+     FROM chat_messages WHERE role = 'user' AND (${conditions}) LIMIT 2`, params,
+  )
+}
+
 export async function updateMemoryContent(id: string, content: string): Promise<void> {
   if (!isDatabaseReady()) return
   const db = getDatabase()
@@ -792,9 +960,9 @@ export async function updateMemoryStatus(id: string, status: MemoryStatus): Prom
   )
 }
 
-export async function confirmMemoryCandidate(id: string): Promise<boolean> {
+export async function confirmMemoryCandidate(id: string, coexist = false): Promise<boolean> {
   if (!isDatabaseReady()) return false
-  return invoke<boolean>('confirm_memory_candidate_transaction', { id })
+  return invoke<boolean>('confirm_memory_candidate_transaction', coexist ? { id, coexist: true } : { id })
 }
 
 function safeParseEmbedding(value: string): number[] | null {
@@ -891,7 +1059,7 @@ export async function loadChatMessages(sessionId: string): Promise<ChatMessageRo
   if (!isDatabaseReady()) return []
   const db = getDatabase()
   return db.select<ChatMessageRow>(
-    'SELECT * FROM chat_messages WHERE session_id = $1 ORDER BY created_at ASC',
+    'SELECT * FROM chat_messages WHERE session_id = $1 ORDER BY created_at ASC, rowid ASC',
     [sessionId]
   )
 }

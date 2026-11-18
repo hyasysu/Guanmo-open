@@ -86,12 +86,14 @@ type AiPanelProps = {
   }
 }
 
-const STREAM_START_FOLLOW_PX = 180
-const STREAM_GROWTH_FOLLOW_PX = 120
+const STREAM_GROWTH_FOLLOW_PX = 240
 const STREAM_BOTTOM_GAP_PX = 96
+const STREAM_FOLLOW_INTERVAL_MS = 3000
+const STREAM_SCROLL_DURATION_MS = 600
 const SAVE_CONTROLS_HIDE_DELAY_MS = 700
 const SEND_ANIMATION_DURATION_MS = 260
 const SEND_ANIMATION_FADE_MS = 120
+const SEND_ANIMATION_REVEAL_MS = 360
 const SEND_ANIMATION_POINT_SIZE = 12
 
 type SendAnimationPhase = 'waiting' | 'flying' | 'arrived' | 'cancelled'
@@ -165,8 +167,9 @@ export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const autoFollowRef = useRef(true)
   const scrollFrameRef = useRef<number | null>(null)
+  const streamAnimationFrameRef = useRef<number | null>(null)
   const streamingMessageIdRef = useRef<string | null>(null)
-  const streamingStartScrollTopRef = useRef(0)
+  const lastStreamScrollAtRef = useRef(0)
   const programmaticScrollUntilRef = useRef(0)
   const streamingRef = useRef(streaming)
   const streamScrollInterruptedRef = useRef(false)
@@ -236,7 +239,7 @@ export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }
       if (sendAnimationRef.current?.token === next.token && sendAnimationRef.current.phase === phase) {
         clearSendAnimation()
       }
-    }, SEND_ANIMATION_FADE_MS)
+    }, phase === 'arrived' ? SEND_ANIMATION_REVEAL_MS : SEND_ANIMATION_FADE_MS)
   }, [clearSendAnimation, updateSendAnimation])
 
   const syncSendAnimationTarget = useCallback(() => {
@@ -396,8 +399,14 @@ export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }
     streamingRef.current = streaming
     if (!streaming) {
       streamScrollInterruptedRef.current = false
+      if (streamAnimationFrameRef.current !== null) cancelAnimationFrame(streamAnimationFrameRef.current)
+      streamAnimationFrameRef.current = null
     }
   }, [streaming])
+
+  useEffect(() => () => {
+    if (streamAnimationFrameRef.current !== null) cancelAnimationFrame(streamAnimationFrameRef.current)
+  }, [])
 
   // 监听用户手动滚动：滚到底部恢复跟随，滚离底部关闭跟随
   useEffect(() => {
@@ -409,6 +418,11 @@ export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }
         finishSendAnimation('cancelled')
       }
       if (!streamingRef.current) return
+      if (streamAnimationFrameRef.current !== null) {
+        cancelAnimationFrame(streamAnimationFrameRef.current)
+        streamAnimationFrameRef.current = null
+        programmaticScrollUntilRef.current = 0
+      }
       autoFollowRef.current = false
       streamScrollInterruptedRef.current = true
       if (scrollFrameRef.current !== null) {
@@ -422,9 +436,9 @@ export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }
       } else if (sendAnimationRef.current?.phase === 'flying') {
         syncSendAnimationTarget()
       }
-      if (streamingRef.current && streamScrollInterruptedRef.current) return
       if (Date.now() < programmaticScrollUntilRef.current) return
       autoFollowRef.current = isAtBottom()
+      if (streamingRef.current && autoFollowRef.current) streamScrollInterruptedRef.current = false
     }
     el.addEventListener('wheel', stopStreamingFollow, { passive: true })
     el.addEventListener('touchstart', stopStreamingFollow, { passive: true })
@@ -468,27 +482,38 @@ export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }
 
         const isNewStreamingMessage = streamingMessageIdRef.current !== lastMessageKey
         if (isNewStreamingMessage) {
+          if (streamAnimationFrameRef.current !== null) cancelAnimationFrame(streamAnimationFrameRef.current)
+          streamAnimationFrameRef.current = null
           streamingMessageIdRef.current = lastMessageKey
-          streamingStartScrollTopRef.current = container.scrollTop
+          lastStreamScrollAtRef.current = 0
         }
-
-        const containerRect = container.getBoundingClientRect()
-        const messageRect = streamingEl.getBoundingClientRect()
-        const desiredTop = container.scrollTop + messageRect.top - containerRect.top - 12
-        const followLimit = streamingStartScrollTopRef.current + STREAM_START_FOLLOW_PX + (isNewStreamingMessage ? 0 : STREAM_GROWTH_FOLLOW_PX)
         const bottomGap = container.scrollHeight - container.scrollTop - container.clientHeight
-        const growthTarget = bottomGap > STREAM_BOTTOM_GAP_PX
-          ? container.scrollTop + Math.min(bottomGap - STREAM_BOTTOM_GAP_PX, STREAM_GROWTH_FOLLOW_PX)
-          : container.scrollTop
-        const nextTop = Math.min(Math.max(desiredTop, growthTarget), followLimit)
+        if (bottomGap < STREAM_BOTTOM_GAP_PX + STREAM_GROWTH_FOLLOW_PX
+          || (lastStreamScrollAtRef.current && Date.now() - lastStreamScrollAtRef.current < STREAM_FOLLOW_INTERVAL_MS)) return
 
-        programmaticScrollUntilRef.current = Date.now() + 120
-        container.scrollTo({ top: nextTop })
+        lastStreamScrollAtRef.current = Date.now()
+        const startTop = container.scrollTop
+        programmaticScrollUntilRef.current = Date.now() + STREAM_SCROLL_DURATION_MS + 120
+        if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+          container.scrollTo({ top: startTop + STREAM_GROWTH_FOLLOW_PX })
+          return
+        }
+        const startTime = performance.now()
+        const animateScroll = (time: number) => {
+          const progress = Math.min(1, (time - startTime) / STREAM_SCROLL_DURATION_MS)
+          container.scrollTop = startTop + STREAM_GROWTH_FOLLOW_PX * (1 - (1 - progress) ** 3)
+          streamAnimationFrameRef.current = progress < 1 ? requestAnimationFrame(animateScroll) : null
+        }
+        streamAnimationFrameRef.current = requestAnimationFrame(animateScroll)
         return
       }
 
       if (streamingMessageIdRef.current !== null) {
         streamingMessageIdRef.current = null
+        if (!lastStreamScrollAtRef.current) {
+          programmaticScrollUntilRef.current = Date.now() + 120
+          container.scrollTo({ top: container.scrollHeight, behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' })
+        }
         return
       }
       programmaticScrollUntilRef.current = Date.now() + 120
@@ -623,7 +648,7 @@ export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }
     streamScrollInterruptedRef.current = false
     pendingOutgoingMessageCountRef.current = chatState.messages.filter((msg) => !msg.hidden).length
     streamingMessageIdRef.current = null
-    streamingStartScrollTopRef.current = 0
+    lastStreamScrollAtRef.current = 0
     sendMessage(currentDraft, undefined, currentContextTags.length > 0 ? currentContextTags : undefined, undefined, reasoningMode)
     setDraftInput('')
     chatState.clearContextTags()
@@ -828,7 +853,7 @@ export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }
 
     // 批注：必须有本地来源锚点；批注正文为 AI 回答，引用快照取来源标题或行号
     if (type === 'annotation') {
-      const localSource = sources?.find((s): s is LocalChatMessageSource => s.kind !== 'web')
+      const localSource = sources?.find((s): s is LocalChatMessageSource => s.kind !== 'web' && s.kind !== 'memory')
       if (!localSource || !localSource.filePath) {
         toast.error('AI 解读需要绑定本地来源，请先选择带文件来源的回答')
         return
@@ -1073,7 +1098,7 @@ export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }
               const hideForSendAnimation = isPendingSendMessage
                 || (isSendAnimationTarget && sendAnimation?.phase === 'flying')
               const revealForSendAnimation = isSendAnimationTarget
-                && (sendAnimation?.phase === 'arrived' || sendAnimation?.phase === 'cancelled')
+                && sendAnimation?.phase === 'arrived'
               const parentQuestion = msg.parentId ? userQuestionsById.get(msg.parentId) : undefined
               const originalSelections = msg.parentId ? userSelectionsById.get(msg.parentId) : undefined
               // 历史会话之间的分隔线
@@ -1561,7 +1586,7 @@ function ReadingArtifactCard({
     ? getAnnotationStructuredContent(artifact)
     : null
   const question = getReadingArtifactQuestion(artifact)
-  const references = getReadingArtifactReferences(artifact)
+  const references = getReadingArtifactReferences(artifact, true)
 
   const sourceLabel = artifact.source?.fileName
     ? [
@@ -1769,7 +1794,12 @@ function ArtifactReferences({
       <div className="mb-1.5 text-micro font-bold text-gm-text-tertiary">参考来源</div>
       <div className="space-y-1">
         {references.map((reference, index) => (
-          reference.kind === 'web' ? (
+          reference.kind === 'memory' ? (
+            <div key={`memory-${reference.memoryId}-${index}`} className="rounded-lg px-2 py-1 text-micro leading-relaxed text-gm-text-secondary">
+              <span className="mr-1 rounded border border-gm-border px-1 text-[10px] font-bold text-gm-text-tertiary">记忆</span>
+              <span className="whitespace-pre-wrap break-words">{reference.content}</span>
+            </div>
+          ) : reference.kind === 'web' ? (
             <a
               key={`${reference.url}-${index}`}
               href={reference.url}
@@ -1924,8 +1954,8 @@ export const ChatBubble = memo(function ChatBubble({
   const saveControlsHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [saveMenuOpen, setSaveMenuOpen] = useState(false)
   const [saveControlsVisible, setSaveControlsVisible] = useState(false)
-  // AI 解读需绑定本地来源范围；仅当存在非 web 来源时显示对应入口
-  const hasLocalSource = Boolean(sources?.some((s) => s.kind !== 'web'))
+  // AI 解读需绑定本地文档来源范围。
+  const hasLocalSource = Boolean(sources?.some((s) => s.kind !== 'web' && s.kind !== 'memory'))
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
@@ -2017,7 +2047,7 @@ export const ChatBubble = memo(function ChatBubble({
           ) : (
             <AssistantMarkdown content={content} />
           )}
-          {!isUser && messageSources.length > 0 && onOpenSource && (
+          {!isUser && messageSources.length > 0 && (
             <MessageSources
               sources={messageSources}
               onOpenSource={onOpenSource}
@@ -2212,8 +2242,13 @@ function MessageSources({
       </button>
       {expanded && (
         <div className="mt-2 space-y-1">
-          {onOpenSource && sources.map((source, index) => (
-            source.kind === 'web' ? (
+          {sources.map((source, index) => (
+            source.kind === 'memory' ? (
+              <div key={`memory-${source.memoryId}-${index}`} className="rounded-lg px-2 py-1 text-micro leading-relaxed text-gm-text-secondary">
+                <span className="mr-1 rounded border border-gm-border px-1 text-[10px] font-bold text-gm-text-tertiary">记忆</span>
+                <span className="whitespace-pre-wrap break-words">{source.content}</span>
+              </div>
+            ) : source.kind === 'web' ? (
               <a
                 key={`${source.url}-${index}`}
                 href={source.url}
@@ -2233,7 +2268,8 @@ function MessageSources({
               <button
                 key={`${source.filePath}-${source.startLine}-${source.endLine}-${index}`}
                 type="button"
-                onClick={() => onOpenSource(source)}
+                disabled={!onOpenSource}
+                onClick={() => onOpenSource?.(source)}
                 className="block w-full rounded-lg px-2 py-1 text-left text-micro leading-relaxed text-gm-text-secondary hover:bg-gm-surface hover:text-gm-primary"
                 title={`Open ${source.filePath}:${source.startLine}-${source.endLine}`}
               >

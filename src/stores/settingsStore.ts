@@ -25,12 +25,14 @@ import {
 } from '@/services/appearance/appearanceSchema'
 import type { AppearanceConfigV1, CustomThemeDefinition, NonDarkThemeId, ThemeId, ThemeSlot } from '@/services/appearance/appearanceSchema'
 import { createAppearanceRegistry } from '@/services/appearance/appearanceRegistry'
+import { normalizePreviewScrollDamping, PREVIEW_SCROLL_DAMPING } from '@/services/previewWheel'
 import { setAppearanceRegistry, syncDocumentTheme as applyDocumentTheme } from '@/services/appearance/appearanceDom'
 
 export { THEME_IDS, resolveLastLightThemeId, resolveThemeId }
 export type { NonDarkThemeId, ThemeId }
 
 interface EditorSettings {
+  previewScrollDamping: number
   fontSize: number
   lineHeight: number
   fontFamily: string
@@ -72,6 +74,7 @@ interface AppearanceSettings extends AppearanceConfigV1 {
 
 interface KnowledgeSettings {
   autoIndexEnabled: boolean
+  autoMemoryExtractionEnabled: boolean
 }
 
 interface UsageTrackingSettings {
@@ -138,6 +141,7 @@ function resolveFullscreenBackgroundScene(value: unknown): AppearanceSettings['f
 }
 
 const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
+  previewScrollDamping: PREVIEW_SCROLL_DAMPING.default,
   fontSize: 14,
   lineHeight: 1.65,
   fontFamily: "'JetBrains Mono', 'Cascadia Code', monospace",
@@ -187,6 +191,7 @@ const DEFAULT_WEB_SEARCH: WebSearchConfig = {
 
 const DEFAULT_KNOWLEDGE_SETTINGS: KnowledgeSettings = {
   autoIndexEnabled: true,
+  autoMemoryExtractionEnabled: true,
 }
 
 const DEFAULT_USAGE_TRACKING_SETTINGS: UsageTrackingSettings = {
@@ -246,7 +251,7 @@ export const useSettingsStore = create<SettingsState>()(
       },
 
       updateEditorSettings: (settings) =>
-        set((s) => ({ editor: { ...s.editor, ...settings } })),
+        set((s) => ({ editor: { ...s.editor, ...settings, ...(settings.previewScrollDamping !== undefined ? { previewScrollDamping: normalizePreviewScrollDamping(settings.previewScrollDamping) } : {}) } })),
 
       updateKnowledgeSettings: (settings) => {
         set((s) => ({ knowledge: { ...s.knowledge, ...settings } }))
@@ -503,7 +508,7 @@ export const useSettingsStore = create<SettingsState>()(
               fullscreenContentPadding: legacyFullscreenContentPadding,
               ...cleanSaved
             } = savedEditor as Record<string, unknown>
-            const mergedEditor = { ...current.editor, ...cleanSaved }
+            const mergedEditor = { ...current.editor, ...cleanSaved, previewScrollDamping: normalizePreviewScrollDamping(cleanSaved.previewScrollDamping) }
             const fullscreenContentPaddingPercent = resolveFullscreenContentPaddingPercent(
               cleanSaved.fullscreenContentPaddingPercent,
               legacyFullscreenContentPadding,

@@ -16,7 +16,7 @@ export default defineConfig(({ mode, command }) => ({
               ...Object.keys(config.resolve?.alias ?? {}).filter((alias) => alias.startsWith('@/'))
                 .map((alias) => `!./src/${alias.slice(2)}.{ts,tsx}`),
               // The settings entry and desktop-only children are not direct @/ aliases.
-              '!./src/features/settings/{SettingsPage,ThemeManager,DiagnosticsSettings,DesktopApiKeyControl,UsageReceiptDialog,AdvancedTimeoutSettings}.tsx',
+              '!./src/features/settings/{SettingsPage,ThemeManager,DiagnosticsSettings,DesktopApiKeyControl,UsageReceiptDialog,AdvancedTimeoutSettings,MemoryExtractionStatus,MemoryExtractionSimulator,PreviewScrollSettings}.tsx',
               '!./src/components/reading-artifacts/**',
               '!./src/components/update/**',
               '!./src/components/legacy/**',

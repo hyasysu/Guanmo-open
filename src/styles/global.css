@@ -1143,6 +1143,19 @@ html[data-fullscreen-transition-phase='focusing'] #root {
   to { opacity: 1; filter: blur(0); }
 }
 
+.gm-ai-send-message-reveal [data-send-animation-bubble] .whitespace-pre-wrap {
+  animation: gmSendMessageReveal 360ms ease-out;
+}
+
+@keyframes gmSendMessageReveal {
+  0%, 18% { filter: blur(5px); }
+  to { filter: blur(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gm-ai-send-message-reveal [data-send-animation-bubble] .whitespace-pre-wrap { animation: none; }
+}
+
 @keyframes gmTypingDot {
   0%, 80%, 100% { opacity: .38; transform: translateY(0) scale(.86); }
   36% { opacity: 1; transform: translateY(-3px) scale(1); }
@@ -1320,7 +1333,7 @@ html[data-fullscreen-transition-phase='focusing'] #root {
 .gm-streaming-word {
   display: inline-block;
   max-width: 100%;
-  animation: gmStreamingWord 280ms ease-out both;
+  animation: gmStreamingWord 280ms ease-out backwards;
 }
 
 .gm-streaming-caret {
@@ -1967,12 +1980,39 @@ html[data-gm-runtime='web'] .gm-settings-tabs--web > div:nth-child(2) {
   color: var(--gm-text);
 }
 
+.gm-markdown-preview div:has(> table) {
+  background: var(--gm-code-bg);
+}
+
 .gm-markdown-preview td {
   color: var(--gm-text);
 }
 
 .gm-markdown-preview blockquote {
+  position: relative;
   background: var(--gm-markdown-quote-bg);
+  border-left: 0;
+  border-radius: 10px;
+  padding: 12px 16px 12px 31px;
+}
+
+.gm-markdown-preview blockquote::before {
+  content: '';
+  position: absolute;
+  top: 15px;
+  bottom: 15px;
+  left: 13px;
+  width: 3px;
+  border-radius: 0;
+  background: var(--gm-primary);
+}
+
+.gm-markdown-preview blockquote > p:first-child {
+  margin-top: 0;
+}
+
+.gm-markdown-preview blockquote > p:last-child {
+  margin-bottom: 0;
 }
 
 .gm-markdown-preview details {
@@ -2080,17 +2120,11 @@ html[data-gm-runtime='web'] .gm-settings-tabs--web > div:nth-child(2) {
   font-family: inherit;
 }
 
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview > ul:first-child,
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview > ol:first-child {
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview > :is(ul, ol):first-child {
   margin-top: 30px;
 }
 
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h1,
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h2,
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h3,
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h4,
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h5,
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview h6 {
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview :is(h1, h2, h3, h4, h5, h6) {
   position: relative;
   margin-top: 1rem;
   margin-bottom: 1rem;
@@ -2131,31 +2165,20 @@ html[data-gm-runtime='web'] .gm-settings-tabs--web > div:nth-child(2) {
   color: #777777;
 }
 
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview p,
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview blockquote,
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview ul,
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview ol,
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview dl,
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview .gm-markdown-table-wrap {
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview :is(p, blockquote, ul, ol, dl) {
   margin: 0.8em 0;
 }
 
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview ul,
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview ol {
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview :is(ul, ol) {
   padding-left: 30px;
 }
 
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview li > ol,
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview li > ul {
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview li > :is(ol, ul) {
   margin-top: 0;
   margin-bottom: 0;
 }
 
 :root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview blockquote {
-  padding: 0 15px;
-  border-left: 4px solid #dfe2e5;
-  border-radius: 0;
-  background: transparent;
   color: #777777;
   font-style: normal;
 }
@@ -2170,6 +2193,7 @@ html[data-gm-runtime='web'] .gm-settings-tabs--web > div:nth-child(2) {
 }
 
 :root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview .gm-markdown-table-wrap {
+  margin: 0.8em 0;
   border: 0;
   border-radius: 0;
   overflow-x: auto;
@@ -2186,8 +2210,7 @@ html[data-gm-runtime='web'] .gm-settings-tabs--web > div:nth-child(2) {
   background-color: #f8f8f8;
 }
 
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview th,
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview td {
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview :is(th, td) {
   margin: 0;
   padding: 6px 13px;
   border: 1px solid #dfe2e5;
@@ -2202,9 +2225,7 @@ html[data-gm-runtime='web'] .gm-settings-tabs--web > div:nth-child(2) {
   border-top: 1px solid #dfe2e5;
 }
 
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview :not(pre) > code,
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview li code,
-:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview p code {
+:root[data-light-palette='github-dmmono']:not([data-theme='dark']) .gm-markdown-preview :is(:not(pre) > code, li code, p code) {
   border: 1px solid #e7eaed;
   background-color: #f3f4f4;
   border-radius: 3px;

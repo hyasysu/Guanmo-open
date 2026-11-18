@@ -348,6 +348,7 @@ const responsesConfig: AiConfig = {
 }
 const responsesProvider = new OpenAIResponsesProvider(responsesConfig)
 assert(createChatProvider(responsesConfig) instanceof OpenAIResponsesProvider, 'Responses 协议应创建专用 Provider')
+assert(responsesProvider.agentToolResultMode === 'text', 'Responses 不支持原生工具结果项时应使用文本回传')
 assert(
   (responsesProvider as unknown as { config: AiConfig }).config.apiKey === '',
   'Responses Provider 不得保留前端明文 API Key',

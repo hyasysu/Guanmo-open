@@ -51,6 +51,13 @@ export function buildReadingArtifactReferences(
       startLine: selection.startLine!, endLine: selection.endLine! }]
   })
   for (const source of [...(sources ?? []), ...selectionSources]) {
+    if (source.kind === 'memory') {
+      const key = `memory:${source.memoryId}`
+      if (!source.memoryId.trim() || !source.content.trim() || seen.has(key)) continue
+      seen.add(key)
+      references.push({ ...source })
+      continue
+    }
     if (source.kind === 'web') {
       const title = source.title.trim()
       const url = source.url.trim()
@@ -101,6 +108,9 @@ export function normalizeSafeWebSourceUrl(url: string): string | null {
 }
 
 function getSourceIdentity(source: ChatMessageSource): string | null {
+  if (source.kind === 'memory') {
+    return source.memoryId.trim() && source.content.trim() ? `memory:${source.memoryId}` : null
+  }
   if (source.kind === 'web') {
     const url = normalizeSafeWebSourceUrl(source.url)
     return url ? `web:${url}` : null
@@ -114,7 +124,7 @@ function getSourceIdentity(source: ChatMessageSource): string | null {
 }
 
 function cloneSource(source: ChatMessageSource): ChatMessageSource {
-  if (source.kind === 'web') return { ...source }
+  if (source.kind === 'web' || source.kind === 'memory') return { ...source }
   return {
     ...source,
     ...(source.titlePath ? { titlePath: [...source.titlePath] } : {}),
@@ -184,6 +194,19 @@ export function parseSourceReferences(
     referencedSources,
     hasValidReferences: referencedIds.length > 0,
   }
+}
+
+/** Bind only generated memory headings to this request's shared source IDs. */
+export function annotateMemoryContext(
+  context: string,
+  sources: readonly ChatMessageSource[],
+  registry: SourceReferenceRegistry,
+): string {
+  return context.replace(/^\[记忆 (\d+)\](?=\n分类：)/gm, (heading, number: string) => {
+    const source = sources[Number(number) - 1]
+    const id = source?.kind === 'memory' ? findSourceReferenceId(registry, source) : undefined
+    return id ? `[${id}]` : heading
+  })
 }
 
 /**

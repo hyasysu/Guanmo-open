@@ -10,6 +10,7 @@
  */
 
 import { classifyMemoryRetrievalIntent } from '@/services/memory/memoryService'
+import { isExplicitMemoryWriteIntent } from '@/services/memory/memoryPolicy'
 
 // 能力类型
 export type Capability =
@@ -182,6 +183,13 @@ export function isLocalResearchIntent(query: string): boolean {
   return LOCAL_RESEARCH_PATTERN.test(normalized) || isTopicResearchIntent(normalized)
 }
 
+/** Product-library shorthand plus a lookup action; a bare “库” is not sufficient. */
+export function isKnowledgeLookupIntent(query: string): boolean {
+  const text = query.trim()
+  return /^(?:(?:请|帮我|麻烦)(?:先)?\s*)?(?:看看|查看|查查|查找|查询|搜索|检索|找找)(?:一下)?\s*(?:在|从)?(?:库里(?:面)?|库中).+/.test(text)
+    || /^(?:(?:请|帮我|麻烦)(?:先)?\s*)?(?:在|从)?(?:库里(?:面)?|库中).*(?:有没有|是否有|有无|查询|搜索|检索|查找|找找).+/.test(text)
+}
+
 export function isDocumentRewriteIntent(query: string): boolean {
   const normalized = query.trim()
   return !isTopicResearchIntent(normalized) && DOCUMENT_REWRITE_PATTERN.test(normalized)
@@ -206,7 +214,7 @@ export function classifySelectionRequest(query: string, context: AppContext = {}
   if (!context.hasSelection) return 'none'
   if (isSectionReadingIntent(query, context)) return 'context'
   if (SELECTION_CONTEXT_LOOKUP_PATTERN.test(query)) return 'context'
-  if (SELECTION_EXPLICIT_LOOKUP_PATTERN.test(query)) return 'explicit_lookup'
+  if (SELECTION_EXPLICIT_LOOKUP_PATTERN.test(query) || isKnowledgeLookupIntent(query)) return 'explicit_lookup'
   if (SELECTION_CONTEXT_RISK_PATTERN.test(query) && !isDocumentRewriteIntent(query)) return 'context'
   if (SELECTION_FAST_PATTERN.test(query)) return 'fast'
   return 'none'
@@ -225,6 +233,9 @@ function scoreCapability(
   const patterns = REGEX_PATTERNS[capability]
   const signals: string[] = []
   let score = 0
+  if (capability === 'memory' && classifyMemoryRetrievalIntent(query) === 'none' && !shouldAllowMemoryWrite(query)) {
+    return { capability, score: 0, isRequired: false, signals }
+  }
 
   // 弱信号匹配（宽松）
   for (const keyword of config.weak) {
@@ -271,6 +282,15 @@ function scoreCapability(
   if (capability === 'knowledge' && isLocalResearchIntent(query)) {
     score += 4
     signals.push('classifier:local_research')
+  }
+  if (capability === 'knowledge' && isKnowledgeLookupIntent(query)) {
+    score = Math.max(score, 4)
+    signals.push('classifier:knowledge_lookup')
+  }
+  if (capability === 'file_read' && isKnowledgeLookupIntent(query) && !context.hasOpenFile
+    && !signals.some(signal => signal.startsWith('strong:'))) {
+    score = 0
+    signals.push('classifier:library_lookup_not_file')
   }
   if ((capability === 'knowledge' || capability === 'web') && isWebComparisonIntent(query)) {
     score += 4
@@ -452,7 +472,7 @@ export function shouldUseAgentMode(
  * 判断是否允许记忆写入
  */
 export function shouldAllowMemoryWrite(query: string): boolean {
-  return /(记住|记下来|添加(?:到|进|为)?(?:长期)?记忆|保存(?:到|进|为)?(?:长期)?记忆|以后记得|remember\s)/i.test(query.trim())
+  return isExplicitMemoryWriteIntent(query)
 }
 
 /**

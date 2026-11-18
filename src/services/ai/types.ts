@@ -1,5 +1,6 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/services/requestTimeout'
 import type { SourceReferenceId } from './sourceReferences'
+import type { RouterConfig } from '@/services/agent/routerConfig'
 
 /** 对话协议类型 */
 export type ChatProtocol = 'openai-chat' | 'anthropic-messages' | 'openai-responses'
@@ -22,6 +23,7 @@ export interface EmbeddingConfig {
 }
 
 export interface AiConfig {
+  routing?: Partial<RouterConfig>
   protocol: ChatProtocol
   provider: ProviderId
   baseUrl: string
@@ -89,7 +91,13 @@ export interface WebChatMessageSource {
   snippet?: string
 }
 
-export type ChatMessageSource = LocalChatMessageSource | WebChatMessageSource
+export interface MemoryChatMessageSource {
+  kind: 'memory'
+  memoryId: string
+  content: string
+}
+
+export type ChatMessageSource = LocalChatMessageSource | WebChatMessageSource | MemoryChatMessageSource
 
 export interface ReadingArtifactMessageReference {
   key: `mark:${string}` | `ai:${string}`
@@ -154,6 +162,8 @@ export interface ActionProposal {
   reversibleDescription: string
   riskDescription: string
   payload: Record<string, unknown>
+  /** Host-captured workspace for memory confirmation; never supplied by the model. */
+  memoryScopeKey?: string | null
   createdAt: number
   expiresAt: number
   updatedAt: number
@@ -200,8 +210,19 @@ export interface ChatTool {
   }
 }
 
+/** Request-only protocol messages; never persisted as chat history. */
+export type ModelMessage = ChatMessage | {
+  role: 'assistant'
+  content: string
+  tool_calls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>
+} | {
+  role: 'tool'
+  content: string
+  tool_call_id: string
+}
+
 export interface ChatRequest {
-  messages: ChatMessage[]
+  messages: ModelMessage[]
   stream?: boolean
   temperature?: number
   maxTokens?: number
@@ -227,6 +248,7 @@ export interface ChatResponse {
 export interface StreamChunk {
   content: string
   done: boolean
+  usage?: ChatResponse['usage']
   toolCallDeltas?: Array<{
     index: number
     id?: string
@@ -254,6 +276,7 @@ export interface ValidateResult {
 }
 
 export interface AiProvider {
+  readonly agentToolResultMode?: 'text'
   chat(request: ChatRequest): Promise<ChatResponse>
   streamChat(request: ChatRequest): AsyncIterable<StreamChunk>
   embedding(text: string, signal?: AbortSignal): Promise<EmbeddingResponse>
@@ -315,21 +338,21 @@ export const AI_CHAT_PRESETS: AiPreset[] = [
   { key: 'custom', label: '自定义', protocol: 'openai-chat', provider: 'custom', baseUrl: '' },
 
   // ── OpenAI Chat Completions ──
-  { key: 'openai', label: 'OpenAI', protocol: 'openai-chat', provider: 'openai', baseUrl: 'https://api.openai.com/v1', chatModel: 'gpt-4o-mini' },
-  { key: 'deepseek', label: 'DeepSeek', protocol: 'openai-chat', provider: 'deepseek', baseUrl: 'https://api.deepseek.com', chatModel: 'deepseek-v4-flash' },
-  { key: 'zhipu', label: '智谱 GLM', protocol: 'openai-chat', provider: 'zhipu', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', chatModel: 'glm-4-flash' },
-  { key: 'moonshot', label: '月之暗面 Moonshot', protocol: 'openai-chat', provider: 'moonshot', baseUrl: 'https://api.moonshot.cn/v1', chatModel: 'moonshot-v1-8k' },
-  { key: 'mimo', label: 'MiMo (小米)', protocol: 'openai-chat', provider: 'mimo', baseUrl: 'https://api.xiaomimimo.com/v1', chatModel: 'mimo-v2.5' },
-  { key: 'siliconflow', label: 'SiliconFlow', protocol: 'openai-chat', provider: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1', chatModel: 'Qwen/Qwen2.5-72B-Instruct' },
-  { key: 'groq', label: 'Groq', protocol: 'openai-chat', provider: 'groq', baseUrl: 'https://api.groq.com/openai/v1', chatModel: 'llama-3.3-70b-versatile' },
-  { key: 'openrouter', label: 'OpenRouter', protocol: 'openai-chat', provider: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', chatModel: 'openai/gpt-4o-mini' },
-  { key: 'ollama', label: 'Ollama 本地', protocol: 'openai-chat', provider: 'ollama', baseUrl: 'http://localhost:11434/v1', chatModel: 'qwen2.5:7b' },
+  { key: 'openai', label: 'OpenAI', protocol: 'openai-chat', provider: 'openai', baseUrl: 'https://api.openai.com/v1', chatModel: 'gpt-6-luna' },
+  { key: 'deepseek', label: 'DeepSeek', protocol: 'openai-chat', provider: 'deepseek', baseUrl: 'https://api.deepseek.com', chatModel: 'deepseek-flash' },
+  { key: 'zhipu', label: '智谱 GLM', protocol: 'openai-chat', provider: 'zhipu', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', chatModel: 'glm-5.3-flash' },
+  { key: 'moonshot', label: '月之暗面 Moonshot', protocol: 'openai-chat', provider: 'moonshot', baseUrl: 'https://api.moonshot.cn/v1', chatModel: 'kimi-k3.1-pro' },
+  { key: 'mimo', label: 'MiMo (小米)', protocol: 'openai-chat', provider: 'mimo', baseUrl: 'https://api.xiaomimimo.com/v1', chatModel: 'mimo-v2.6-flash' },
+  { key: 'siliconflow', label: 'SiliconFlow', protocol: 'openai-chat', provider: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1', chatModel: 'deepseek-ai/DeepSeek-V4.1-Flash' },
+  { key: 'groq', label: 'Groq', protocol: 'openai-chat', provider: 'groq', baseUrl: 'https://api.groq.com/openai/v1', chatModel: 'qwen/qwen3.8-27b' },
+  { key: 'openrouter', label: 'OpenRouter', protocol: 'openai-chat', provider: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', chatModel: 'openai/gpt-6-luna' },
+  { key: 'ollama', label: 'Ollama 本地', protocol: 'openai-chat', provider: 'ollama', baseUrl: 'http://localhost:11434/v1', chatModel: 'qwen3.5:4b' },
 
   // ── Coding Plan 系列 (均为 openai-chat 协议) ──
-  { key: 'coding-volcengine', label: 'Coding Plan · 火山方舟', protocol: 'openai-chat', provider: 'coding-plan', baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3', chatModel: 'glm-5.2' },
+  { key: 'coding-volcengine', label: 'Coding Plan · 火山方舟', protocol: 'openai-chat', provider: 'coding-plan', baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3', chatModel: 'deepseek-v4.1-flash-economy' },
   { key: 'coding-ali', label: 'Coding Plan · 阿里百炼', protocol: 'openai-chat', provider: 'coding-plan', baseUrl: 'https://coding.dashscope.aliyuncs.com/v1', chatModel: 'qwen3.7-plus' },
-  { key: 'coding-iflytek', label: 'Coding Plan · 讯飞星辰', protocol: 'openai-chat', provider: 'coding-plan', baseUrl: 'https://maas-coding-api.cn-huabei-1.xf-yun.com/v2', chatModel: 'xingchen-coding-plus' },
-  { key: 'coding-tencent', label: 'Coding Plan · 腾讯云', protocol: 'openai-chat', provider: 'coding-plan', baseUrl: 'https://api.lkeap.cloud.tencent.com/coding/v3', chatModel: 'hunyuan-code' },
+  { key: 'coding-iflytek', label: 'Coding Plan · 讯飞星辰', protocol: 'openai-chat', provider: 'coding-plan', baseUrl: 'https://maas-coding-api.cn-huabei-1.xf-yun.com/v2', chatModel: 'xsparkx2flash' },
+  { key: 'coding-tencent', label: 'Coding Plan · 腾讯云', protocol: 'openai-chat', provider: 'coding-plan', baseUrl: 'https://api.lkeap.cloud.tencent.com/coding/v3', chatModel: 'tc-code-latest' },
 
   // 原生 Anthropic Messages 与 OpenAI Responses 未实现前不提供系统预设。
 ]

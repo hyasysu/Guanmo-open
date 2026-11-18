@@ -1,4 +1,8 @@
 import { DesktopApiKeyControl } from './DesktopApiKeyControl'
+import { MemoryExtractionStatus } from './MemoryExtractionStatus'
+import { MemoryExtractionSimulator } from './MemoryExtractionSimulator'
+import { resolveRouterConfig } from '@/services/agent/routerConfig'
+import { decodeMemoryEvidence, memoryEvidenceReviewQuote, memoryEvidenceText } from '@/services/memory/memoryEvidence'
 import { hasApiCredential, embeddingConnection } from '@/services/apiConnection'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Button, Collapse, Divider, Footer, Icon, Input, Modal, Select, Switch, Table, Tabs } from 'animal-island-ui'
@@ -67,6 +71,8 @@ import { AiShortcutSettings } from '@/features/settings/AiShortcutSettings'
 import { UsageActivity } from '@/features/settings/UsageActivity'
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/services/requestTimeout'
 import { AdvancedTimeoutSettings } from '@/features/settings/AdvancedTimeoutSettings'
+import { PreviewScrollSettings } from '@/features/settings/PreviewScrollSettings'
+import { PREVIEW_SCROLL_DAMPING } from '@/services/previewWheel'
 import { ThemeManager } from '@/features/settings/ThemeManager'
 import { DiagnosticsSettings } from '@/features/settings/DiagnosticsSettings'
 import { requestProductTour } from '@/features/productTour/productTourEvents'
@@ -645,6 +651,7 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
     addCustomChatPreset, removeCustomChatPreset,
     addCustomEmbeddingPreset, removeCustomEmbeddingPreset,
   } = useSettingsStore()
+  const routing = resolveRouterConfig(ai.routing)
   const webRuntimeSecrets = useSyncExternalStore(subscribeWebSecretRuntime, getWebSecretRuntimeState, getWebSecretRuntimeState)
 
   // 测试状态
@@ -1075,6 +1082,24 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
       <SettingField label="联网搜索" description="允许 Agent 使用 Web 搜索工具">
         <Switch checked={ai.webSearchEnabled} onChange={(v) => updateAiConfig({ webSearchEnabled: v })} />
       </SettingField>
+      {isTauri() && <>
+        <SettingField label="模糊意图辅助判断" description="仅在意图不明确时使用模型辅助选择；普通问答和明确工具请求保持原路径">
+          <Switch checked={routing.enabled} onChange={(enabled) => updateAiConfig({ routing: { ...routing, enabled } })} />
+        </SettingField>
+        {routing.enabled && <>
+          <SettingField label="轻量路由模型" description="留空复用对话模型；填写同一 API 连接支持的快速模型名称">
+            <Input aria-label="轻量路由模型" value={routing.model} onChange={(e) => updateAiConfig({ routing: { ...routing, model: e.target.value } })} placeholder="复用对话模型" />
+          </SettingField>
+          <SliderField label="辅助判断时限（毫秒）" description="超时即沿用原规则结果" value={routing.timeoutMs} min={100} max={3000} step={100} onChange={(timeoutMs) => updateAiConfig({ routing: { ...routing, timeoutMs } })} />
+          <SliderField label="类别冲突分差" description="有检索线索且类别分数相近时辅助判断" value={routing.conflictMargin} min={0} max={3} step={1} onChange={(conflictMargin) => updateAiConfig({ routing: { ...routing, conflictMargin } })} />
+        </>}
+        <SettingField label="普通聊天核心检索" description="允许模型按需检索长期记忆和知识库；关闭后恢复原有普通聊天流程">
+          <Switch checked={routing.coreToolsEnabled} onChange={(coreToolsEnabled) => updateAiConfig({ routing: { ...routing, coreToolsEnabled } })} />
+        </SettingField>
+        <SettingField label="匿名路由诊断" description="仅在本次运行内保留耗时、触发原因和候选数量，不记录对话或文档内容">
+          <Switch checked={routing.diagnostics} onChange={(diagnostics) => updateAiConfig({ routing: { ...routing, diagnostics } })} />
+        </SettingField>
+      </>}
       <SettingField label="用户偏好提示词" description="只影响回答风格和偏好，不覆盖安全、工具、记忆和文件确认规则">
         <textarea
           value={ai.customPreferencePrompt}
@@ -1426,6 +1451,7 @@ function EditorSettings() {
       <SettingField label="同步滚动" description="编辑 + 预览模式下同步两侧滚动位置">
         <Switch checked={editor.syncScroll} onChange={(v) => updateEditorSettings({ syncScroll: v })} />
       </SettingField>
+      <PreviewScrollSettings value={editor.previewScrollDamping} onChange={(previewScrollDamping) => updateEditorSettings({ previewScrollDamping })} />
       <SettingField label="预览内源码编辑" description="预览模式下按住 Alt 并点击 Markdown 块，可直接编辑该块源码">
         <Switch checked={editor.inlinePreviewEdit} onChange={(v) => updateEditorSettings({ inlinePreviewEdit: v })} />
       </SettingField>
@@ -1574,6 +1600,7 @@ function GeneralSettings() {
       streamEnabled: true,
       webSearchEnabled: false,
       customPreferencePrompt: '',
+      routing: resolveRouterConfig(),
       timeout: 60000,
       maxContextLength: 8192,
       temperature: 0.7,
@@ -1598,6 +1625,7 @@ function GeneralSettings() {
       autoSave: true,
       autoSaveDelay: 1000,
       syncScroll: true,
+      previewScrollDamping: PREVIEW_SCROLL_DAMPING.default,
       autoSendAiShortcut: true,
       inlinePreviewEdit: true,
       modePerformancePolicy: 'balanced',
@@ -1872,11 +1900,19 @@ const MEMORY_SOURCE_LABELS: Record<string, string> = {
 const MEMORY_PAGE_SIZE = 20
 const CANDIDATE_PAGE_SIZE = 10
 
+function memoryConflictSnapshots(memory: Memory) {
+  const evidence = decodeMemoryEvidence(memory.evidence)
+  return evidence?.version === 3 ? evidence.conflicts ?? [] : []
+}
+
 export function MemorySettings() {
   const workspacePath = useAppStore(selectPrimaryWorkspacePath)
   const databaseEnabled = getRuntimeCapabilities().database
+  const autoMemoryExtractionEnabled = useSettingsStore(s => s.knowledge.autoMemoryExtractionEnabled)
+  const updateKnowledgeSettings = useSettingsStore(s => s.updateKnowledgeSettings)
   const [memories, setMemories] = useState<Memory[]>([])
   const [candidateMemories, setCandidateMemories] = useState<Memory[]>([])
+  const [conflictMemories, setConflictMemories] = useState<Memory[]>([])
   const [memoryCounts, setMemoryCounts] = useState({ active: 0, candidate: 0, archived: 0 })
   const [activeTotal, setActiveTotal] = useState(0)
   const [candidateTotal, setCandidateTotal] = useState(0)
@@ -1929,6 +1965,12 @@ export function MemorySettings() {
         ])
         if (cancelled) return
 
+        const conflictIds = [...new Set(candidateResult.memories.flatMap(memory => memoryConflictSnapshots(memory).map(item => item.id)))]
+        const conflictResult = conflictIds.length
+          ? await loadSettingsMemoryPage({ statuses: ['active'], ids: conflictIds, limit: conflictIds.length })
+          : { memories: [] }
+        if (cancelled) return
+
         const lastActivePage = Math.max(0, Math.ceil(activeResult.total / MEMORY_PAGE_SIZE) - 1)
         const lastCandidatePage = Math.max(0, Math.ceil(candidateResult.total / CANDIDATE_PAGE_SIZE) - 1)
         if (activePage > lastActivePage || candidatePage > lastCandidatePage) {
@@ -1939,6 +1981,7 @@ export function MemorySettings() {
 
         setMemories(activeResult.memories)
         setCandidateMemories(candidateResult.memories)
+        setConflictMemories(conflictResult.memories)
         setActiveTotal(activeResult.total)
         setCandidateTotal(candidateResult.total)
         setMemoryCounts({
@@ -1988,14 +2031,18 @@ export function MemorySettings() {
     }
   }
 
-  const handleConfirmCandidate = async (id: string) => {
+  const handleConfirmCandidate = async (id: string, coexist?: boolean) => {
     setLoading(true)
     try {
       const candidate = candidateMemories.find((memory) => memory.id === id)
-      const confirmed = await confirmSettingsMemoryCandidate(id)
+      const conflicts = candidate ? memoryConflictSnapshots(candidate) : []
+      const conflictReady = conflicts.every(snapshot => conflictMemories.some(memory => memory.id === snapshot.id
+        && memory.updatedAt === snapshot.updatedAt && contentHash(memory.content) === snapshot.contentHash))
+      if (!conflictReady) { refresh(); toast.error('已有记忆已变化，请刷新后重新核对'); return }
+      const confirmed = await confirmSettingsMemoryCandidate(id, coexist ?? (conflicts.length > 0 && !candidate?.supersedesId))
       if (!confirmed) {
         refresh()
-        toast.error('候选记忆确认失败：数据库中没有可确认的候选记录')
+        toast.error('候选记忆或待替代事实已变化，请刷新后重新核实')
         return
       }
       if (candidate) {
@@ -2057,6 +2104,11 @@ export function MemorySettings() {
   return (
     <div className="w-full pb-6">
       <SectionTitle>长期记忆</SectionTitle>
+      <SettingField label="自动提取记忆" description="从对话中自动提取长期记忆；关闭期间的对话不会加入提取队列">
+        <Switch checked={databaseEnabled && autoMemoryExtractionEnabled} onChange={v => updateKnowledgeSettings({ autoMemoryExtractionEnabled: v })} disabled={!databaseEnabled} />
+      </SettingField>
+      {databaseEnabled && <MemoryExtractionStatus />}
+      {databaseEnabled && <MemoryExtractionSimulator />}
       {!isTauri() && (
         <div className="mb-3 rounded-xl border border-gm-border bg-gm-surface-elevated p-3">
           <p className="text-caption text-gm-text-tertiary">
@@ -2121,7 +2173,11 @@ export function MemorySettings() {
             </div>
           </div>
           <div className="space-y-2">
-            {candidateMemories.map((memory) => (
+            {candidateMemories.map((memory) => {
+              const conflicts = memoryConflictSnapshots(memory)
+              const conflictReady = conflicts.every(snapshot => conflictMemories.some(item => item.id === snapshot.id
+                && item.updatedAt === snapshot.updatedAt && contentHash(item.content) === snapshot.contentHash))
+              return (
               <div key={memory.id} className="rounded-xl border border-gm-border bg-gm-surface-elevated p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
@@ -2137,6 +2193,13 @@ export function MemorySettings() {
                       </span>
                     </div>
                     <p className="text-body text-gm-text break-words">{memory.content}</p>
+                    {memoryEvidenceReviewQuote(memory.evidence) && (
+                      <p className="mt-1 text-caption text-gm-text-secondary break-words">请核对原文：{memoryEvidenceReviewQuote(memory.evidence)}</p>
+                    )}
+                    {conflicts.length > 0 && <div className="mt-2 text-caption text-gm-text-secondary">
+                      <p>相关已有记忆；确认并存不会覆盖已有记忆：</p>
+                      {conflicts.map(snapshot => <p key={snapshot.id} className="mt-1 break-words">{conflictReady ? conflictMemories.find(item => item.id === snapshot.id)?.content : '已有记忆已变化，请刷新后重新核对'}</p>)}
+                    </div>}
                     {memory.supersedesId && (
                       <p className="mt-1 text-caption text-gm-warning">
                         将替换：{memories.find((item) => item.id === memory.supersedesId)?.content || '已有记忆'}
@@ -2148,10 +2211,14 @@ export function MemorySettings() {
                       type="primary"
                       size="small"
                       onClick={() => handleConfirmCandidate(memory.id)}
-                       disabled={!databaseEnabled || loading}
+                       disabled={!databaseEnabled || loading || queryLoading || !conflictReady}
                     >
-                      确认保存
+                      {memory.supersedesId ? '确认更新' : conflicts.length ? '确认并存' : '确认保存'}
                     </Button>
+                    {memory.supersedesId && conflicts.length > 0 && <Button type="default" size="small"
+                      onClick={() => handleConfirmCandidate(memory.id, true)} disabled={!databaseEnabled || loading || queryLoading || !conflictReady}>
+                      确认并存
+                    </Button>}
                     <Button
                       type="text"
                       size="small"
@@ -2164,7 +2231,8 @@ export function MemorySettings() {
                   </div>
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
           {candidateTotal > CANDIDATE_PAGE_SIZE && (
             <div className="mt-3 flex items-center justify-end gap-2">
@@ -2296,7 +2364,7 @@ export function MemorySettings() {
                     )}
                     {memory.evidence && memory.evidence !== memory.content && (
                       <p className="mt-1 text-caption text-gm-text-tertiary">
-                        依据：{memory.evidence}
+                        依据：{memoryEvidenceText(memory.evidence)}
                       </p>
                     )}
                   </div>

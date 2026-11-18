@@ -1,6 +1,6 @@
-import type { ChatMessage, ChatMessageSource, ReadingArtifactMessageReference, ReadingScope } from '@/services/ai/types'
+import type { ChatMessage, ChatMessageSource, ModelMessage, ReadingArtifactMessageReference, ReadingScope } from '@/services/ai/types'
 import type { SourceReferenceId, SourceReferenceRegistry } from '@/services/ai/sourceReferences'
-import type { Capability, SelectionRequestKind } from './intentDetector'
+import type { Capability, IntentScore, SelectionRequestKind } from './intentDetector'
 import type { AgentToolName } from './toolSelector'
 
 export interface ToolParameter {
@@ -21,6 +21,8 @@ export interface ToolDefinition {
   capability?: string
   confirmationPolicy?: ToolConfirmationPolicy
   reversibleDescription?: string
+  enabled?: boolean
+  isAvailable?: () => boolean
   execute: (args: Record<string, unknown>, context?: ToolExecutionContext) => Promise<string>
 }
 
@@ -40,6 +42,8 @@ export type AgentProgressStage =
 export interface ToolExecutionContext {
   signal?: AbortSignal
   onProgress?: (stage: AgentProgressStage) => void
+  /** Host-captured scope for request-local read execution. Undefined retains Agent behavior. */
+  workspacePath?: string | null
 }
 
 export interface AgentStep {
@@ -60,7 +64,7 @@ export interface AgentResult {
   steps: AgentStep[]
   toolCalls: number
   reason: AgentResultReason
-  finalMessages?: ChatMessage[]
+  finalMessages?: ModelMessage[]
   sources?: ChatMessageSource[]
   sourceRegistry?: SourceReferenceRegistry
   referencedSourceIds?: SourceReferenceId[]
@@ -95,6 +99,7 @@ export interface AgentRunRequest {
   currentEditTargetCount?: number
   candidateToolNames?: readonly string[]
   hasPrefetchedMemoryLookup?: boolean
+  prefetchedMemory?: { query: string; result: string; topK: number; categories?: readonly string[]; sources?: ChatMessageSource[] }
   signal?: AbortSignal
   temperature?: number
   onStep?: (step: AgentStep) => void
@@ -126,6 +131,7 @@ export type RoutingReasonCode =
   | 'weak_combo'
   | 'cancel_last_edit'
   | 'explicit_memory_write'
+  | 'semantic_route'
 
 /**
  * 统一路由决策对象。
@@ -134,6 +140,11 @@ export type RoutingReasonCode =
  * 后调用 makeRoutingDecision 生成，executor 直接消费，不再重复执行意图检测。
  */
 export interface RoutingDecision {
+  /** Reuse this turn's rule evidence; never score a semantic result again. */
+  ruleScores?: readonly IntentScore[]
+  selectionSource?: 'rules' | 'semantic'
+  needsInputTools?: readonly string[]
+  blockedTools?: readonly string[]
   mode: RoutingMode
   reasonCodes: RoutingReasonCode[]
   candidates: Capability[]

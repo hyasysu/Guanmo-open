@@ -7,8 +7,10 @@ import { useChatStore } from '@/stores/chatStore'
 import { getAgentScopeContext } from '@/services/aiScope'
 import type { ContextTag } from '@/types/contextTag'
 import type { ChatMessage, ChatMessageTag } from '@/services/ai/types'
-import { searchMemories, buildMemoryContext } from '@/services/memory/memoryService'
-import { loadAllMemories, listEmbeddingJobs } from '@/services/database/persistence'
+import { searchMemories, buildMemoryContextWithSources, loadMemorySourceContext } from '@/services/memory/memoryService'
+import { decodeMemoryEvidence } from '@/services/memory/memoryEvidence'
+import { loadMemories, listEmbeddingJobs } from '@/services/database/persistence'
+import { normalizeMemoryScopeKey } from '@/services/memory/memoryPolicy'
 import { readRememberedMarkdownFileForOpen } from '@/services/markdownFileOpenPolicy'
 import type { TextRange } from './editTarget'
 import { normalizeFilePath } from '@/services/pathIdentity'
@@ -35,6 +37,11 @@ function validateString(value: unknown, name: string): string | null {
     return `参数 "${name}" 必须是非空字符串`
   }
   return null
+}
+
+function memoryWorkspacePath(): string | null {
+  const scope = getAgentScopeContext()
+  return scope && 'workspacePath' in scope ? scope.workspacePath || null : selectPrimaryWorkspacePath(useAppStore.getState())
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
@@ -717,7 +724,9 @@ export function registerBuiltinTools() {
       const statuses = args.includeCandidates === false
         ? (['active'] as const)
         : (['active', 'candidate'] as const)
-      const allMemories = await loadAllMemories(undefined, [...statuses])
+      const workspacePath = memoryWorkspacePath()
+      const allMemories = await loadMemories({ statuses: [...statuses], includeEmbedding: false,
+        scopeType: workspacePath ? 'project' : 'global', scopeKey: normalizeMemoryScopeKey('project', workspacePath) })
 
       // 分页处理
       const page = clampNumber(args.page, 1, 1000, 1)
@@ -944,7 +953,7 @@ export function registerBuiltinTools() {
       const batchEmbedding = isEmbeddingReady()
         ? async (texts: string[], signal?: AbortSignal) => getEmbeddingClient().batchEmbedding(texts, signal)
         : undefined
-      const workspacePath = selectPrimaryWorkspacePath(useAppStore.getState())
+      const workspacePath = context?.workspacePath === undefined ? memoryWorkspacePath() : context.workspacePath
       const memories = await searchMemories(args.query as string, {
         mode: 'strong',
         topK,
@@ -955,7 +964,18 @@ export function registerBuiltinTools() {
         embeddingModel: getEmbeddingConfig()?.embeddingModel,
         signal: context?.signal,
       })
-      return buildMemoryContext(memories) || '未找到相关记忆。'
+      const sourceDetails = await loadMemorySourceContext(memories, args.query as string)
+      const snapshot = buildMemoryContextWithSources(memories, sourceDetails ? 600 : 250, sourceDetails)
+      if (!snapshot.context) return '未找到相关记忆。'
+      const detailIndex = snapshot.context.indexOf('\n【原始用户记录，按来源 ID 补查】')
+      return JSON.stringify({ memories: snapshot.sources.map(source => {
+        const memory = memories.find(item => item.id === source.memoryId)!
+        const evidence = decodeMemoryEvidence(memory.evidence)
+        const recordedAt = evidence?.recordedAt ?? evidence?.occurredAt
+        return { ...source, category: memory.category, scopeType: memory.scopeType,
+          ...(evidence?.kind === 'episodic' && recordedAt ? { recordedAt: new Date(recordedAt).toISOString() } : {}) }
+      }),
+        ...(detailIndex >= 0 ? { sourceDetails: snapshot.context.slice(detailIndex) } : {}) })
     },
   })
 

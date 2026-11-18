@@ -28,7 +28,8 @@ import {
 import { buildCandidateTools } from './toolSelector'
 import type { AgentToolName } from './toolSelector'
 import { resolveAgentContextContinuation } from './session'
-import { classifyMemoryRetrievalIntent, isPersonalizedRewriteMemoryIntent } from '@/services/memory/memoryService'
+import { classifyMemoryRetrievalIntent } from '@/services/memory/memoryService'
+import { isMemorySatisfiedByCurrentContext } from '@/services/memory/memoryPolicy'
 import {
   LOCAL_RESEARCH_ANSWER_PROMPT,
   WEB_COMPARISON_ANSWER_PROMPT,
@@ -168,9 +169,11 @@ export function makeRoutingDecision(
   }
 
   // 记忆相关
-  const memoryIntent = classifyMemoryRetrievalIntent(content)
-  const personalizedRewriteMemory = isPersonalizedRewriteMemoryIntent(content)
-  const shouldLookupMemory = memoryIntent !== 'none' || personalizedRewriteMemory
+  const currentMemorySatisfied = !manualCapabilities.includes('memory') && isMemorySatisfiedByCurrentContext(content,
+    messages.filter(message => message.role === 'user' && !message.hidden && !message.sessionId)
+      .map(message => message.displayContent || message.content))
+  const memoryIntent = currentMemorySatisfied ? 'none' : classifyMemoryRetrievalIntent(content)
+  const shouldLookupMemory = memoryIntent !== 'none'
   const explicitMemoryWriteIntent = shouldAllowMemoryWrite(content)
 
   // 知识库检索
@@ -187,6 +190,10 @@ export function makeRoutingDecision(
     ...(inheritedAgentContext?.requiredCapabilities || []),
     ...intentResult.required,
   ]))
+  if (currentMemorySatisfied && !explicitMemoryWriteIntent) {
+    mergedCandidates = mergedCandidates.filter(capability => capability !== 'memory')
+    mergedRequired = mergedRequired.filter(capability => capability !== 'memory')
+  }
   if (isSectionReading) {
     mergedCandidates = mergedCandidates.filter((capability) => capability !== 'knowledge' && capability !== 'file_read')
     mergedRequired = mergedRequired.filter((capability) => capability !== 'knowledge' && capability !== 'file_read')
@@ -262,16 +269,18 @@ export function makeRoutingDecision(
 
   // 统计不同弱关键词数量（同一词触发多个 capability 只算一个）
   const weakKeywords = new Set<string>()
+  const weakCapabilities = new Set<Capability>()
   for (const s of intentResult.scores) {
     if (s.score > 0 && !s.isRequired) {
       for (const sig of s.signals) {
         if (sig.startsWith('weak:')) {
           weakKeywords.add(sig.slice(5))
+          weakCapabilities.add(s.capability)
         }
       }
     }
   }
-  const hasWeakCombo = weakKeywords.size >= 2
+  const hasWeakCombo = weakKeywords.size >= 2 && weakCapabilities.size >= 2
 
   const { mode, reasonCodes } = computeAgentMode(
     mergedCandidates,
@@ -289,6 +298,8 @@ export function makeRoutingDecision(
   }
 
   return {
+    ruleScores: intentResult.scores,
+    selectionSource: 'rules',
     mode,
     reasonCodes,
     candidates: mergedCandidates,

@@ -200,6 +200,7 @@ describe('MarkdownPreview 批注浮层', () => {
     const entry = host!.querySelector<HTMLElement>('[data-gm-reading-mark-id]')
     expect(entry).not.toBeNull()
     fireEvent.pointerOver(entry!)
+    act(() => vi.advanceTimersByTime(200))
     fireEvent.pointerOut(entry!, { relatedTarget: document.body })
     act(() => vi.advanceTimersByTime(599))
     expect(screen.getByRole('button', { name: '查看高亮批注' })).toBeInTheDocument()
@@ -207,6 +208,7 @@ describe('MarkdownPreview 批注浮层', () => {
     expect(screen.queryByRole('button', { name: '查看高亮批注' })).not.toBeInTheDocument()
 
     fireEvent.pointerOver(entry!)
+    act(() => vi.advanceTimersByTime(200))
     const reopenedTrigger = screen.getByRole('button', { name: '查看高亮批注' })
     const reopenedOverlay = reopenedTrigger.closest('[data-annotation-hover-overlay="true"]') as HTMLElement
     fireEvent.pointerOver(reopenedOverlay)
@@ -218,6 +220,37 @@ describe('MarkdownPreview 批注浮层', () => {
     act(() => vi.advanceTimersByTime(1))
     expect(screen.queryByRole('button', { name: '查看高亮批注' })).not.toBeInTheDocument()
     vi.useRealTimers()
+  })
+
+  it('经过相邻批注时保留原入口，停稳后才切换', () => {
+    vi.useFakeTimers()
+    const first = makeMark('hover-first', '第一段批注目标', '第一条')
+    const second = makeMark('hover-second', '第二段批注目标', '第二条')
+    const overlayRef = { current: null } as MutableRefObject<AnnotationHoverOverlayHandle | null>
+    render(<>
+      <MarkdownPreview content={content} documentKey="doc-hover" documentVersion={1} filePath={documentPath} readingMarks={[first, second]} annotationOverlayRef={overlayRef} />
+      <AnnotationHoverOverlay ref={overlayRef} onUpdate={async (mark, patch) => ({ ...mark, ...patch })} onDelete={async () => undefined} />
+    </>, { container: host! })
+    const entries = host!.querySelectorAll<HTMLElement>('[data-gm-reading-mark-id]')
+    fireEvent.pointerOver(entries[0], { clientX: 120, clientY: 140 })
+    act(() => vi.advanceTimersByTime(199))
+    expect(screen.queryByRole('button', { name: '查看文字批注' })).not.toBeInTheDocument()
+    act(() => vi.advanceTimersByTime(1))
+    fireEvent.pointerOut(entries[0], { relatedTarget: entries[1] })
+    fireEvent.pointerOver(entries[1], { clientX: 120, clientY: 120 })
+    act(() => vi.advanceTimersByTime(150))
+    fireEvent.pointerMove(entries[1], { clientX: 120, clientY: 110 })
+    act(() => vi.advanceTimersByTime(150))
+    const trigger = screen.getByRole('button', { name: '查看文字批注' })
+    fireEvent.pointerEnter(trigger.closest('[data-annotation-hover-overlay="true"]')!)
+    act(() => vi.advanceTimersByTime(200))
+    fireEvent.click(trigger)
+    expect(screen.getByRole('textbox', { name: '批注内容' })).toHaveValue('第一条')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.pointerOver(entries[1], { clientX: 120, clientY: 120 })
+    act(() => vi.advanceTimersByTime(200))
+    fireEvent.click(screen.getByRole('button', { name: '查看文字批注' }))
+    expect(screen.getByRole('textbox', { name: '批注内容' })).toHaveValue('第二条')
   })
 
   it('已有纯高亮 Hover 展开操作并支持二次确认删除', async () => {
@@ -276,17 +309,18 @@ describe('MarkdownPreview 批注浮层', () => {
       range.setEnd(textNode, offset)
       return range
     }
+    vi.mocked(Range.prototype.getClientRects).mockReturnValue([makeRect(100, 80, 180, 20), makeRect(160, 80, 180, 20)] as unknown as DOMRectList)
     render(<MarkdownPreview content={content} documentKey="doc-selection" documentVersion={1} filePath={documentPath} onCreateReadingMark={async () => ({ status: 'created' as const, mark: makeMark('created', '第一段批注目标', '新批注') })} />, { container: host! })
     const block = host!.querySelector<HTMLElement>('[data-md-block-index]')
     expect(block).not.toBeNull()
     fireEvent.mouseDown(block!, { button: 0, clientX: 4, clientY: 110 })
-    fireEvent.mouseUp(document, { clientX: 120, clientY: 110 })
+    fireEvent.mouseUp(document, { clientX: 120, clientY: 170 })
 
     const trigger = await waitFor(() => screen.getByRole('button', { name: '添加批注' }))
     const toolbar = trigger.closest('.gm-reading-mark-toolbar')
     expect(toolbar).not.toBeNull()
     expect(Number.parseFloat((toolbar as HTMLElement).style.left)).toBe(120)
-    expect(Number.parseFloat((toolbar as HTMLElement).style.top)).toBe(62)
+    expect(Number.parseFloat((toolbar as HTMLElement).style.top)).toBe(122)
     fireEvent.mouseEnter(toolbar!)
     expect(toolbar!.querySelector('.gm-reading-mark-toolbar-actions')?.className).toContain('is-expanded')
     fireEvent.mouseLeave(toolbar!)
@@ -297,6 +331,51 @@ describe('MarkdownPreview 批注浮层', () => {
     expect(toolbar!.querySelector('.gm-reading-mark-toolbar-actions')?.className).toContain('is-expanded')
     fireEvent.blur(trigger, { relatedTarget: document.body })
     expect(toolbar!.querySelector('.gm-reading-mark-toolbar-actions')?.className).not.toContain('is-expanded')
+  })
+
+  it.each([
+    ...[1, 2, 3, 4, 5, 6].map((level) => ({ level, padding: false })),
+    { level: 2, padding: true },
+    { level: 3, padding: true },
+  ])('从 $level 级标题拖选时滚动保留选区，随后仍可延伸并松手（页边距起点：$padding）', async ({ level, padding }) => {
+    const heading = '标题目标'
+    const body = '正文延伸目标'
+    const markdown = `${'#'.repeat(level)} ${heading}\n\n${body}`
+    const previewRef = { current: null } as MutableRefObject<MarkdownPreviewHandle | null>
+    const caretDocument = document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
+    caretDocument.caretRangeFromPoint = (x, y) => {
+      const textNode = host?.querySelector(y < 200 ? `h${level} span[data-gm-src-from]` : 'p span[data-gm-src-from]')?.firstChild
+      if (!textNode) return null
+      const range = document.createRange()
+      range.setStart(textNode, x < 50 ? 0 : (textNode.textContent?.length ?? 0))
+      range.collapse(true)
+      return range
+    }
+    render(<MarkdownPreview ref={previewRef} content={markdown} documentKey="doc-heading-drag" documentVersion={1} filePath={documentPath} readingMarks={emptyReadingMarks} onCreateReadingMark={vi.fn()} />, { container: host! })
+
+    const headingElement = host!.querySelector(`h${level}`)!
+    fireEvent.mouseDown(padding ? host! : headingElement, { button: 0, buttons: 1, clientX: 4, clientY: 110 })
+    fireEvent.mouseMove(document, { buttons: 1, clientX: 120, clientY: 110 })
+    await waitFor(() => expect(previewRef.current?.getSelection()?.text).toBe(heading))
+    const beforeScroll = previewRef.current!.getSelection()
+
+    fireEvent.wheel(host!, { deltaY: 100, buttons: 1 })
+    host!.scrollTop = 100
+    fireEvent.scroll(host!)
+    expect(previewRef.current?.getSelection()).toEqual(beforeScroll)
+    expect(screen.queryByRole('button', { name: '添加批注' })).not.toBeInTheDocument()
+
+    fireEvent.mouseMove(document, { buttons: 1, clientX: 120, clientY: 220 })
+    await waitFor(() => expect(previewRef.current?.getSelection()?.to).toBe(markdown.length))
+    expect(previewRef.current?.getSelection()?.from).toBe(markdown.indexOf(heading))
+    fireEvent.mouseUp(document, { button: 0, clientX: 120, clientY: 220 })
+    expect(previewRef.current?.getSelection()?.to).toBe(markdown.length)
+    expect(screen.getByRole('button', { name: '添加批注' })).toBeInTheDocument()
+
+    // 松手后的滚动仍关闭批注入口并清理临时选区。
+    fireEvent.scroll(host!)
+    expect(previewRef.current?.getSelection()).toBeNull()
+    expect(screen.queryByRole('button', { name: '添加批注' })).not.toBeInTheDocument()
   })
 
   it('纯代码块选区可转换为稳定快照并显示批注入口', async () => {
@@ -320,6 +399,34 @@ describe('MarkdownPreview 批注浮层', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: '添加批注' })).toBeInTheDocument())
     expect(previewRef.current?.getSelection()?.text).toBe('const')
+  })
+
+  it('拖选代码时靠近左右边缘会横向滚动', async () => {
+    const caretDocument = document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
+    caretDocument.caretRangeFromPoint = (x) => {
+      const text = host?.querySelector('code span[data-gm-src-from]')?.firstChild
+      if (!text) return null
+      const range = document.createRange()
+      range.setStart(text, x < 100 ? 0 : text.textContent!.length)
+      range.collapse(true)
+      return range
+    }
+    render(<MarkdownPreview content={codeContent} documentKey="doc-code-scroll" documentVersion={1} />, { container: host! })
+    const pre = host!.querySelector<HTMLElement>('.gm-code-block pre')!
+    const text = pre.querySelector('code span[data-gm-src-from]')!
+    Object.defineProperties(pre, {
+      clientWidth: { configurable: true, value: 200 },
+      scrollWidth: { configurable: true, value: 600 },
+    })
+    vi.spyOn(pre, 'getBoundingClientRect').mockReturnValue(makeRect(100, 0, 200, 80))
+    pre.scrollLeft = 100
+    fireEvent.mouseDown(text, { button: 0, clientX: 100, clientY: 120 })
+    fireEvent.mouseMove(document, { buttons: 1, clientX: 205, clientY: 120 })
+    await waitFor(() => expect(pre.scrollLeft).toBeGreaterThan(100))
+    const right = pre.scrollLeft
+    fireEvent.mouseMove(document, { buttons: 1, clientX: -5, clientY: 120 })
+    await waitFor(() => expect(pre.scrollLeft).toBeLessThan(right))
+    fireEvent.mouseUp(document, { button: 0, clientX: -5, clientY: 120 })
   })
 
   it('已有代码批注可在语法高亮 token 内恢复命中区域', async () => {

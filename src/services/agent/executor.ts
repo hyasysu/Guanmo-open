@@ -1,8 +1,10 @@
 import type { AgentConfig, AgentProgressStage, AgentStep, AgentResult, AgentRunRequest, RoutingDecision } from './types'
-import type { ChatMessage, ChatMessageSource, ReadingArtifactMessageReference } from '@/services/ai/types'
+import type { ChatMessageSource, ModelMessage, ReadingArtifactMessageReference } from '@/services/ai/types'
 import { getAiClient, isAiReady } from '@/services/ai/aiClient'
 import { getAllTools, getTool, getToolDescriptions, getToolsForLLM } from './toolRegistry'
 import { registerBuiltinTools } from './tools'
+import { allowsCoreReadQuery, qualifyAgentCoreReadTools, qualifyCandidates, qualifyTool } from './toolEligibility'
+import { currentToolEligibilityContext } from './toolEligibilityContext'
 import { normalizeActionMessage, parseToolCall, stripToolCallJson } from './toolCallParser'
 import {
   detectIntentScores,
@@ -39,7 +41,7 @@ import {
   LOCAL_RESEARCH_ANSWER_PROMPT,
   WEB_COMPARISON_ANSWER_PROMPT,
 } from './answerInstructions'
-import { markCurrentTurnStart, withContextOverflowRecovery } from '@/services/ai/contextBudget'
+import { markCurrentTurnStart, markCompactableReadGroup, withContextOverflowRecovery } from '@/services/ai/contextBudget'
 import { extractReadingArtifactReferences, mergeReadingArtifactReferences } from './readingArtifactReferences'
 import {
   finishAgentTrace,
@@ -130,6 +132,7 @@ actionMessage 必须是简短的单行行动说明，只描述接下来要做的
 1. 长期记忆是按需读取的数据源，不得把未检索到的信息当作不存在。
 2. 用户询问自己的地址、偏好、习惯、身份信息、长期目标、项目约定，或问"你记得我/之前告诉过你什么"时，必须先调用 search_memory，再根据结果回答。
 3. 对与用户背景无关的通用问答不得为了凑上下文调用 search_memory。
+4. 回答实际依据带来源编号的记忆时，使用对应 [S编号] 引用；未使用的记忆不要引用。
 
 知识库与文件读取的规则：
 1. search_knowledge 可以检索本地知识库中已索引的文档，即使目标文件当前未打开、未添加到聊天框上下文，也可以调用它查询和回答。
@@ -164,12 +167,8 @@ export function initAgent() {
 /**
  * Build the system prompt with tool descriptions.
  */
-function buildSystemPrompt(config: AgentConfig, toolNames?: readonly string[], customPreferencePrompt?: string): string {
-  const toolDesc = getToolDescriptions(toolNames)
-  const prompt = config.systemPrompt.replace('{{tool_descriptions}}', toolDesc)
-  const preference = customPreferencePrompt?.trim()
-  if (!preference) return prompt
-  return `${prompt}\n\n${CUSTOM_PROMPT_POLICY}\n\n【用户偏好层】\n${preference}`
+function buildSystemPrompt(config: AgentConfig): string {
+  return `${config.systemPrompt.replace('{{tool_descriptions}}', '本轮可用工具见后续消息和工具定义。')}\n\n${CUSTOM_PROMPT_POLICY}`
 }
 
 /**
@@ -271,6 +270,26 @@ function truncateWebSearchResult(text: string, maxLen: number): string {
 }
 
 function truncateToolResultForModel(toolName: string, text: string, maxLen: number): string {
+  if (toolName === 'search_memory' && text.length > maxLen) {
+    try {
+      const parsed = JSON.parse(text)
+      if (isPlainObject(parsed) && Array.isArray(parsed.memories)) {
+        // 保留合法 JSON，使来源只登记裁剪后真正提供给模型的内容。
+        while (JSON.stringify(parsed).length > maxLen) {
+          if (typeof parsed.sourceDetails === 'string' && parsed.sourceDetails.length) {
+            parsed.sourceDetails = parsed.sourceDetails.slice(0, -100)
+          } else if (parsed.memories.length > 1) {
+            parsed.memories.pop()
+          } else {
+            const memory = parsed.memories[0]
+            if (!isPlainObject(memory) || typeof memory.content !== 'string' || !memory.content.length) break
+            memory.content = Array.from(memory.content).slice(0, -50).join('')
+          }
+        }
+        return JSON.stringify(parsed)
+      }
+    } catch { /* 兼容旧版纯文本结果。 */ }
+  }
   if (toolName === 'search_knowledge') return truncateKnowledgeResult(text, maxLen)
   if (toolName === 'web_search') return truncateWebSearchResult(text, maxLen)
   return truncate(text, maxLen)
@@ -280,7 +299,7 @@ function resolveToolResultMaxChars(toolName: string): number {
   return getToolTokenBudget(toolName)
 }
 
-function buildFinalAnswerMessages(messages: ChatMessage[], finalInstruction?: string): ChatMessage[] {
+function buildFinalAnswerMessages(messages: ModelMessage[], finalInstruction?: string): ModelMessage[] {
   return [
     ...messages,
     {
@@ -293,7 +312,7 @@ function buildFinalAnswerMessages(messages: ChatMessage[], finalInstruction?: st
   ]
 }
 
-interface ToolExecutionResult {
+export interface ToolExecutionResult {
   result: string
   rawResult: string
   status: 'success' | 'timeout' | 'cancelled' | 'tool_error'
@@ -472,6 +491,18 @@ function extractWebSourcesFromResult(result: string): ChatMessageSource[] {
 }
 
 function extractSourcesFromToolResult(toolName: string, result: string): ChatMessageSource[] {
+  if (toolName === 'search_memory') {
+    try {
+      const parsed = JSON.parse(result)
+      if (!isPlainObject(parsed) || !Array.isArray(parsed.memories)) return []
+      return parsed.memories.flatMap((item): ChatMessageSource[] => (
+        isPlainObject(item) && typeof item.memoryId === 'string' && item.memoryId.trim()
+          && typeof item.content === 'string' && item.content.trim()
+          ? [{ kind: 'memory', memoryId: item.memoryId, content: item.content }]
+          : []
+      ))
+    } catch { return [] }
+  }
   if (toolName === 'search_knowledge') return extractKnowledgeSourcesFromResult(result)
   if (toolName === 'read_selection_context') return extractSelectionContextSourcesFromResult(result)
   if (toolName === 'read_context_file') return extractContextFileSourcesFromResult(result)
@@ -502,13 +533,21 @@ function annotateToolResultWithSourceReferences(
   result: string,
   registry: SourceReferenceRegistry,
 ): string {
-  if (!['search_knowledge', 'read_selection_context', 'read_context_file', 'web_search'].includes(toolName)) {
+  if (!['search_memory', 'search_knowledge', 'read_selection_context', 'read_context_file', 'web_search'].includes(toolName)) {
     return result
   }
 
   try {
     const parsed = JSON.parse(result)
     if (!isPlainObject(parsed)) return result
+
+    if (toolName === 'search_memory' && Array.isArray(parsed.memories)) {
+      return JSON.stringify({ ...parsed, memories: parsed.memories.map((item) => {
+        if (!isPlainObject(item)) return item
+        const source = extractSourcesFromToolResult(toolName, JSON.stringify({ memories: [item] }))[0]
+        return withSourceReferenceId(item, source ? findSourceReferenceId(registry, source) : undefined)
+      }) }, null, 2)
+    }
 
     if ((toolName === 'search_knowledge' || toolName === 'web_search') && Array.isArray(parsed.results)) {
       return JSON.stringify({
@@ -562,7 +601,7 @@ export function prepareAgentToolResultForModel(
 /**
  * 执行单个工具调用
  */
-async function executeTool(
+export async function executeTool(
   name: string,
   args: Record<string, unknown>,
   timeout: number,
@@ -570,10 +609,25 @@ async function executeTool(
   signal?: AbortSignal,
   onProgress?: (stage: AgentProgressStage) => void,
   diagnosticRunId?: string,
+  readScope?: { workspacePath: string | null },
 ): Promise<ToolExecutionResult> {
   const tool = getTool(name)
   if (!tool) {
     const result = `错误：工具 "${name}" 不存在。可用工具: ${getAllTools().map((t) => t.name).join(', ')}`
+    return { result, rawResult: result, status: 'tool_error' }
+  }
+
+  if (readScope && (!['search_memory', 'search_knowledge'].includes(name)
+    || tool.effect !== 'read' || tool.confirmationPolicy !== 'never')) {
+    const result = '工具调用被拒绝：普通聊天仅允许核心只读检索。'
+    return { result, rawResult: result, status: 'tool_error' }
+  }
+
+  const eligibility = qualifyTool(name, currentToolEligibilityContext(userIntent, readScope ? { contextTags: [] } : undefined))
+  if (eligibility !== 'available') {
+    const result = eligibility === 'needs_input'
+      ? '工具暂不可执行：缺少本轮授权的必要上下文，请用户补充目标。'
+      : '工具调用被拒绝：当前不可用或未获授权。'
     return { result, rawResult: result, status: 'tool_error' }
   }
 
@@ -601,13 +655,18 @@ async function executeTool(
     const result = '保存被拒绝：只有用户本轮明确要求记住或保存信息时，才能写入长期记忆。'
     return { result, rawResult: result, status: 'tool_error' }
   }
+  if (typeof args.query === 'string' && !allowsCoreReadQuery(name, args.query, userIntent)) {
+    const result = '工具调用被拒绝：本轮未要求读取敏感记忆。'
+    return { result, rawResult: result, status: 'tool_error' }
+  }
 
   const toolSpanId = startAgentTraceSpan(diagnosticRunId, 'tool', { tool: name })
   const diagnosticStartedAt = performance.now()
   let execution: Awaited<ReturnType<typeof runToolWithTimeout>>
   try {
     execution = await runToolWithTimeout(
-      toolSignal => tool.execute(args, { signal: toolSignal, onProgress }),
+      toolSignal => toolSignal.aborted ? Promise.reject(new DOMException('cancelled', 'AbortError'))
+        : tool.execute(args, { signal: toolSignal, onProgress, ...(readScope ? { workspacePath: readScope.workspacePath } : {}) }),
       timeout,
       signal,
     )
@@ -640,6 +699,9 @@ async function executeTool(
   const result = execution.value || ''
   try {
     const isRejectedResult = /^(?:错误：|参数 |修改被拒绝|替换失败|整文替换被拒绝|保存被拒绝)/.test(result.trim())
+    if (isReadTool(name) && (isRejectedResult || /^(?:读取被拒绝|读取[^\n：:]*失败)/.test(result.trim()))) {
+      return { result, rawResult: result, status: 'tool_error' }
+    }
     if (
       tool.confirmationPolicy === 'required'
       && !isPendingEditResult(result)
@@ -694,7 +756,8 @@ async function executeToolCalls(
     const readResults = await Promise.allSettled(
       regularReadCalls.map(async tc => {
         const cacheKey = buildToolCallKey(tc.name, tc.args)
-        const cached = readResultCache?.get(cacheKey)
+        const cached = qualifyTool(tc.name, currentToolEligibilityContext(userIntent)) === 'available'
+          ? readResultCache?.get(cacheKey) : undefined
         if (cached) {
           const reused = await cached
           return {
@@ -829,6 +892,7 @@ async function runAgentInternal({
   currentEditTargetCount = 0,
   candidateToolNames,
   hasPrefetchedMemoryLookup = false,
+  prefetchedMemory,
   signal,
   temperature,
   onStep,
@@ -890,7 +954,7 @@ async function runAgentInternal({
       })()
 
   // 构建候选工具 — 优先使用统一路由决策
-  const candidateTools = rd
+  const selectedTools = rd
     ? rd.candidateTools
     : (candidateToolNames && candidateToolNames.length > 0
       ? [...candidateToolNames] as AgentToolName[]
@@ -904,14 +968,21 @@ async function runAgentInternal({
       isDocumentRewrite
       && fbCtx.hasSelection
       && fbIntent.candidates.includes('selection_context')
-      && !candidateTools.includes('read_selection_context')
+      && !selectedTools.includes('read_selection_context')
     ) {
-      candidateTools.unshift('read_selection_context')
+      selectedTools.unshift('read_selection_context')
     }
-    if (isFileSummary && !candidateTools.includes('read_context_file')) {
-      candidateTools.unshift('read_context_file')
+    if (isFileSummary && !selectedTools.includes('read_context_file')) {
+      selectedTools.unshift('read_context_file')
     }
   }
+
+  const eligibilityContext = currentToolEligibilityContext(userIntent)
+  const coreFallback = qualifyAgentCoreReadTools(rd, userIntent, eligibilityContext)
+  const qualified = qualifyCandidates([...selectedTools, ...coreFallback], eligibilityContext)
+  const candidateTools = qualified.available
+  const needsInput = [...new Set([...(rd?.needsInputTools || []), ...qualified.needsInput])]
+  const hasBlockedTools = Boolean(rd?.blockedTools?.length || qualified.blocked.length)
 
   if (isDocumentRewrite && currentEditTargetCount === 0) {
     return {
@@ -940,14 +1011,21 @@ async function runAgentInternal({
   }
 
   // 构建系统提示
-  const activeToolNames = candidateTools.length > 0 ? candidateTools : undefined
-  const systemPrompt = buildSystemPrompt(mergedConfig, activeToolNames, customPreferencePrompt)
+  const activeToolNames = candidateTools
+  const systemPrompt = buildSystemPrompt(mergedConfig)
   const llmTools = candidateTools.length > 0 ? getToolsForLLM(activeToolNames) : []
 
   const contextMessage = buildUntrustedContextMessage(untrustedContext || '')
-  let messages: ChatMessage[] = [
+  const turnInstructions = [
+    activeToolNames.length ? `【本轮可用工具】\n${getToolDescriptions(activeToolNames)}` : '',
+    customPreferencePrompt?.trim() ? `【用户偏好层】\n${customPreferencePrompt.trim()}` : '',
+    needsInput.length ? '部分候选工具缺少本轮授权的必要输入；如回答依赖这些输入，请用户添加目标文件或选区。不得假装已读取或修改。' : '',
+    hasBlockedTools ? '部分候选工具当前不可用或未获授权；请说明限制，不得声称已检索、没有资料或已完成操作。' : '',
+  ].filter(Boolean).join('\n\n')
+  let messages: ModelMessage[] = [
     { role: 'system', content: systemPrompt },
     ...chatHistory,
+    ...(turnInstructions ? [{ role: 'user' as const, content: turnInstructions }] : []),
     ...(contextMessage ? [contextMessage] : []),
     ...(answerInstruction ? [{ role: 'user' as const, content: answerInstruction }] : []),
     { role: 'user', content: query },
@@ -957,16 +1035,37 @@ async function runAgentInternal({
   const steps: AgentStep[] = []
   let toolCalls = 0
   let editToolCalls = 0
-  let sourceRegistry = createSourceReferenceRegistry()
+  let sourceRegistry = createSourceReferenceRegistry(prefetchedMemory?.sources)
   let artifactReferences: ReadingArtifactMessageReference[] = []
   const calledToolNames: string[] = []
+  const successfulReadToolNames: string[] = []
+  const requiredReadCapabilities = mergedRequired.filter(capability => capability !== 'file_write' && capability !== 'action')
+  const requiresKnowledgeSearch = requiredReadCapabilities.includes('knowledge') && Boolean(rd?.ruleScores?.some(score =>
+    score.capability === 'knowledge' && score.signals.includes('classifier:knowledge_lookup')))
+  const countsAsReadEvidence = (name: string) => !requiresKnowledgeSearch || name !== 'list_database_contents'
+  const unmetReadCapabilities = () => checkRequiredCapabilities(requiredReadCapabilities, successfulReadToolNames.filter(countsAsReadEvidence))
+  let readRepairAttempted = false
   const selectionContextReadLevels = new Map<string, 1 | 2>()
   const readResultCache = new Map<string, Promise<ToolExecutionResult>>()
+  if (prefetchedMemory && !prefetchedMemory.categories?.length) {
+    const result: ToolExecutionResult = { result: prefetchedMemory.result, rawResult: prefetchedMemory.result, status: 'success' }
+    readResultCache.set(buildToolCallKey('search_memory', { query: prefetchedMemory.query, topK: prefetchedMemory.topK }), Promise.resolve(result))
+    if (prefetchedMemory.topK >= 5) {
+      readResultCache.set(buildToolCallKey('search_memory', { query: prefetchedMemory.query }), Promise.resolve(result))
+      readResultCache.set(buildToolCallKey('search_memory', { query: prefetchedMemory.query, topK: 5 }), Promise.resolve(result))
+    }
+  }
   const remainingDeadlineMs = () => Math.max(0, deadlineAt - Date.now())
   const sourceMetadata = () => ({
     sources: sourceRegistry.entries.map((entry) => entry.source),
     sourceRegistry,
     ...(artifactReferences.length ? { artifactReferences } : {}),
+  })
+  const incompleteReadResult = (): AgentResult => ({
+    answer: needsInput.length
+      ? '本轮缺少已授权的文件或选区，无法完成所需读取。请添加目标文件或选区后重试。'
+      : '本轮未能完成所需的检索或读取，无法根据资料回答。请检查工具配置或授权后重试。',
+    steps, toolCalls, reason: 'error', ...sourceMetadata(),
   })
   const rememberArtifactReferences = (name: string, result: string) => {
     const next = extractReadingArtifactReferences(name, result)
@@ -991,6 +1090,7 @@ async function runAgentInternal({
   if (hasPrefetchedMemoryLookup) {
     calledToolNames.push('search_memory')
   }
+  if (prefetchedMemory) successfulReadToolNames.push('search_memory')
 
   const pushStep = (step: AgentStep) => {
     steps.push(step)
@@ -1013,10 +1113,11 @@ async function runAgentInternal({
 
   const requestAgentCompletion = async () => {
     let hasPublishedContent = false
-    const send = async (currentMessages: ChatMessage[]) => {
+    const send = async (currentMessages: ModelMessage[]) => {
       if (signal?.aborted) throw new DOMException('Agent cancelled', 'AbortError')
       if (remainingDeadlineMs() <= 0) throw new DOMException('Agent deadline exceeded', 'TimeoutError')
       const canStreamAnswer = checkRequiredCapabilities(mergedRequired, calledToolNames).length === 0
+        && unmetReadCapabilities().length === 0
       const modelSpanId = startAgentTraceSpan(diagnosticRunId, 'model_request', {
         streaming: streamEnabled,
         messageCount: currentMessages.length,
@@ -1101,15 +1202,19 @@ async function runAgentInternal({
   }
 
   const repairUnmetReadCapabilities = async (): Promise<boolean> => {
-    if (remainingDeadlineMs() <= 0) return false
-    const unmetCapabilities = checkRequiredCapabilities(mergedRequired, calledToolNames)
+    if (remainingDeadlineMs() <= 0 || readRepairAttempted) return false
+    const unmetCapabilities = unmetReadCapabilities()
     const repairTools = getRepairTools(unmetCapabilities)
-      .filter((name) => candidateTools.includes(name))
+      .filter((name) => candidateTools.includes(name) && countsAsReadEvidence(name))
+    // Repair retrieval with the search itself, not the neighboring inventory tool.
+    const retrievalRepairTools = repairTools.filter(name =>
+      !(name === 'list_memories' && repairTools.includes('search_memory'))
+      && !(name === 'list_database_contents' && repairTools.includes('search_knowledge')))
     const prioritizedRepairTools = isFileSummary && repairTools.includes('read_context_file')
-      ? ['read_context_file' as AgentToolName]
+      ? ['read_context_file' as AgentToolName, ...retrievalRepairTools.filter(name => name !== 'read_context_file')]
       : repairTools.includes('read_selection_context')
-      ? ['read_selection_context' as AgentToolName]
-      : repairTools
+      ? ['read_selection_context' as AgentToolName, ...retrievalRepairTools.filter(name => name !== 'read_selection_context')]
+      : retrievalRepairTools
 
     const scopeContext = getAgentScopeContext()
     const scopeFilePath = scopeContext?.contextTags.find(
@@ -1123,6 +1228,7 @@ async function runAgentInternal({
     ))
 
     if (runnableRepairTools.length === 0) return false
+    readRepairAttempted = true
 
     pushStep({
       type: 'action',
@@ -1153,8 +1259,9 @@ async function runAgentInternal({
       diagnosticRunId,
     )
 
-    for (const { name, result, rawResult, executed } of repairResults) {
+    for (const { name, result, rawResult, executed, status } of repairResults) {
       rememberArtifactReferences(name, rawResult || result)
+      if (status === 'success' && isReadTool(name)) successfulReadToolNames.push(name)
       if (executed !== false) {
         calledToolNames.push(name)
         toolCalls++
@@ -1176,8 +1283,13 @@ async function runAgentInternal({
     return repairResults.length > 0
   }
 
-  // 如果没有候选工具，直接普通流式回复
+  if (unmetReadCapabilities().some(capability => checkRequiredCapabilities([capability], candidateTools.filter(countsAsReadEvidence)).length > 0)) {
+    return incompleteReadResult()
+  }
+
+  // 无读取任务且没有候选工具时，保持原普通回复。
   if (candidateTools.length === 0) {
+    if (unmetReadCapabilities().length || needsInput.length || hasBlockedTools) return incompleteReadResult()
     pushStep({
       type: 'thought',
       content: '无候选工具，直接普通回复',
@@ -1205,6 +1317,7 @@ async function runAgentInternal({
         steps,
         toolCalls: 0,
         reason: 'completed',
+        ...sourceMetadata(),
       }
     } catch (err) {
       if (signal?.reason === 'deadline' || remainingDeadlineMs() <= 0) return deadlineResult()
@@ -1226,6 +1339,7 @@ async function runAgentInternal({
       return { answer: '已取消本次 Agent 请求。', steps, toolCalls, reason: 'error', ...sourceMetadata() }
     }
     if (toolCalls >= mergedConfig.maxToolCalls && (!requiresEditConfirmation || editToolCalls > 0)) {
+      if (unmetReadCapabilities().length) return incompleteReadResult()
       return {
         answer: '',
         steps,
@@ -1241,7 +1355,8 @@ async function runAgentInternal({
 
     // Get AI response with timeout
     let content: string
-    const nativeToolCalls: Array<{ name: string; args: Record<string, unknown>; actionMessage?: string }> = []
+    const nativeToolCalls: Array<{ id?: string; name: string; args: Record<string, unknown>; actionMessage?: string }> = []
+    let nativeCallsComplete = false
 
     try {
       const response = await requestAgentCompletion()
@@ -1252,9 +1367,10 @@ async function runAgentInternal({
         const actionMessage = normalizeActionMessage(stripToolCallJson(content))
         for (const tc of response.toolCalls) {
           if (getTool(tc.name)) {
-            nativeToolCalls.push({ name: tc.name, args: tc.args, actionMessage })
+            nativeToolCalls.push({ id: tc.id, name: tc.name, args: tc.args, actionMessage })
           }
         }
+        nativeCallsComplete = nativeToolCalls.length === response.toolCalls.length
       }
     } catch (err) {
       if (signal?.reason === 'deadline' || remainingDeadlineMs() <= 0) return deadlineResult()
@@ -1275,7 +1391,7 @@ async function runAgentInternal({
     })
 
     // 解析工具调用（原生优先，JSON降级）
-    let parsedToolCalls: Array<{ name: string; args: Record<string, unknown>; rawJson?: string; actionMessage?: string }> = []
+    let parsedToolCalls: Array<{ id?: string; name: string; args: Record<string, unknown>; rawJson?: string; actionMessage?: string }> = []
 
     if (nativeToolCalls.length > 0) {
       parsedToolCalls = nativeToolCalls.map(tc => ({ ...tc, rawJson: undefined }))
@@ -1304,6 +1420,7 @@ async function runAgentInternal({
     if (parsedToolCalls.length === 0) {
       const repaired = !requiresEditConfirmation && await repairUnmetReadCapabilities()
       if (repaired) continue
+      if (unmetReadCapabilities().length) return incompleteReadResult()
 
       // 检查是否需要编辑确认
       if (requiresEditConfirmation && editToolCalls === 0) {
@@ -1388,6 +1505,7 @@ async function runAgentInternal({
     // 记录调用的工具
     for (const toolResult of toolResults) {
       const { name } = toolResult
+      if (toolResult.status === 'success' && isReadTool(name)) successfulReadToolNames.push(name)
       const executed = toolResult.executed !== false
       if (executed) {
         calledToolNames.push(name)
@@ -1396,6 +1514,35 @@ async function runAgentInternal({
       if (executed && name === 'replace_current_tab_text') {
         editToolCalls++
       }
+    }
+
+    // Only use native protocol when every call has an unambiguous result and provider ID.
+    const ids = parsedToolCalls.map(call => call.id)
+    const nativeResultIds = new Map<string, string[]>()
+    const canUseNative = client.agentToolResultMode !== 'text' && nativeCallsComplete && disallowedToolCalls.length === 0
+      && ids.every((id): id is string => typeof id === 'string' && Boolean(id.trim())) && new Set(ids).size === ids.length
+      && toolResults.length === parsedToolCalls.length
+      && parsedToolCalls.every(call => {
+        const matching = nativeResultIds.get(call.name) || []
+        matching.push(call.id!)
+        nativeResultIds.set(call.name, matching)
+        return true
+      }) && toolResults.every(result => (nativeResultIds.get(result.name)?.length || 0) > 0
+        && Boolean(nativeResultIds.get(result.name)!.shift()))
+    if (canUseNative) {
+      nativeResultIds.clear()
+      for (const call of parsedToolCalls) {
+        const matching = nativeResultIds.get(call.name) || []
+        matching.push(call.id!)
+        nativeResultIds.set(call.name, matching)
+      }
+      const callMessage: ModelMessage = { role: 'assistant', content, tool_calls: parsedToolCalls.map(call => ({
+        id: call.id!, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.args) },
+      })) }
+      if (toolResults.every(result => isReadTool(result.name) && result.status === 'success')) {
+        markCompactableReadGroup(callMessage)
+      }
+      messages.push(callMessage)
     }
 
     // 添加工具结果到消息
@@ -1412,6 +1559,10 @@ async function runAgentInternal({
         ? result
         : truncateToolResultForModel(name, rawResult || result, resolveToolResultMaxChars(name))
       const visibleModelResult = prepareVisibleToolResult(name, modelResult)
+      if (canUseNative) {
+        messages.push({ role: 'tool', tool_call_id: nativeResultIds.get(name)!.shift()!, content: visibleModelResult })
+        continue
+      }
       messages.push({
         role: 'assistant',
         content: reused ? `复用本轮工具结果: ${name}` : executed === false ? `未执行工具: ${name}` : `调用工具: ${name}`,
@@ -1434,6 +1585,7 @@ async function runAgentInternal({
 
   // 达到最大步数，检查强依赖
   if (await repairUnmetReadCapabilities()) {
+    if (unmetReadCapabilities().length) return incompleteReadResult()
     return {
       answer: '',
       steps,
@@ -1445,6 +1597,7 @@ async function runAgentInternal({
   }
 
   // 正常结束
+  if (unmetReadCapabilities().length) return incompleteReadResult()
   if (toolCalls > 0) {
     return {
       answer: '',

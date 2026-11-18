@@ -42,6 +42,25 @@ function baseRow(overrides: Partial<ReadingArtifactRow> = {}): ReadingArtifactRo
 }
 
 describe('decodeReadingArtifact', () => {
+  it('filters displayed saved sources by citations while preserving the complete snapshot', () => {
+    const sources = [{ kind: 'memory', memoryId: 'first', content: '汉堡偏好' },
+      { kind: 'memory', memoryId: 'second', content: '语言偏好' }]
+    const artifact = decodeReadingArtifact(baseRow({ structured_content: JSON.stringify({
+      references: sources, sourceCandidates: sources, referencedSourceIds: ['S1'],
+    }) }))
+    expect(getReadingArtifactReferences(artifact, true)).toEqual([sources[0]])
+    expect(getReadingArtifactReferences(artifact)).toEqual(sources)
+    const legacy = decodeReadingArtifact(baseRow({ structured_content: JSON.stringify({ references: sources }) }))
+    expect(getReadingArtifactReferences(legacy, true)).toEqual(sources)
+  })
+  it('round-trips memory references as independent content snapshots without document anchors', () => {
+    const memory = { kind: 'memory' as const, memoryId: 'anonymous-memory', content: '默认中文回答' }
+    const references = buildReadingArtifactReferences([memory, { ...memory }])
+    expect(references).toEqual([memory])
+    const artifact = decodeReadingArtifact(baseRow({ structured_content: JSON.stringify(mergeReadingArtifactReferencesMetadata(null, references)) }))
+    memory.content = '后续已修改'
+    expect(getReadingArtifactReferences(artifact)).toEqual([{ kind: 'memory', memoryId: 'anonymous-memory', content: '默认中文回答' }])
+  })
   it('解码有效行：含来源锚点、结构化字段与时间戳归一', () => {
     const artifact = decodeReadingArtifact(baseRow({
       structured_content: '{"points":["要点A"]}',

@@ -23,6 +23,15 @@ const selectionTag: ContextTag = {
 }
 
 describe('AI chat orchestration helpers', () => {
+  it('registers model-visible memories from tool results and reuses their IDs', () => {
+    const memory = { kind: 'memory' as const, memoryId: 'anonymous-memory', content: '偏好简洁回答' }
+    const first = prepareAgentToolResultForModel(createSourceReferenceRegistry(), 'search_memory', JSON.stringify({ memories: [memory] }))
+    expect(first.registry.entries).toEqual([{ id: 'S1', source: memory }])
+    expect(JSON.parse(first.result).memories[0].referenceId).toBe('[S1]')
+    const second = prepareAgentToolResultForModel(first.registry, 'search_memory', JSON.stringify({ memories: [memory] }))
+    expect(second.registry.entries).toHaveLength(1)
+    expect(prepareAgentToolResultForModel(first.registry, 'search_memory', '未找到相关记忆。').registry).toEqual(first.registry)
+  })
   it('registers only model-visible Agent sources with stable IDs across tool calls', () => {
     const first = prepareAgentToolResultForModel(
       createSourceReferenceRegistry(),
@@ -118,7 +127,9 @@ describe('AI chat orchestration helpers', () => {
       messages: [],
       contextTags: [selectionTag],
       tagContext: '【当前上下文】匿名内容',
-      memoryContext: '',
+      memoryContext: '【长期记忆】\n[记忆 1]\n分类：偏好\n内容：简洁回答',
+      prefetchedMemory: { query: '翻译并替换原文', result: '简洁回答', topK: 3,
+        sources: [{ kind: 'memory', memoryId: 'anonymous', content: '简洁回答' }] },
       routingDecision,
       hasRecentEditContext: false,
       hasPrefetchedMemoryLookup: false,
@@ -134,6 +145,7 @@ describe('AI chat orchestration helpers', () => {
     expect(built.request.currentEditTargetCount).toBe(1)
     expect(built.request.hasCurrentEditTarget).toBe(true)
     expect(built.request.untrustedContext).toContain('targetId: edit-target-1')
+    expect(built.request.untrustedContext).toContain('[S1]\n分类：偏好\n内容：简洁回答')
   })
 
   it('maps Agent result sources and final messages without changing user-visible text', () => {

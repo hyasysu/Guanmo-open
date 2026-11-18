@@ -6,8 +6,8 @@ import { selectPrimaryWorkspacePath, useAppStore } from '@/stores/appStore'
 import { getAiClient, getEmbeddingClient, getEmbeddingConfig, initAiClient, initEmbeddingClient, isAiReady, isEmbeddingReady, isLocalApi } from '@/services/ai/aiClient'
 import { SYSTEM_TEMPERATURE, type ChatMessage } from '@/services/ai/types'
 import { initAgent, runAgent } from '@/services/agent'
-import type { AgentStep, AgentTaskContext } from '@/services/agent/types'
-import type { SourceReferenceRegistry } from '@/services/ai/sourceReferences'
+import type { AgentRunRequest, AgentStep, AgentTaskContext } from '@/services/agent/types'
+import { annotateMemoryContext, registerSourceReferences, type SourceReferenceRegistry } from '@/services/ai/sourceReferences'
 import { createAgentTaskContext, decodeAgentStepEvent, decodeKnowledgeSearchOutcome } from '@/services/agent/session'
 import { createActionProposal } from '@/services/agent/actionProposal'
 import type { ContextTag } from '@/types/contextTag'
@@ -16,13 +16,27 @@ import { setAgentScopeContext } from '@/services/aiScope'
 import { resolveDirectRagSources, searchScopedKnowledge, shouldTriggerScopedRag, streamFinalAnswer } from '@/services/aiChatFlow'
 import { buildAgentFinalAnswerMessages, buildChatMessageTags, buildMessagesForModel, buildSupplementalAiContext, countRagSourcesInContext, createContextMeta, createUserChatMessage, prepareChatHistoryForModel, resolveAiAnswerMode } from '@/services/aiChatMessages'
 import { hideLikelyToolJsonPrefix, stripToolCallJson } from '@/services/agent/toolCallParser'
-import { buildMemoryContext, isPersonalizedRewriteMemoryIntent, processMemoryCandidateExtraction, searchMemories } from '@/services/memory/memoryService'
+import { buildMemoryContextWithSources, isPersonalizedRewriteMemoryIntent, loadMemorySourceContext, searchMemories } from '@/services/memory/memoryService'
+import { scheduleGlobalWindowExtraction, setWindowSchedulerForegroundBusy } from '@/services/memory/memoryWindowScheduler'
+import { persistGlobalMemoryMessage } from '@/services/memory/memoryIntake'
+import { persistChatMessage } from '@/services/database/persistence'
+import { getDatabase, isDatabaseReady } from '@/services/database/db'
+import { normalizeMemoryScopeKey } from '@/services/memory/memoryPolicy'
 import type { ManualCapability } from '@/components/ai/ManualToolToggle'
 import { ensureSettingsSecretsHydrated } from '@/services/settingsSecrets'
+import { isWebRuntime } from '@/services/runtimeCapabilities'
+import { encodeChatMessageMetadata } from '@/stores/chatStore'
 import { singletonManager, SINGLETON_IDS } from '@/services/singletonPromise'
 import { promoteTask } from '@/services/idleScheduler'
 import { prepareConversationContext, prepareConversationRouting } from '@/services/agent/conversationRequest'
-import { buildAgentRunRequest } from '@/services/agent/requestBuilder'
+import { buildAgentRunRequest, buildEditTargets, buildRoutingAppContext } from '@/services/agent/requestBuilder'
+import { resolveRouterConfig } from '@/services/agent/routerConfig'
+import { resolveSemanticRouting, semanticRoutingTriggers } from '@/services/agent/semanticRouter'
+import { routingModelChat } from '@/services/agent/routingModel'
+import { qualifyAgentCoreReadTools, qualifyCandidates, qualifyTool } from '@/services/agent/toolEligibility'
+import { currentToolEligibilityContext } from '@/services/agent/toolEligibilityContext'
+import { recordRoutingMetric } from '@/services/agent/routingDiagnostics'
+import { recordDirectChatMetric, streamDirectChat } from '@/services/agent/directChat'
 import {
   buildScopedAgentResultPresentation,
   resolveAgentAnswerSources,
@@ -154,12 +168,13 @@ export function useAiChat() {
   const cancelRef = useRef<() => void>(() => {})
   const activeRequestRef = useRef<{ id: string; assistantMessageId: string; cancelled: boolean } | null>(null)
 
-  const ensureClient = useCallback(async (): Promise<boolean> => {
+  const ensureClient = useCallback(async (isCurrentRequest: () => boolean): Promise<boolean> => {
     try {
       await ensureSettingsSecretsHydrated()
     } catch (err) {
       console.warn('[AI] Settings secret hydration retry failed:', err)
     }
+    if (!isCurrentRequest()) return false
     const currentAi = useSettingsStore.getState().ai
 
     // 初始化对话客户端（本地 API 无需 apiKey）
@@ -179,17 +194,20 @@ export function useAiChat() {
               return provider
             })
           }
+          if (!isCurrentRequest()) return false
           if (!isAiReady() || configKey !== lastConfigRef.current) {
             initAiClient(currentAi)
             lastConfigRef.current = configKey
           }
         } catch (err) {
+          if (!isCurrentRequest()) return false
           const msg = err instanceof Error ? err.message : String(err)
           setError(`AI 初始化失败：${msg}`)
         }
       }
     }
 
+    if (!isCurrentRequest()) return false
     // 初始化 embedding 客户端（独立配置，本地 API 无需 apiKey）
     const emb = currentAi.embedding
     const embReady = ((emb && hasApiCredential(emb)) || isLocalApi(emb?.baseUrl || '')) && emb?.baseUrl && emb?.embeddingModel
@@ -209,6 +227,7 @@ export function useAiChat() {
               return initEmbeddingClient(emb)
             })
           }
+          if (!isCurrentRequest()) return false
           if (!isEmbeddingReady() || embeddingConfigChanged) initEmbeddingClient(emb)
         } catch (err) {
           console.warn('[AI] Embedding client init failed:', err)
@@ -216,6 +235,7 @@ export function useAiChat() {
       }
     }
 
+    if (!isCurrentRequest()) return false
     if (!isAiReady()) {
       setError('请先在设置中配置 API Key 或选择本地模型（如 Ollama）')
       return false
@@ -227,6 +247,7 @@ export function useAiChat() {
   const cancelStream = useCallback(() => {
     cancelRef.current()
     setStreaming(false)
+    setWindowSchedulerForegroundBusy(false)
   }, [setStreaming])
 
   const sendMessage = useCallback(
@@ -234,14 +255,20 @@ export function useAiChat() {
       const hasText = content.trim().length > 0
       const hasTags = contextTags && contextTags.length > 0
       if ((!hasText && !hasTags) || useChatStore.getState().streaming) return
+      const requestStartedAt = performance.now()
       setStreaming(true)
+      setWindowSchedulerForegroundBusy(true)
       setError(null)
       clearTimeline()
       const requestId = `ai-request-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
       const assistantMessageId = `assistant-${requestId}`
       const requestController = new AbortController()
+      const requestSessionId = useChatStore.getState().currentSessionId
+      const requestWorkspaceKey = normalizeMemoryScopeKey('project', workspacePath)
       activeRequestRef.current = { id: requestId, assistantMessageId, cancelled: false }
       const isCurrentRequest = () => activeRequestRef.current?.id === requestId && !activeRequestRef.current.cancelled
+        && useChatStore.getState().currentSessionId === requestSessionId
+        && normalizeMemoryScopeKey('project', selectPrimaryWorkspacePath(useAppStore.getState())) === requestWorkspaceKey
       const updateRequestMessage = (nextContent: string) => {
         if (isCurrentRequest()) updateMessageContent(assistantMessageId, nextContent)
       }
@@ -252,9 +279,11 @@ export function useAiChat() {
         requestController.abort('user_cancelled')
         removeMessageById(assistantMessageId)
         setStreaming(false)
+        setWindowSchedulerForegroundBusy(false)
       }
 
       const initialUserMessage = createUserChatMessage(content, '', buildChatMessageTags(contextTags))
+      const memorySourceSessionId = useChatStore.getState().currentSessionId
       if (hasTags) initialUserMessage.displayContent = content.trim()
       addMessage(initialUserMessage)
       addMessage({
@@ -264,8 +293,49 @@ export function useAiChat() {
         content: hasTags ? '正在读取上下文...' : '正在准备 AI 请求...',
         timestamp: Date.now(),
       })
+      const persistAcceptedGlobalMessage = async () => {
+        if (isWebRuntime()) return
+        const message = initialUserMessage
+        const title = (message.displayContent || message.content).slice(0, 30).replace(/\n/g, ' ') || '新对话'
+        if (!useSettingsStore.getState().knowledge.autoMemoryExtractionEnabled) {
+          if (!isDatabaseReady()) throw new Error('memory_intake_database_not_ready')
+          const now = Math.floor(Date.now() / 1000)
+          await getDatabase().execute(`INSERT INTO chat_sessions (id, title, created_at, updated_at)
+            VALUES ($1, $2, $3, $3) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at`,
+          [memorySourceSessionId, title, now])
+          await persistChatMessage({
+            id: message.id!, sessionId: memorySourceSessionId, role: 'user', content: message.content,
+            metadata: encodeChatMessageMetadata(message), createdAt: message.timestamp!,
+          })
+          return
+        }
+        await persistGlobalMemoryMessage({ id: memorySourceSessionId, title }, {
+          id: message.id!, sessionId: memorySourceSessionId, content: message.content,
+          metadata: encodeChatMessageMetadata(message), createdAt: message.timestamp!,
+        })
+        try {
+          await scheduleGlobalWindowExtraction(message.id!, memorySourceSessionId,
+            { chat: request => routingModelChat(resolveRouterConfig(ai.routing).model || ai.chatModel, request) })
+        } catch (scheduleError) {
+          console.warn('[Memory] global intake scheduling deferred to recovery', scheduleError instanceof Error ? scheduleError.message : scheduleError)
+        }
+      }
       if (contextTags && contextTags.length > 0) {
         addTimelineItem({ type: 'local_search_start', label: '正在读取上下文' })
+      }
+      try {
+        await persistAcceptedGlobalMessage()
+      } catch (persistError) {
+        console.error('[Chat] accepted message was not persisted', persistError instanceof Error ? persistError.message : persistError)
+        if (isCurrentRequest()) {
+          setError('消息未能安全保存，请重试后再发送。')
+          removeMessageById(assistantMessageId)
+          activeRequestRef.current = null
+          cancelRef.current = () => {}
+          setStreaming(false)
+          setWindowSchedulerForegroundBusy(false)
+        }
+        return
       }
       let preparedContext: Awaited<ReturnType<typeof prepareConversationContext>>
       try {
@@ -282,23 +352,37 @@ export function useAiChat() {
           activeRequestRef.current = null
           cancelRef.current = () => {}
           setStreaming(false)
+          setWindowSchedulerForegroundBusy(false)
         }
         return
       }
-      if (!isCurrentRequest()) return
       const { tagContext, tagMetadata } = preparedContext
       const userMsg = { ...preparedContext.userMessage, id: initialUserMessage.id, timestamp: initialUserMessage.timestamp }
+      const persistAndQueueMemory = async () => {
+        if (useChatStore.getState().currentSessionId !== memorySourceSessionId) return
+        await useChatStore.getState().saveCurrentSession()
+      }
       updateMessageContent(initialUserMessage.id!, userMsg.content)
+      if (!isCurrentRequest()) {
+        if (activeRequestRef.current?.id === requestId) setWindowSchedulerForegroundBusy(false)
+        return
+      }
       updateRequestMessage('正在准备 AI 请求...')
       setRagStatus('idle')
       setRagSources([])
 
       updateRequestMessage('正在读取 AI 配置...')
-      if (!(await ensureClient())) {
+      const clientReady = await ensureClient(isCurrentRequest)
+      if (!isCurrentRequest()) {
+        if (activeRequestRef.current?.id === requestId) setWindowSchedulerForegroundBusy(false)
+        return
+      }
+      if (!clientReady) {
         removeMessageById(assistantMessageId)
         activeRequestRef.current = null
         cancelRef.current = () => {}
         setStreaming(false)
+        setWindowSchedulerForegroundBusy(false)
         return
       }
       updateRequestMessage('正在初始化模型连接...')
@@ -310,7 +394,9 @@ export function useAiChat() {
       const hasRecentEditContext = Boolean(latestVisibleAssistant?.editConfirmation)
 
       // 统一路由决策（一次性生成，消除 useAiChat 与 executor 的重复判断）
-      const routingDecision = prepareConversationRouting({
+      const routerConfig = resolveRouterConfig(ai.routing)
+      const routingStartedAt = routerConfig.diagnostics ? performance.now() : 0
+      let routingDecision = prepareConversationRouting({
         content,
         contextTags,
         forceAgent,
@@ -320,15 +406,55 @@ export function useAiChat() {
         messages,
       })
 
+      const routingContext = buildRoutingAppContext(contextTags, hasRecentEditContext)
+      const triggers = semanticRoutingTriggers(content, routingDecision, routingContext, routerConfig,
+        messages.some(message => !message.hidden && message.role !== 'system'))
+      let semanticStatus: Awaited<ReturnType<typeof resolveSemanticRouting>>['status'] | undefined
+      if (triggers.length > 0) {
+        initAgent() // One-time registration; never initialize on an ordinary Direct request.
+        if (isCurrentRequest()) addTimelineItem({ type: 'local_search_start', label: '模型辅助判断' })
+        const semantic = await resolveSemanticRouting({
+          query: content, original: routingDecision, context: routingContext,
+          config: routerConfig, signal: requestController.signal,
+          chat: request => routingModelChat(routerConfig.model, request),
+        })
+        if (!isCurrentRequest()) return
+        routingDecision = semantic.decision
+        semanticStatus = semantic.status
+      }
+      if (routingDecision.mode === 'agent' || routingDecision.shouldLookupMemory) {
+        initAgent()
+        const qualificationContext = currentToolEligibilityContext(content, {
+          contextTags: contextTags || [], editTargets: buildEditTargets(contextTags),
+        })
+        const qualified = qualifyCandidates([
+          ...routingDecision.candidateTools,
+          ...qualifyAgentCoreReadTools(routingDecision, content, qualificationContext),
+        ], qualificationContext)
+        routingDecision = {
+          ...routingDecision, candidateTools: qualified.available, needsInputTools: qualified.needsInput, blockedTools: qualified.blocked,
+          shouldLookupMemory: routingDecision.shouldLookupMemory
+            && qualifyTool('search_memory', qualificationContext) === 'available',
+        }
+      }
+      if (routerConfig.diagnostics) recordRoutingMetric({
+        source: routingDecision.selectionSource || 'rules', mode: routingDecision.mode,
+        durationMs: performance.now() - routingStartedAt, trigger: triggers,
+        status: semanticStatus, candidateCount: routingDecision.candidateTools.length,
+      })
+
       const selectionRequestKind = routingDecision.selectionRequestKind
       const candidateToolNames = routingDecision.candidateTools
       const mergedCandidates = routingDecision.candidates
       const mergedRequired = routingDecision.required
       const useAgentMode = routingDecision.mode === 'agent'
+      if (isCurrentRequest()) addTimelineItem({ type: 'local_search_found',
+        label: useAgentMode ? 'Agent 流程 · 处理复杂任务' : '普通请求 · 快速回答问题' })
 
       // --- 记忆预检索 ---
       let memoryContext = ''
       let memoryLookupAttempted = false
+      let prefetchedMemory: AgentRunRequest['prefetchedMemory']
       const memoryIntent = routingDecision.memoryIntent
       const personalizedRewriteMemory = isPersonalizedRewriteMemoryIntent(content.trim())
       const shouldLookupMemory = routingDecision.shouldLookupMemory
@@ -364,8 +490,14 @@ export function useAiChat() {
             signal: requestController.signal,
           })
           if (!isCurrentRequest()) return
-          memoryContext = buildMemoryContext(memories)
-          memoryLookupAttempted = memoryIntent === 'strong' || Boolean(memoryContext)
+          const sourceDetails = await loadMemorySourceContext(memories, content)
+          if (!isCurrentRequest()) return
+          const memorySnapshot = buildMemoryContextWithSources(memories, sourceDetails ? 600 : 250, sourceDetails)
+          memoryContext = memorySnapshot.context
+          memoryLookupAttempted = true
+          prefetchedMemory = { query: content.trim(), result: memoryContext || '未找到相关记忆。',
+            topK: memoryIntent === 'strong' ? 10 : 3, categories: personalizedRewriteMemory ? ['preference', 'instruction'] : undefined,
+            sources: memorySnapshot.sources }
           if (memoryIntent === 'strong' && !memoryContext) {
             memoryContext = '系统已按需检索长期记忆：未找到相关长期记忆。'
           }
@@ -379,13 +511,11 @@ export function useAiChat() {
         } catch (err) {
           console.warn('[Memory] retrieval failed:', err)
           if (!isCurrentRequest()) return
-          if (memoryIntent === 'strong') {
-            memoryContext = '系统已按需检索长期记忆：未找到相关长期记忆。'
-            memoryLookupAttempted = true
-          }
+          memoryContext = '长期记忆检索失败；这不代表没有相关记忆。仅依据本轮已提供的信息回答，不得编造个人历史。'
+          memoryLookupAttempted = true
           addAgentStep({
             type: 'observation',
-            content: '未检索到相关长期记忆',
+            content: '长期记忆检索失败，已降级继续回答',
             timestamp: Date.now(),
           })
         }
@@ -510,6 +640,7 @@ export function useAiChat() {
               const proposal = createActionProposal(event.pendingAction, {
                 id: `action-${Date.now()}-${pendingActionCount}`,
                 messageId: targetMessageId,
+                memoryScopeKey: normalizeMemoryScopeKey('project', workspacePath),
               })
               useChatStore.getState().updateMessageActionProposal(targetMessageId, proposal)
             }
@@ -526,6 +657,7 @@ export function useAiChat() {
             routingDecision,
             hasRecentEditContext,
             hasPrefetchedMemoryLookup: memoryLookupAttempted,
+            prefetchedMemory,
             signal: requestController.signal,
             temperature: SYSTEM_TEMPERATURE.agentPlanning,
             streamEnabled: ai.streamEnabled,
@@ -542,7 +674,7 @@ export function useAiChat() {
         const { editTargets, originalRequest: contextOriginalRequest } = agentRequest
 
         try {
-          setAgentScopeContext({ contextTags: contextTags || [], editTargets })
+          setAgentScopeContext({ contextTags: contextTags || [], editTargets, workspacePath })
           const result = await runAgent({ ...agentRequest.request, diagnosticRunId: agentDiagnosticRunId })
           diagnosticReason = result.reason
           diagnosticToolCalls = result.toolCalls
@@ -624,15 +756,7 @@ export function useAiChat() {
           addTimelineItem({ type: 'done', label: '生成回答完成' })
           // 异步提取候选记忆（Agent 模式）
           if (isCurrentRequest()) {
-            const allMsgs = useChatStore.getState().messages
-            const agentClient = getAiClient()
-            processMemoryCandidateExtraction(allMsgs, agentClient, SYSTEM_TEMPERATURE.memoryExtract, { triggerReason: 'agent_completed', workspacePath }).catch((err) =>
-              console.warn('[Memory] extraction failed:', err)
-            )
-            // 自动保存会话到数据库
-            useChatStore.getState().saveCurrentSession().catch((err) =>
-              console.warn('[Chat] auto-save failed:', err)
-            )
+            persistAndQueueMemory().catch(() => console.warn('[Chat] session or memory queue persistence failed'))
           }
         } catch (err) {
           diagnosticStatus = 'error'
@@ -659,11 +783,12 @@ export function useAiChat() {
             requestController.signal.aborted ? 'cancelled' : diagnosticStatus,
             { reason: diagnosticReason, toolCalls: diagnosticToolCalls, stepCount: diagnosticStepCount },
           )
-          setAgentScopeContext(null)
           if (activeRequestRef.current?.id === requestId) {
+            setAgentScopeContext(null)
             activeRequestRef.current = null
             cancelRef.current = () => {}
             setStreaming(false)
+            setWindowSchedulerForegroundBusy(false)
           }
         }
       }
@@ -677,9 +802,12 @@ export function useAiChat() {
       const client = activeClient
       let ragContext = ''
       let directRagRegistry: SourceReferenceRegistry = { entries: [] }
+      let directKnowledgeChunks: Array<{ id: string; contentHash?: string | null }> = []
 
       // --- 轻量 RAG：仅在规则放行时检索已添加的 ContextTag 文件 ---
-      const shouldRag = shouldTriggerScopedRag(content.trim(), contextTags || [])
+      const shouldRag = routingDecision.selectionSource === 'semantic'
+        ? routingDecision.shouldLookupKnowledge
+        : shouldTriggerScopedRag(content.trim(), contextTags || [])
 
       if (shouldRag) {
         updateRequestMessage('正在检索本地知识库...')
@@ -728,6 +856,7 @@ export function useAiChat() {
           } else if (scopedKnowledge.status === 'found') {
             ragContext = scopedKnowledge.context
             directRagRegistry = scopedKnowledge.sourceRegistry
+            directKnowledgeChunks = scopedKnowledge.includedChunks || []
             setRagSources(scopedKnowledge.sources)
             setRagStatus('found')
             addTimelineItem({ type: 'local_search_found', label: '命中本地资料', detail: `${scopedKnowledge.sources.length} 个片段` })
@@ -747,10 +876,17 @@ export function useAiChat() {
         }
       }
 
-      // 注入 RAG 上下文和 Memory 上下文
+      const ragMessageSources = directRagRegistry.entries.map((entry) => entry.source)
+      const tagMessageSources = routingDecision.readingScope === 'selection'
+        ? toContextTagSources(contextTags || [])
+        : []
+      const messageSources = [...(ragMessageSources.length > 0 ? ragMessageSources : tagMessageSources), ...(prefetchedMemory?.sources || [])]
+      directRagRegistry = registerSourceReferences(directRagRegistry, messageSources)
+
+      // 注入 RAG 上下文和 Memory 上下文，共用消息来源编号。
       const injectedContext = buildSupplementalAiContext({
         knowledgeContext: ragContext,
-        memoryContext,
+        memoryContext: annotateMemoryContext(memoryContext, prefetchedMemory?.sources || [], directRagRegistry),
       })
       const finalMessages = buildMessagesForModel({
         history: modelHistory,
@@ -760,11 +896,6 @@ export function useAiChat() {
         answerMode: resolveAiAnswerMode(selectionRequestKind, useAgentMode),
       })
 
-      const ragMessageSources = directRagRegistry.entries.map((entry) => entry.source)
-      const tagMessageSources = routingDecision.readingScope === 'selection'
-        ? toContextTagSources(contextTags || [])
-        : []
-      const messageSources = ragMessageSources.length > 0 ? ragMessageSources : tagMessageSources
       const contextMeta = createContextMeta({
         tagCount: tagMetadata.length,
         ragSourceCount: countRagSourcesInContext(ragContext),
@@ -773,7 +904,7 @@ export function useAiChat() {
         sourceCoverage: resolveReadingSourceCoverage(
           routingDecision.readingScope,
           [],
-          messageSources.length,
+          messageSources.filter(source => source.kind !== 'memory').length,
         ),
       })
       if (isCurrentRequest()) updateMessageContextMeta(assistantMessageId, contextMeta)
@@ -787,12 +918,55 @@ export function useAiChat() {
       const directDiagnosticRunId = startAgentTrace({ mode: 'direct', metadata: diagnosticMetadata })
       const directAnswerSpanId = startAgentTraceSpan(directDiagnosticRunId, 'final_answer', { streaming: ai.streamEnabled })
       let directDiagnosticStatus: AgentTraceStatus = 'completed'
+      const abortStaleScope = () => { if (!isCurrentRequest()) requestController.abort('scope_changed') }
+      const unsubscribeChatScope = useChatStore.subscribe(abortStaleScope)
+      const unsubscribeWorkspaceScope = useAppStore.subscribe(abortStaleScope)
+      const directToolSteps = new Map<string, AgentStep>()
       try {
         updateRequestMessage('正在生成回答...')
         addTimelineItem({ type: 'answer_streaming', label: '生成回答' })
-        await streamFinalAnswer({
+        await streamDirectChat({
           client,
           messages: finalMessages,
+          query: content.trim(),
+          startedAt: requestStartedAt,
+          enabled: routerConfig.coreToolsEnabled && selectionRequestKind !== 'fast',
+          workspacePath: workspacePath || null,
+          prefetchedMemory,
+          sourceRegistry: directRagRegistry,
+          includedKnowledgeChunks: directKnowledgeChunks,
+          onStep: step => {
+            if (!isCurrentRequest()) return
+            addAgentStep(step)
+            const key = JSON.stringify([step.toolName, step.toolArgs])
+            if (step.type === 'action' || step.type === 'progress') directToolSteps.set(key, step)
+            else if (step.type === 'observation') directToolSteps.delete(key)
+            const activeStatuses = [...new Set([...directToolSteps.values()].map(activeStep => getAgentProgressText(activeStep)))]
+            updateRequestMessage(activeStatuses.length ? activeStatuses.join('；')
+              : step.type === 'thought' ? step.content : getAgentProgressText(step))
+            if (step.type === 'progress') {
+              const type = step.progressStage === 'rag_initializing' ? 'index_initializing'
+                : step.progressStage === 'rag_ready' ? 'index_ready'
+                : step.progressStage === 'rag_fallback' ? 'index_fallback' : 'local_search_start'
+              addTimelineItem({ type, label: getAgentProgressText(step) })
+            } else {
+              addTimelineItem({ type: step.type === 'thought' ? 'answer_streaming'
+                : step.type === 'action' ? 'local_search_start' : 'local_search_found',
+              label: step.type === 'thought' ? step.content : getAgentProgressText(step) })
+            }
+          },
+          onSources: registry => {
+            if (!isCurrentRequest()) return
+            directRagRegistry = registry
+            const sources = registry.entries.map(entry => entry.source)
+            if (!sources.length) return
+            updateMessageSources(assistantMessageId, sources)
+            updateMessageContextMeta(assistantMessageId, createContextMeta({
+              tagCount: tagMetadata.length, ragSourceCount: sources.filter(source => source.kind !== 'memory').length, webSearchUsed: false,
+              readingScope: routingDecision.readingScope,
+            }))
+          },
+          onMetric: routerConfig.diagnostics ? recordDirectChatMetric : undefined,
           streamEnabled: ai.streamEnabled,
           onUpdate: updateRequestMessage,
           isCancelled: () => !isCurrentRequest(),
@@ -817,14 +991,7 @@ export function useAiChat() {
         }
         // 异步提取候选记忆（不阻塞用户）
         if (isCurrentRequest()) {
-          const allMsgs = useChatStore.getState().messages
-          processMemoryCandidateExtraction(allMsgs, client, SYSTEM_TEMPERATURE.memoryExtract, { triggerReason: 'normal_completed', workspacePath }).catch((err) =>
-            console.warn('[Memory] extraction failed:', err)
-          )
-          // 自动保存会话到数据库
-          useChatStore.getState().saveCurrentSession().catch((err) =>
-            console.warn('[Chat] auto-save failed:', err)
-          )
+          persistAndQueueMemory().catch(() => console.warn('[Chat] session or memory queue persistence failed'))
         }
       } catch (err) {
         directDiagnosticStatus = 'error'
@@ -839,6 +1006,8 @@ export function useAiChat() {
           removeMessageById(assistantMessageId)
         }
       } finally {
+        unsubscribeChatScope()
+        unsubscribeWorkspaceScope()
         finishAgentTrace(
           directDiagnosticRunId,
           requestController.signal.aborted ? 'cancelled' : directDiagnosticStatus,
@@ -847,6 +1016,7 @@ export function useAiChat() {
           activeRequestRef.current = null
           cancelRef.current = () => {}
           setStreaming(false)
+          setWindowSchedulerForegroundBusy(false)
         }
       }
     },

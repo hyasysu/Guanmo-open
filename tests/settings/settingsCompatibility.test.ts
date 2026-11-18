@@ -80,6 +80,7 @@ describe('设置兼容', () => {
       fontFamily: "'JetBrains Mono', 'Cascadia Code', monospace",
       previewFontFamily: 'var(--gm-font-family)',
       fullscreenContentPaddingPercent: 7,
+      previewScrollDamping: 90,
       inlinePreviewEdit: true,
       autoSendAiShortcut: true,
       defaultOpenMode: 'preview',
@@ -93,6 +94,15 @@ describe('设置兼容', () => {
       sendMessageAnimationEnabled: true,
       fullscreenOptionAnimationEnabled: true,
     })
+  })
+
+  it('预览滚动设置保留有效值并限制异常输入', async () => {
+    const store = await loadSettingsStore({ editor: { previewScrollDamping: 135 } })
+    expect(store.getState().editor.previewScrollDamping).toBe(135)
+    store.getState().updateEditorSettings({ previewScrollDamping: 999 })
+    expect(store.getState().editor.previewScrollDamping).toBe(180)
+    const restored = await loadSettingsStore({ editor: { previewScrollDamping: 'bad' } })
+    expect(restored.getState().editor.previewScrollDamping).toBe(90)
   })
 
   it('将旧版全屏像素边距迁移为百分比', async () => {

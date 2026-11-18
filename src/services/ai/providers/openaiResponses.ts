@@ -5,10 +5,11 @@ import type {
   ChatResponse,
   ChatTool,
   ChatToolCall,
+  ModelMessage,
   StreamChunk,
   ValidateResult,
 } from '../types'
-import { AiAuthError, AiError, AiNetworkError } from '../errors'
+import { AiAuthError, AiConfigError, AiError, AiNetworkError } from '../errors'
 import { parseOpenAIResponsesSSEStream } from '../stream'
 import { ExternalHttpError, UnsupportedCapabilityError } from '../../externalHttp'
 import { supportsReasoning } from '../reasoningAdapter'
@@ -20,8 +21,18 @@ function isRecord(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function toResponsesInput(messages: ChatMessage[]): Array<Pick<ChatMessage, 'role' | 'content'>> {
-  return messages.map(({ role, content }) => ({ role, content }))
+function toResponsesInput(messages: ModelMessage[]): Array<Pick<ChatMessage, 'role' | 'content'>> {
+  return messages.map((message) => {
+    if (message.role === 'tool' || (
+      message.role === 'assistant'
+      && 'tool_calls' in message
+      && Array.isArray(message.tool_calls)
+      && message.tool_calls.length > 0
+    )) {
+      throw new AiConfigError('Responses tool continuations must be passed as text')
+    }
+    return { role: message.role, content: message.content }
+  })
 }
 
 function toResponsesTools(tools: ChatTool[]): JsonObject[] {
@@ -99,6 +110,11 @@ function extractUsage(data: JsonObject): ChatResponse['usage'] {
 }
 
 export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
+  // This adapter serializes messages as role/content, not native tool result items.
+  override get agentToolResultMode(): 'text' {
+    return 'text'
+  }
+
   constructor(config: AiConfig) {
     super(config)
   }
